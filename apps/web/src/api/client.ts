@@ -1,0 +1,145 @@
+import type {
+  FileContentResponse,
+  ChangeSet,
+  ChangeSetEditRequest,
+  ChangeSetDecisionRequest,
+  DraftOutlineSection,
+  DraftPlan,
+  DraftPlanResponse,
+  DraftRequest,
+  GithubImportRequest,
+  OutlineItem,
+  PaperFile,
+  PaperProject,
+  SaveFileRequest,
+  SaveFileResponse,
+  ReviseRequest,
+  ReviseResponse,
+  ReviewReport,
+  ReviewResponse,
+  ReviewIssue,
+  ReviewIssueStatus,
+  MemoryItemStatus,
+  PaperMemory,
+  AgentTaskPlan,
+  AgentRun,
+  AgentTaskPlanResponse,
+  AgentTaskRequest,
+  IssueResolution,
+  CompileRecord,
+  CompletionRequest,
+  CompletionResponse,
+  UploadManifestEntry,
+  UploadSession,
+  TargetVenue,
+  WorkspaceTreeNode
+} from "@fastwrite/shared";
+
+export class ApiClientError extends Error {
+  constructor(public readonly status: number, public readonly code: string, message: string, public readonly details?: unknown) {
+    super(message);
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
+  if (!response.ok) {
+    let body: { error?: { code?: string; message?: string; details?: unknown } } = {};
+    try {
+      body = (await response.json()) as typeof body;
+    } catch {
+      // Preserve the status fallback when a proxy or server returns non-JSON.
+    }
+    throw new ApiClientError(response.status, body.error?.code ?? "request_failed", body.error?.message ?? `Request failed (${response.status})`, body.error?.details);
+  }
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
+}
+
+function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestInit {
+  return {
+    method,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {})
+  };
+}
+
+export const api = {
+  projects: {
+    list: (signal?: AbortSignal) => request<PaperProject[]>("/api/projects", signal ? { signal } : undefined),
+    get: (id: string, signal?: AbortSignal) => request<PaperProject>(`/api/projects/${id}`, signal ? { signal } : undefined),
+    create: (body: { name: string; mainDocument?: string; venue?: TargetVenue }) => request<PaperProject>("/api/projects", jsonInit("POST", body)),
+    update: (id: string, body: Partial<Pick<PaperProject, "name" | "mainDocument">> & { venue?: TargetVenue }) => request<PaperProject>(`/api/projects/${id}`, jsonInit("PATCH", body)),
+    exportUrl: (id: string) => `/api/projects/${id}/export`,
+    checkpoint: (id: string) => request<{ createdAt: string }>(`/api/projects/${id}/history/checkpoint`, { method: "POST" }),
+    tree: (id: string, signal?: AbortSignal) => request<WorkspaceTreeNode[]>(`/api/projects/${id}/files`, signal ? { signal } : undefined),
+    treeLevel: (id: string, directory = "", signal?: AbortSignal) => request<WorkspaceTreeNode[]>(`/api/projects/${id}/files?directory=${encodeURIComponent(directory)}`, signal ? { signal } : undefined),
+    outline: (id: string, signal?: AbortSignal) => request<OutlineItem[]>(`/api/projects/${id}/outline`, signal ? { signal } : undefined),
+    readFile: (id: string, path: string, signal?: AbortSignal) => request<FileContentResponse>(`/api/projects/${id}/file?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined),
+    saveFile: (id: string, path: string, body: SaveFileRequest, signal?: AbortSignal) => request<SaveFileResponse>(`/api/projects/${id}/file?path=${encodeURIComponent(path)}`, jsonInit("PUT", body, signal)),
+    createFile: (id: string, path: string, content = "") => request<PaperFile>(`/api/projects/${id}/files`, jsonInit("POST", { path, content })),
+    addFile: (id: string, path: string, file: File, signal?: AbortSignal) => request<PaperFile>(`/api/projects/${id}/assets?path=${encodeURIComponent(path)}`, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: file, ...(signal ? { signal } : {}) }),
+    renameFile: (id: string, from: string, to: string) => request<void>(`/api/projects/${id}/files`, jsonInit("PATCH", { from, to })),
+    deleteFile: (id: string, path: string) => request<void>(`/api/projects/${id}/files?path=${encodeURIComponent(path)}`, { method: "DELETE" })
+  },
+  uploads: {
+    create: (body: { projectName: string; mainDocument: string; venue: string; sourceName: string; entries: UploadManifestEntry[] }, signal?: AbortSignal) => request<UploadSession>("/api/upload-sessions", jsonInit("POST", body, signal)),
+    file: (id: string, path: string, file: File, signal?: AbortSignal) => request<UploadSession>(`/api/upload-sessions/${id}/files?path=${encodeURIComponent(path)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/octet-stream" },
+      body: file,
+      ...(signal ? { signal } : {})
+    }),
+    complete: (id: string, signal?: AbortSignal) => request<PaperProject>(`/api/upload-sessions/${id}/complete`, { method: "POST", ...(signal ? { signal } : {}) }),
+    cancel: (id: string) => request<void>(`/api/upload-sessions/${id}`, { method: "DELETE" })
+  },
+  github: {
+    import: (body: GithubImportRequest, signal?: AbortSignal) => request<PaperProject>("/api/project-imports/github", jsonInit("POST", body, signal))
+  },
+  revisions: {
+    propose: (projectId: string, body: ReviseRequest, signal?: AbortSignal) => request<ReviseResponse>(`/api/projects/${projectId}/revisions`, jsonInit("POST", body, signal)),
+    accept: (projectId: string, changeSetId: string) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/accept`, { method: "POST" }),
+    reject: (projectId: string, changeSetId: string) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/reject`, { method: "POST" }),
+    rollback: (projectId: string, changeSetId: string) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/rollback`, { method: "POST" }),
+    get: (projectId: string, changeSetId: string, signal?: AbortSignal) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}`, signal ? { signal } : undefined),
+    edit: (projectId: string, changeSetId: string, body: ChangeSetEditRequest) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}`, jsonInit("PATCH", body)),
+    decide: (projectId: string, changeSetId: string, body: ChangeSetDecisionRequest) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/decide`, jsonInit("POST", body))
+  },
+  drafts: {
+    list: (projectId: string, signal?: AbortSignal) => request<DraftPlan[]>(`/api/projects/${projectId}/drafts`, signal ? { signal } : undefined),
+    plan: (projectId: string, body: DraftRequest, signal?: AbortSignal) => request<DraftPlanResponse>(`/api/projects/${projectId}/drafts`, jsonInit("POST", body, signal)),
+    confirm: (projectId: string, planId: string, outline: DraftOutlineSection[], signal?: AbortSignal) => request<DraftPlanResponse & { changeSet: ChangeSet }>(`/api/projects/${projectId}/drafts/${planId}/confirm`, jsonInit("POST", { outline }, signal)),
+    cancel: (projectId: string, planId: string) => request<DraftPlan>(`/api/projects/${projectId}/drafts/${planId}/cancel`, { method: "POST" })
+  },
+  reviews: {
+    list: (projectId: string, signal?: AbortSignal) => request<ReviewReport[]>(`/api/projects/${projectId}/reviews`, signal ? { signal } : undefined),
+    run: (projectId: string, sourceOnly: boolean, signal?: AbortSignal) => request<ReviewResponse>(`/api/projects/${projectId}/reviews`, jsonInit("POST", { sourceOnly }, signal)),
+    updateIssue: (projectId: string, issueId: string, body: { status?: ReviewIssueStatus; priority?: number; reason?: string }) => request<ReviewIssue>(`/api/projects/${projectId}/review-issues/${issueId}`, jsonInit("PATCH", body)),
+    createIssue: (projectId: string, body: Pick<ReviewIssue, "category" | "severity" | "title" | "rationale" | "impact" | "suggestion"> & { reportId?: string }) => request<ReviewIssue>(`/api/projects/${projectId}/review-issues`, jsonInit("POST", body)),
+    mergeIssues: (projectId: string, masterId: string, duplicateIds: string[], reason?: string) => request<ReviewIssue>(`/api/projects/${projectId}/review-issues/${masterId}/merge`, jsonInit("POST", { duplicateIds, ...(reason ? { reason } : {}) }))
+  },
+  memory: {
+    get: (projectId: string, signal?: AbortSignal) => request<PaperMemory | null>(`/api/projects/${projectId}/memory`, signal ? { signal } : undefined),
+    extract: (projectId: string, signal?: AbortSignal) => request<PaperMemory>(`/api/projects/${projectId}/memory/extract`, { method: "POST", ...(signal ? { signal } : {}) }),
+    updateItem: (projectId: string, itemId: string, body: { status?: MemoryItemStatus; content?: string; label?: string }) => request<PaperMemory>(`/api/projects/${projectId}/memory/items/${itemId}`, jsonInit("PATCH", body)),
+    rollback: (projectId: string) => request<PaperMemory>(`/api/projects/${projectId}/memory/rollback`, { method: "POST" })
+  },
+  agentTasks: {
+    runs: (projectId: string, signal?: AbortSignal) => request<AgentRun[]>(`/api/projects/${projectId}/agent-runs`, signal ? { signal } : undefined),
+    list: (projectId: string, signal?: AbortSignal) => request<AgentTaskPlan[]>(`/api/projects/${projectId}/agent-tasks`, signal ? { signal } : undefined),
+    plan: (projectId: string, body: AgentTaskRequest, signal?: AbortSignal) => request<AgentTaskPlanResponse & { resolution?: IssueResolution }>(`/api/projects/${projectId}/agent-tasks`, jsonInit("POST", body, signal)),
+    confirm: (projectId: string, planId: string, signal?: AbortSignal) => request<AgentTaskPlanResponse & { changeSet: ChangeSet; resolution?: IssueResolution }>(`/api/projects/${projectId}/agent-tasks/${planId}/confirm`, { method: "POST", ...(signal ? { signal } : {}) }),
+    cancel: (projectId: string, planId: string) => request<AgentTaskPlan>(`/api/projects/${projectId}/agent-tasks/${planId}/cancel`, { method: "POST" }),
+    resolutions: (projectId: string, signal?: AbortSignal) => request<IssueResolution[]>(`/api/projects/${projectId}/issue-resolutions`, signal ? { signal } : undefined),
+    rereview: (projectId: string, resolutionId: string, signal?: AbortSignal) => request<IssueResolution>(`/api/projects/${projectId}/issue-resolutions/${resolutionId}/rereview`, { method: "POST", ...(signal ? { signal } : {}) }),
+    reopen: (projectId: string, resolutionId: string) => request<IssueResolution>(`/api/projects/${projectId}/issue-resolutions/${resolutionId}/reopen`, { method: "POST" })
+  },
+  compileResults: {
+    latest: (projectId: string, signal?: AbortSignal) => request<CompileRecord | null>(`/api/projects/${projectId}/compile-results/latest`, signal ? { signal } : undefined),
+    record: (projectId: string, body: { projectVersion: number; status: "success" | "error"; summary: string }) => request<CompileRecord>(`/api/projects/${projectId}/compile-results`, jsonInit("POST", body))
+  },
+  completions: {
+    suggest: (projectId: string, body: CompletionRequest, signal?: AbortSignal) => request<CompletionResponse>(`/api/projects/${projectId}/completions`, jsonInit("POST", body, signal))
+  }
+};

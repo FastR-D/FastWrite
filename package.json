@@ -1,0 +1,26 @@
+{
+  "name": "fastwrite-new",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "build": "bun run --filter '*' build",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun test apps/server/src apps/web/src packages/shared/src",
+    "e2e:smoke": "sh scripts/e2e-smoke.sh",
+    "e2e:cross-browser": "sh scripts/e2e-cross-browser.sh",
+    "llm:smoke": "bun scripts/llm-smoke.ts",
+    "release:check": "sh scripts/release-check.sh",
+    "start": "bun apps/server/src/server.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "axe-core": "^4.12.1",
+    "typescript": "^5.9.3"
+  }
+}

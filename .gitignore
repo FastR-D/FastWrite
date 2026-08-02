@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.fastwrite-data/
+.fastwrite-data-*/
+*.log
+.DS_Store
+.playwright-cli/
+.env
+
+# Tool and test caches
+**/.vite/
+coverage/
+playwright-report/
+test-results/
+.turbo/
+.cache/
+
+# Local screenshots and generated reports
+local-packages/
+apps/web/public/bundles/
+
+# Local sample papers
+sample-papers/

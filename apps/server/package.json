@@ -1,0 +1,21 @@
+{
+  "name": "@fastwrite/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
+    "build": "bun build src/server.ts --outdir dist --target bun && rm -rf dist/skills && cp -R src/skills dist/skills",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastwrite/shared": "workspace:*",
+    "fflate": "^0.8.2",
+    "openai": "^7.3.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
+  }
+}

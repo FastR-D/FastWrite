@@ -1,0 +1,32 @@
+[
+  {
+    "id": "unsupported-claim",
+    "profile": "security-top4",
+    "question": "A draft claims the defense eliminates attacks, but reports only a microbenchmark. What must the review flag?",
+    "expectedSignals": ["evidence", "security guarantees", "limitations"]
+  },
+  {
+    "id": "claim-chain",
+    "profile": "security-top4",
+    "question": "Which links must remain auditable when strengthening a security claim?",
+    "expectedSignals": ["threat model", "design", "analysis", "evaluation", "limitations"]
+  },
+  {
+    "id": "operational-realism",
+    "profile": "security-top4",
+    "question": "What evidence is missing when evaluation uses a toy workload with no deployment discussion?",
+    "expectedSignals": ["experimental methodology", "deployment constraints", "operational tradeoffs", "baselines", "workloads"]
+  },
+  {
+    "id": "novelty-boundary",
+    "profile": "security-top4",
+    "question": "How should a revision distinguish its technical contribution from prior work?",
+    "expectedSignals": ["technical contribution", "prior work", "novelty boundaries", "formal or empirical justification"]
+  },
+  {
+    "id": "deployability",
+    "profile": "security-top4",
+    "question": "What must a network defense discuss beyond measured security benefit?",
+    "expectedSignals": ["deployability", "ecosystem assumptions", "interoperability constraints", "ethical handling"]
+  }
+]

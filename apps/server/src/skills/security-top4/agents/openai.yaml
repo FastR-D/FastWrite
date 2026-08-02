@@ -1,0 +1,4 @@
+interface:
+  display_name: "Security Top-4"
+  short_description: "Plan, revise, and review security research papers"
+  default_prompt: "Use $security-top4 to revise this paper for a top security venue."
