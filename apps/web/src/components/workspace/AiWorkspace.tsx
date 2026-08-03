@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Check, Database, LoaderCircle, Pencil, RotateCcw, Send, ShieldCheck, Sparkles, Workflow, X } from "lucide-react";
+import { Bot, Check, Database, LoaderCircle, Maximize2, Minimize2, Pencil, RotateCcw, Send, ShieldCheck, Sparkles, Trash2, Workflow, X } from "lucide-react";
 import type { ChangeSet, PaperProject, ReviewIssue, ReviseCommandId, ReviseTurn, TextSelection } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { diffWords } from "../../lib/wordDiff";
 import { Button } from "../ui/Button";
-import { DraftDialog } from "./DraftDialog";
 import { ReviewDialog } from "./ReviewDialog";
 import { MemoryDialog } from "./MemoryDialog";
 import { AgentTaskWorkspace, type AgentTaskSeed } from "./AgentTaskDialog";
@@ -14,7 +13,13 @@ interface AiWorkspaceProps {
   project: PaperProject;
   selection: TextSelection | null;
   sectionSelection: TextSelection | null;
+  height: number;
+  onSetHeight: (height: number) => void;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
   onUseSelection: (selection: TextSelection) => void;
+  onClearSelection: () => void;
+  onRestoreSelection: (selection: TextSelection) => Promise<boolean>;
   onFileChanged: (path: string, range?: { from: number; to: number }) => void | Promise<void>;
   onNavigate: (path: string, line?: number) => void;
   onPrepareLocalRevision: (issue: ReviewIssue) => Promise<TextSelection | null>;
@@ -35,13 +40,12 @@ const SHORTCUTS: ReadonlyArray<{ id: ReviseCommandId; label: string }> = [
 type PanelState = "idle" | "running" | "applying" | "accepted" | "error";
 interface ChatMessage { id: string; role: "user" | "assistant"; content: string; rationale?: string }
 
-export function AiWorkspace({ project, selection, sectionSelection, onUseSelection, onFileChanged, onNavigate, onPrepareLocalRevision, compileState, onRequestCompile }: AiWorkspaceProps) {
+export function AiWorkspace({ project, selection, sectionSelection, height, onSetHeight, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onPrepareLocalRevision, compileState, onRequestCompile }: AiWorkspaceProps) {
   const [instruction, setInstruction] = useState("");
   const [state, setState] = useState<PanelState>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [changeSet, setChangeSet] = useState<ChangeSet | null>(null);
   const [error, setError] = useState("");
-  const [draftOpen, setDraftOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"revise" | "agent">("revise");
@@ -53,19 +57,47 @@ export function AiWorkspace({ project, selection, sectionSelection, onUseSelecti
   const requestRef = useRef<AbortController | null>(null);
   const selectionKeyRef = useRef("");
   const preserveNextSelectionRef = useRef(false);
+  const restoredKeyRef = useRef("");
+  const recoveryAttemptedRef = useRef("");
 
   useEffect(() => () => requestRef.current?.abort(), []);
   useEffect(() => { messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight }); }, [messages, state, editingProposal]);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onToggleFullscreen(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullscreen, onToggleFullscreen]);
+
+  useEffect(() => {
+    if (selection || recoveryAttemptedRef.current === project.id) return;
+    recoveryAttemptedRef.current = project.id;
+    const stored = readLatestConversation(project.id);
+    if (!stored?.selection) return;
+    void onRestoreSelection(stored.selection);
+  }, [onRestoreSelection, project.id, selection]);
 
   const selectionKey = selection ? `${selection.path}:${selection.from}:${selection.to}:${selection.fileVersion}:${selection.text}` : "";
   useEffect(() => {
-    if (!selectionKey) return;
+    if (!selectionKey || restoredKeyRef.current === selectionKey) return;
     if (selectionKeyRef.current && selectionKeyRef.current !== selectionKey) {
       if (preserveNextSelectionRef.current) preserveNextSelectionRef.current = false;
       else resetChat();
     }
     selectionKeyRef.current = selectionKey;
-  }, [selectionKey]);
+    restoredKeyRef.current = selectionKey;
+    const stored = readConversation(project.id, selectionKey);
+    if (!stored || !selection) return;
+    setMessages(stored.messages);
+    setChangeSet(stored.changeSet);
+    setEditedAfter(stored.workingText || stored.changeSet?.changes[0]?.after || "");
+    setInstruction(stored.instruction || "");
+  }, [project.id, selection, selectionKey]);
+
+  useEffect(() => {
+    if (!selectionKey || selectionKeyRef.current !== selectionKey) return;
+    if (selection) writeConversation(project.id, selectionKey, { selection, messages, changeSet, workingText: editingProposal ? editedAfter : changeSet?.changes[0]?.after ?? "", instruction });
+  }, [changeSet, editingProposal, editedAfter, instruction, messages, project.id, selection, selectionKey]);
 
   const resetChat = () => {
     requestRef.current?.abort();
@@ -77,6 +109,13 @@ export function AiWorkspace({ project, selection, sectionSelection, onUseSelecti
     setInstruction("");
     setError("");
     setState("idle");
+    if (selectionKey) localStorage.removeItem(conversationStorageKey(project.id, selectionKey));
+    localStorage.removeItem(latestConversationStorageKey(project.id));
+  };
+
+  const clearConversation = () => {
+    if (changeSet?.status === "proposed" && !window.confirm("Discard the current unaccepted revision and clear this conversation?")) return;
+    resetChat();
   };
 
   const propose = async (command?: ReviseCommandId) => {
@@ -176,18 +215,22 @@ export function AiWorkspace({ project, selection, sectionSelection, onUseSelecti
   const canDecide = changeSet?.status === "proposed";
 
   return (<>
-    <section className={`ai-workspace${activeTab === "agent" ? " ai-workspace--agent" : ""}`} aria-label="AI writing workspace">
+    <section className={`ai-workspace${activeTab === "agent" ? " ai-workspace--agent" : ""}${fullscreen ? " ai-workspace--fullscreen" : ""}`} style={{ "--ai-workspace-height": `${height}px` } as React.CSSProperties} aria-label="AI writing workspace">
       <header className="ai-workspace__header">
         <nav className="ai-workspace__tabs" aria-label="AI writing mode"><button className={activeTab === "revise" ? "is-active" : ""} onClick={() => setActiveTab("revise")}><Sparkles /> Revise</button><button className={activeTab === "agent" ? "is-active" : ""} onClick={() => { setAgentSeed(selection?.path ? { path: selection.path } : {}); setActiveTab("agent"); }}><Workflow /> Agent</button></nav>
         <div className="ai-workspace__tools">
           <button className="ai-header-action" onClick={() => setMemoryOpen(true)}><Database /> Memory</button>
           <button className="ai-header-action" onClick={() => setReviewOpen(true)}><ShieldCheck /> Review</button>
+          {activeTab === "revise" ? <button className="ai-header-action" title="Clear current conversation" onClick={clearConversation}><Trash2 /> Clear</button> : null}
+          {activeTab === "revise" ? <label className="ai-height-control"><span>Panel height</span><select value={height < 360 ? "compact" : height < 560 ? "comfortable" : "tall"} onChange={(event) => onSetHeight(event.target.value === "compact" ? 280 : event.target.value === "comfortable" ? 460 : 660)}><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="tall">Tall</option></select></label> : null}
+          <button className="ai-header-action" title={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={onToggleFullscreen}>{fullscreen ? <Minimize2 /> : <Maximize2 />}</button>
           <span className="ai-skill"><Bot /> {project.skill.name} · v{project.skill.version}</span>
         </div>
       </header>
-      {activeTab === "revise" ? <div className="revise-chat">
+      <div hidden={activeTab !== "revise"} className="revise-chat">
+        {selection ? <aside className="revise-context-strip"><span>{selection.path} · lines {selection.startLine}–{selection.endLine}</span><p title={selection.text}>{selection.text}</p><button type="button" title="Clear selected context" aria-label="Clear selected context" onClick={onClearSelection}><X /></button></aside> : null}
         <div ref={messagesRef} className="revise-chat__messages" aria-live="polite">
-          {selection ? <article className="revise-selection"><span>{selection.path} · lines {selection.startLine}–{selection.endLine}</span><p>{selection.text}</p></article> : <div className="revise-chat__empty"><Sparkles /><strong>Select text in the editor</strong><span>Select a sentence or paragraph, or use the current section. The selection stays active while you chat.</span>{sectionSelection ? <Button size="small" variant="secondary" onClick={() => onUseSelection(sectionSelection)}>Use current section</Button> : null}</div>}
+          {!selection ? <div className="revise-chat__empty"><Sparkles /><strong>Select text in the editor</strong><span>Select a sentence or paragraph, or use the current section. The selection stays active while you chat.</span>{sectionSelection ? <Button size="small" variant="secondary" onClick={() => onUseSelection(sectionSelection)}>Use current section</Button> : null}</div> : null}
           {messages.map((message, index) => <article className={`revise-message revise-message--${message.role}`} key={message.id}>
             <span>{message.role === "assistant" ? <><Bot /> {project.skill.name}</> : "You"}</span>
             {message.role === "assistant" && index === messages.length - 1 && changeSet ? <>
@@ -206,10 +249,34 @@ export function AiWorkspace({ project, selection, sectionSelection, onUseSelecti
           <div className="revise-composer__input"><textarea ref={inputRef} rows={2} value={instruction} onChange={(event) => setInstruction(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (selection && instruction.trim() && !busy) void propose(); } }} placeholder={selection ? "Ask for another revision…" : "Select text in the editor to start…"} disabled={!selection || busy} aria-label="Revision message" /><Button variant="primary" size="small" icon={<Send />} loading={busy} disabled={!selection || !instruction.trim() || busy} type="submit">Send</Button></div>
           <small>Each reply refines the current candidate. The file changes only after Accept.</small>
         </form>
-      </div> : <AgentTaskWorkspace open project={project} seed={agentSeed} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onDraft={() => setDraftOpen(true)} onAccepted={onFileChanged} />}
+      </div>
+      <div hidden={activeTab !== "agent"} className="agent-workspace-slot"><AgentTaskWorkspace open={activeTab === "agent"} project={project} seed={agentSeed} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onAccepted={onFileChanged} /></div>
     </section>
-    <DraftDialog open={draftOpen} project={project} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setDraftOpen(false)} onAccepted={() => onFileChanged(project.mainDocument)} />
     <ReviewDialog open={reviewOpen} project={project} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setReviewOpen(false)} onNavigate={onNavigate} onReviseLocally={(issue) => void beginLocalRevision(issue)} onReviseWithAgent={(issueIds, objective) => { setAgentSeed({ issueIds, objective }); setReviewOpen(false); setActiveTab("agent"); }} />
     <MemoryDialog open={memoryOpen} project={project} onClose={() => setMemoryOpen(false)} onNavigate={onNavigate} />
   </>);
+}
+
+type StoredConversation = { selection: TextSelection; messages: ChatMessage[]; changeSet: ChangeSet | null; workingText: string; instruction: string };
+function conversationStorageKey(projectId: string, selectionKey: string) { return `fastwrite.revise.${projectId}.${encodeURIComponent(selectionKey)}`; }
+function latestConversationStorageKey(projectId: string) { return `fastwrite.revise.${projectId}.latest`; }
+function readConversation(projectId: string, selectionKey: string): StoredConversation | null {
+  try {
+    const raw = localStorage.getItem(conversationStorageKey(projectId, selectionKey));
+    if (!raw) return null;
+    const value = JSON.parse(raw) as StoredConversation;
+    return Array.isArray(value.messages) ? value : null;
+  } catch { return null; }
+}
+function writeConversation(projectId: string, selectionKey: string, value: StoredConversation): void {
+  try {
+    localStorage.setItem(conversationStorageKey(projectId, selectionKey), JSON.stringify(value));
+    localStorage.setItem(latestConversationStorageKey(projectId), selectionKey);
+  } catch { /* Storage is optional. */ }
+}
+function readLatestConversation(projectId: string): StoredConversation | null {
+  try {
+    const selectionKey = localStorage.getItem(latestConversationStorageKey(projectId));
+    return selectionKey ? readConversation(projectId, selectionKey) : null;
+  } catch { return null; }
 }

@@ -82,9 +82,8 @@ export class TexPackageService implements TexPackageProvider {
   async ctanPackageInfo(packageName: string): Promise<Response> {
     const name = validatePackageName(packageName);
     const response = await this.fetchUpstream(`${CTAN_JSON_ORIGIN}/${encodeURIComponent(name)}`);
-    if (!response.ok) throw new ApiError(404, "tex_package_not_found", `TeX package '${name}' was not found`);
-    const info = await response.json() as CtanPackageInfo;
-    if (info.errors) {
+    const info = response.ok ? await response.json() as CtanPackageInfo : { errors: ["Not found"] };
+    if (!response.ok || info.errors) {
       const containedIn = await this.lookupPackageContainer(name);
       if (!containedIn) throw new ApiError(404, "tex_package_not_found", `TeX package '${name}' was not found`);
       return json({ name, contained_in: containedIn });

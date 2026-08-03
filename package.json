@@ -8,8 +8,9 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "bun run --filter '*' dev",
+    "dev": "bun scripts/dev.ts",
     "build": "bun run --filter '*' build",
+    "package:app": "bun scripts/package-app.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test apps/server/src apps/web/src packages/shared/src",
     "e2e:smoke": "sh scripts/e2e-smoke.sh",

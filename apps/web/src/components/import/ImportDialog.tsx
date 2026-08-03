@@ -150,7 +150,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
         uploadedBytes += entry.size;
         setProgress(totalBytes === 0 ? 90 : Math.min(90, Math.round((uploadedBytes / totalBytes) * 90)));
       }
-      setMessage("Creating managed workspace…");
+      setMessage("Creating paper workspace…");
       const project = await api.uploads.complete(sessionId, controller.signal);
       setProgress(100);
       onImported(project);
@@ -189,7 +189,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     <Dialog
       open={open}
       title="Import a paper"
-      description="FastWrite creates a managed copy. Your original folder or repository is never modified."
+      description="Bring a local LaTeX directory or GitHub repository into your FastWrite workspace."
       width="large"
       onClose={close}
       footer={
@@ -275,7 +275,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
             </label>
             <VenueField value={venue} onChange={setVenue} />
           </div>
-          <div className="import-note"><FileArchive /> The resolved commit is recorded with the managed project snapshot.</div>
+          <div className="import-note"><FileArchive /> The resolved commit is recorded with the imported project.</div>
         </div>
       )}
       {message && stage !== "importing" ? <div className="form-error" role="alert">{message}</div> : null}

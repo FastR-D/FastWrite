@@ -8,11 +8,13 @@ interface DialogProps {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
-  width?: "small" | "medium" | "large" | "fullscreen";
+  headerActions?: ReactNode;
+  width?: "small" | "medium" | "large" | "wide" | "fullscreen";
+  className?: string;
   onClose: () => void;
 }
 
-export function Dialog({ open, title, description, children, footer, width = "medium", onClose }: DialogProps) {
+export function Dialog({ open, title, description, children, footer, headerActions, width = "medium", className = "", onClose }: DialogProps) {
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement>(null);
@@ -45,13 +47,13 @@ export function Dialog({ open, title, description, children, footer, width = "me
   if (!open) return null;
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section ref={dialogRef} className={`dialog dialog--${width}`} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}>
+      <section ref={dialogRef} className={`dialog dialog--${width} ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}>
         <header className="dialog__header">
           <div>
             <h2 id={titleId}>{title}</h2>
             {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
-          <IconButton label="Close dialog" icon={<X />} onClick={onClose} />
+          <div className="dialog__header-actions">{headerActions}<IconButton label="Close dialog" icon={<X />} onClick={onClose} /></div>
         </header>
         <div className="dialog__body">{children}</div>
         {footer ? <footer className="dialog__footer">{footer}</footer> : null}

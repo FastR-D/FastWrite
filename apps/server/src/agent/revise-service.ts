@@ -37,6 +37,14 @@ function flattenOutline(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => [item, ...flattenOutline(item.children)]);
 }
 
+function compactHistory(turns: Array<{ role: "user" | "assistant"; content: string }>): Array<{ role: "user" | "assistant"; content: string }> {
+  const recent = turns.slice(-8);
+  const older = turns.slice(0, -8);
+  if (!older.length) return recent;
+  const summary = older.map((turn) => `${turn.role}: ${turn.content.replace(/\s+/g, " ").slice(0, 180)}`).join(" | ");
+  return [{ role: "assistant", content: `Earlier conversation summary: ${summary.slice(0, 1_600)}` }, ...recent];
+}
+
 export class ReviseService {
   constructor(
     private readonly database: JsonDatabase,
@@ -52,15 +60,15 @@ export class ReviseService {
     }
     const instruction = this.resolveInstruction(request);
     const project = this.workspaces.getProject(projectId);
-    const memory = this.memories?.confirmedContext(projectId) ?? { content: "" };
     const opened = await this.workspaces.readTextFile(projectId, request.selection.path);
     this.validateSelection(request, opened.content, opened.file.version);
     const workingText = request.workingText?.trim() ? request.workingText : request.selection.text;
     if (workingText.length > 12_000) throw new ApiError(413, "revision_candidate_too_large", "Keep the current revision under 12,000 characters");
-    const history = (request.history ?? [])
+    const history = compactHistory((request.history ?? [])
       .filter((turn) => (turn.role === "user" || turn.role === "assistant") && turn.content?.trim())
-      .slice(-12)
-      .map((turn) => ({ role: turn.role, content: turn.content.trim().slice(0, 4_000) }));
+      .map((turn) => ({ role: turn.role, content: turn.content.trim().slice(0, 4_000) })));
+    const context = await this.contextFor(projectId, request, opened.content);
+    const memory = this.memories ? await this.memories.focusedWriterContext(projectId, opened.file.path, context.sectionTitle) : { content: "" };
 
     const runId = `run_${crypto.randomUUID()}`;
     const createdAt = timestamp();
@@ -78,13 +86,14 @@ export class ReviseService {
     await this.database.mutate((state) => state.agentRuns.push(run));
 
     try {
-      const context = await this.contextFor(projectId, request, opened.content);
       const loadedSkill = await this.skills.load(project.skill);
       const output = await this.provider.revise({
         instruction,
         selection: request.selection,
         workingText,
         history,
+        selectionIsSectionScaffold: isSectionScaffold(workingText, Boolean(context.sectionTitle)),
+        ...(memory.content ? { paperContext: memory.content } : {}),
         skill: project.skill,
         skillInstructions: withMemory(loadedSkill.instructions, memory.content),
         venueInstructions: loadedSkill.venueInstructions,
@@ -406,15 +415,46 @@ export class ReviseService {
     const section = outline
       .filter((item) => item.path === selection.path && item.line <= selection.startLine)
       .sort((a, b) => b.line - a.line)[0];
+    const sectionIndex = section ? outline.findIndex((item) => item.id === section.id) : -1;
+    const previous = sectionIndex > 0 ? outline.slice(0, sectionIndex).reverse().find((item) => item.path !== selection.path) : undefined;
+    const next = sectionIndex >= 0 ? outline.slice(sectionIndex + 1).find((item) => item.path !== selection.path) : undefined;
+    const [previousContext, nextContext] = await Promise.all([
+      previous ? this.adjacentContext(projectId, previous, "before") : "",
+      next ? this.adjacentContext(projectId, next, "after") : ""
+    ]);
+    const localBefore = content.slice(Math.max(0, selection.from - 1_500), selection.from);
+    const localAfter = content.slice(selection.to, selection.to + 1_500);
     return {
-      contextBefore: content.slice(Math.max(0, selection.from - 1_500), selection.from),
-      contextAfter: content.slice(selection.to, selection.to + 1_500),
+      contextBefore: [previousContext, localBefore].filter(Boolean).join("\n\n"),
+      contextAfter: [localAfter, nextContext].filter(Boolean).join("\n\n"),
       ...(section ? { sectionTitle: section.title } : {})
     };
   }
+
+  private async adjacentContext(projectId: string, section: OutlineItem, side: "before" | "after"): Promise<string> {
+    try {
+      const opened = await this.workspaces.readTextFile(projectId, section.path);
+      const excerpt = side === "before" ? opened.content.slice(-1_500) : opened.content.slice(0, 1_500);
+      return excerpt.trim() ? `[Adjacent paper section: ${section.title} (${section.path})]\n${excerpt}` : "";
+    } catch {
+      return "";
+    }
+  }
 }
 
-function withMemory(skill: string, memory: string): string { return memory ? `${skill}\n\nConfirmed Paper Memory (treat as project facts):\n${memory}` : skill; }
+function withMemory(skill: string, memory: string): string { return memory ? `${skill}\n\nReviewed Local Paper Context (paper core and current section only):\n${memory}` : skill; }
+
+function isSectionScaffold(value: string, hasSection: boolean): boolean {
+  if (!hasSection) return false;
+  const body = value
+    .replace(/^.*\b(?:TODO|TBD|PLACEHOLDER)\b.*$/gimu, "")
+    .replace(/%[^\n]*/g, "")
+    .replace(/\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?(?:\[[^\]]*\])?\{[^}]*\}/g, "")
+    .replace(/\\label\{[^}]*\}/g, "")
+    .replace(/\\(?:begin|end)\{[^}]*\}/g, "")
+    .trim();
+  return body.length === 0;
+}
 
 function materializeChange(change: TextChange, hunks: TextHunk[]): string {
   const segment = materializeTextHunks(change.before, hunks);

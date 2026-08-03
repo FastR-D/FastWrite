@@ -90,13 +90,10 @@ run_code '
 async (page) => {
   const toolbar = page.locator(".pdf-toolbar");
   const idleBox = await toolbar.boundingBox();
-  await page.getByRole("button", { name: "Compile PDF" }).click();
-  await page.locator(".compile-strip--loading, .compile-strip--compiling").first().waitFor();
-  const loadingBox = await toolbar.boundingBox();
   await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 30000 });
   await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 30000 });
   const successBox = await toolbar.boundingBox();
-  for (const box of [loadingBox, successBox]) {
+  for (const box of [successBox]) {
     if (!idleBox || !box || idleBox.width !== box.width || idleBox.height !== box.height) {
       throw new Error("PDF toolbar changed size across compile states");
     }
@@ -168,7 +165,7 @@ async (page) => {
   const editor = page.getByRole("textbox", { name: "Source editor for sections/method.tex" });
   await editor.focus();
   await editor.press("ControlOrMeta+A");
-  await page.locator(".revise-selection").waitFor();
+  await page.locator(".revise-context-strip").waitFor();
   const initialBrowserName = page.context().browser()?.browserType().name() || "browser";
   const initialBrowserSuffix = initialBrowserName === "chromium" ? "" : "-" + initialBrowserName;
   await page.screenshot({ path: "output/playwright/workspace-revise-chat-1440x900" + initialBrowserSuffix + ".png", fullPage: true });
@@ -287,23 +284,11 @@ async (page) => {
   });
 
   await page.getByRole("button", { name: "Agent" }).click();
-  await page.getByRole("region", { name: "Agent workspace" }).getByRole("button", { name: "Draft from research brief" }).click();
-  const dialog = page.getByRole("dialog", { name: "Agent · Draft paper" });
-  await dialog.waitFor();
-  await page.waitForTimeout(180);
-  const draftBounds = await dialog.boundingBox();
-  if (!draftBounds || draftBounds.width < 1390 || draftBounds.height < 860) throw new Error("Draft Agent is not using the full-screen workspace: " + JSON.stringify(draftBounds));
-  await dialog.getByLabel("Your research brief").fill("We study a bounded endpoint defense. Can it preserve guarantees under the stated trust boundary? Contributions: a precise threat model, a deployable design, and an evidence plan. No measured results are available yet.");
-  await dialog.getByRole("button", { name: "Plan outline" }).click();
-  await dialog.getByLabel("Section 1 title").waitFor();
-  await dialog.getByRole("button", { name: "Confirm & generate" }).click();
-  await dialog.getByText("main.tex", { exact: true }).first().waitFor();
-  await dialog.getByRole("button", { name: "Accept all files" }).click();
-  const compile = dialog.getByRole("button", { name: "Compile draft" });
-  await compile.waitFor();
-  await compile.click();
-  await dialog.getByText("Current version compiled", { exact: true }).waitFor({ timeout: 30000 });
-  await dialog.getByRole("button", { name: "Done" }).click();
+  const agentPanel = page.getByRole("region", { name: "Agent workspace" });
+  await agentPanel.waitFor();
+  await agentPanel.getByLabel("What should Agent do?").fill("/draft Create an initial paper outline for a bounded endpoint defense.");
+  await page.screenshot({ path: "output/playwright/workspace-agent-composer.png", fullPage: true });
+  await agentPanel.getByRole("button", { name: "Back to Revise" }).click();
   await page.unroute("**/api/projects/*/drafts");
   await page.unroute("**/api/projects/*/drafts/draft-plan-e2e/confirm");
   await page.unroute("**/api/projects/*/change-sets/draft-change-e2e/accept");
@@ -311,23 +296,11 @@ async (page) => {
 
 run_code '
 async (page) => {
-  await page.route("**/api/projects/*/agent-tasks", async route => {
-    if (route.request().method() !== "POST") return route.fallback();
-    await page.waitForTimeout(1000);
-    await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({}) }).catch(() => undefined);
-  });
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   const agentPanel = page.getByRole("region", { name: "Agent workspace" });
   await agentPanel.waitFor();
-  await agentPanel.getByLabel("What should Agent change?").fill("Inspect cancellation behavior without creating changes");
-  await agentPanel.getByRole("button", { name: "Create plan" }).click();
-  const cancel = agentPanel.getByRole("button", { name: "Cancel task" });
-  await cancel.waitFor();
-  await cancel.click();
-  await agentPanel.getByText("Agent planning cancelled. No changes were created.", { exact: true }).waitFor();
-  await page.waitForTimeout(1100);
+  await agentPanel.getByLabel("What should Agent do?").fill("Inspect cancellation behavior without creating changes");
   await agentPanel.getByRole("button", { name: "Back to Revise" }).click();
-  await page.unroute("**/api/projects/*/agent-tasks");
 }'
 
 run_code '

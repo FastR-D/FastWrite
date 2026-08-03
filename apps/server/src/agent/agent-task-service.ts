@@ -1,4 +1,4 @@
-import type { AgentRun, AgentTaskPlan, AgentTaskPlanResponse, AgentTaskRequest, ChangeSet, IssueResolution, ReviewIssue, TextChange, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { AgentRun, AgentTaskIntent, AgentTaskPlan, AgentTaskPlanResponse, AgentTaskRequest, ChangeSet, IssueResolution, ReviewIssue, TextChange, WorkspaceTreeNode } from "@fastwrite/shared";
 import { isTextFile, normalizeWorkspacePath } from "@fastwrite/shared";
 import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
@@ -13,7 +13,7 @@ function now() { return new Date().toISOString(); }
 function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }
 
 export class AgentTaskService {
-  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider, private readonly memories?: MemoryService) {}
+  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider, private readonly memories?: MemoryService, private readonly reviewProvider?: AgentProvider) {}
 
   async plan(projectId: string, request: AgentTaskRequest, requestSignal?: AbortSignal): Promise<AgentTaskPlanResponse & { resolution?: IssueResolution }> {
     if (!this.provider?.planAgentTask) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable Agent tasks");
@@ -22,13 +22,18 @@ export class AgentTaskService {
     const project = this.workspaces.getProject(projectId);
     if (request.scope.path && !await this.workspaces.fileExists(projectId, request.scope.path)) throw new ApiError(404, "agent_scope_not_found", "The scoped file does not exist");
     const documents = await this.documents(projectId);
+    const commandIntent = parseIntentCommand(request.objective);
+    const objective = stripIntentCommand(request.objective);
+    if (!objective) throw new ApiError(400, "agent_objective_missing", "Describe the drafting or revision objective after the command");
+    const intent = request.intent ?? commandIntent ?? classifyAgentIntent(objective, documents);
+    const normalizedRequest: AgentTaskRequest = { ...request, objective, intent };
     const issues = this.issues(projectId, request.issueIds ?? []);
     const skill = await this.skills.load(project.skill);
-    const memory = this.memories?.confirmedContext(projectId) ?? { content: "" };
-    const input = this.input(request, documents, issues, project.skill, withMemory(skill.instructions, memory.content), skill.venueInstructions);
+    const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };
+    const input = this.input(normalizedRequest, documents, issues, project.skill, withMemory(skill.instructions, memory.content), skill.venueInstructions);
     const createdAt = now();
-    const searchMatches = searchDocumentPaths(documents, request.objective);
-    const run: AgentRun = { id: `run_${crypto.randomUUID()}`, projectId, type: "agent", status: "running", objective: request.objective.trim(), skill: structuredClone(project.skill), createdAt, updatedAt: createdAt, auditTrail: [
+    const searchMatches = searchDocumentPaths(documents, objective);
+    const run: AgentRun = { id: `run_${crypto.randomUUID()}`, projectId, type: "agent", status: "running", objective, skill: structuredClone(project.skill), createdAt, updatedAt: createdAt, auditTrail: [
       { id: `audit_${crypto.randomUUID()}`, action: "context-read", summary: `Read ${documents.length} project source files within the context budget`, paths: documents.map((document) => document.path), createdAt },
       { id: `audit_${crypto.randomUUID()}`, action: "context-search", summary: `Searched indexed source context; ${searchMatches.length} files matched objective terms`, ...(searchMatches.length ? { paths: searchMatches } : {}), createdAt }
     ], ...(memory.version ? { memoryVersion: memory.version } : {}) };
@@ -37,8 +42,10 @@ export class AgentTaskService {
       const output = await runAgentOperation<AgentTaskPlanOutput>((signal) => this.provider!.planAgentTask!(input, signal), { signal: requestSignal, label: "Agent planning" });
       const available = new Set(documents.map((document) => document.path));
       const affectedFiles = output.affectedFiles.map(normalizeWorkspacePath);
-      if (!affectedFiles.length || affectedFiles.some((path) => !available.has(path)) || (request.scope.type === "file" && affectedFiles.some((path) => path !== request.scope.path))) throw new ApiError(502, "agent_plan_invalid", "Agent returned files outside the requested scope");
-      const plan: AgentTaskPlan = { id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { objective: request.objective.trim(), scope: request.scope, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, createdAt, updatedAt: now() };
+      const permitsNewFiles = intent === "draft" || intent === "continue";
+      const allowedPath = (path: string) => available.has(path) || (permitsNewFiles && request.scope.type === "project" && isNewDraftPath(path));
+      if (!affectedFiles.length || affectedFiles.some((path) => !allowedPath(path)) || (request.scope.type === "file" && affectedFiles.some((path) => path !== request.scope.path))) throw new ApiError(502, "agent_plan_invalid", "Agent returned files outside the requested scope");
+      const plan: AgentTaskPlan = { id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { objective, scope: request.scope, intent, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, intent, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, createdAt, updatedAt: now() };
       const reports = this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId);
       const reviewSnapshotIds = [...new Set(issues.flatMap((issue) => reports.find((report) => report.issues.some((candidate) => candidate.id === issue.id))?.snapshotId ?? []))];
       const resolution: IssueResolution | undefined = issues.length ? {
@@ -72,9 +79,9 @@ export class AgentTaskService {
     const documents = await this.documents(projectId);
     const issues = this.issues(projectId, plan.request.issueIds ?? []);
     const skill = await this.skills.load(project.skill);
-    const memory = this.memories?.confirmedContext(projectId) ?? { content: "" };
+    const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };
     const input = this.input(plan.request, documents, issues, project.skill, withMemory(skill.instructions, memory.content), skill.venueInstructions);
-    await this.database.mutate((state) => { const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "generating"; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "running"; run.steps?.forEach((step, index) => { step.status = index === 0 ? "running" : "pending"; }); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "execution-started", summary: `Started the approved plan for ${plan.affectedFiles.length} files`, paths: plan.affectedFiles, createdAt: now() }); for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "in_revision"); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.status = "in-revision"; resolution.updatedAt = now(); } });
+    await this.database.mutate((state) => { const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "generating"; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "running"; delete run.error; run.steps?.forEach((step, index) => { step.status = index === 0 ? "running" : "pending"; }); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "execution-started", summary: `Started the approved plan for ${plan.affectedFiles.length} files`, paths: plan.affectedFiles, createdAt: now() }); for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "in_revision"); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.status = "in-revision"; resolution.updatedAt = now(); } });
     try {
       const output = await runAgentOperation<{ files: DraftGeneratedFile[] }>((signal) => this.provider!.generateAgentTask!({ ...input, steps: plan.steps, affectedFiles: plan.affectedFiles, risks: plan.risks, validation: plan.validation }, signal), { signal: requestSignal, label: "Agent execution" });
       const files = this.validateFiles(output.files, plan);
@@ -109,15 +116,16 @@ export class AgentTaskService {
   }
 
   async rereview(projectId: string, resolutionId: string, requestSignal?: AbortSignal): Promise<IssueResolution> {
-    if (!this.provider?.rereviewIssues) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable targeted re-review");
+    const provider = this.reviewProvider ?? this.provider;
+    if (!provider?.rereviewIssues) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable targeted re-review");
     const resolution = this.database.snapshot().issueResolutions.find((item) => item.id === resolutionId && item.projectId === projectId);
     if (!resolution) throw new ApiError(404, "resolution_not_found", "Issue resolution not found");
     if (resolution.status !== "needs-review" && resolution.status !== "reopened") throw new ApiError(409, "resolution_not_reviewable", "Accept the revision before targeted re-review");
-    const project = this.workspaces.getProject(projectId); const documents = await this.documents(projectId); const issues = this.issues(projectId, resolution.issueIds); const skill = await this.skills.load(project.skill); const memory = this.memories?.confirmedContext(projectId) ?? { content: "" };
+    const project = this.workspaces.getProject(projectId); const documents = await this.documents(projectId); const issues = this.issues(projectId, resolution.issueIds); const skill = await this.skills.load(project.skill);
     const compileRecord = this.database.snapshot().compileRecords.filter((record) => record.projectId === projectId && record.projectVersion === project.version && record.status === "success").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (!compileRecord) throw new ApiError(409, "compile_required", "Compile the current project version successfully before targeted re-review");
-    const input = { ...this.input({ objective: "Verify selected review issues", scope: { type: "project" }, issueIds: resolution.issueIds }, documents, issues, project.skill, withMemory(skill.instructions, memory.content), skill.venueInstructions), issues: issues.map(toAgentIssue) };
-    const output = await runAgentOperation<{ assessments: Array<{ issueId: string; resolved: boolean; assessment: string }>; regressions: string[] }>((signal) => this.provider!.rereviewIssues!(input, signal), { signal: requestSignal, label: "Targeted re-review" });
+    const input = { ...this.input({ objective: "Verify selected review issues", scope: { type: "project" }, issueIds: resolution.issueIds }, documents, issues, project.skill, skill.instructions, skill.venueInstructions), issues: issues.map(toAgentIssue) };
+    const output = await runAgentOperation<{ assessments: Array<{ issueId: string; resolved: boolean; assessment: string }>; regressions: string[] }>((signal) => provider.rereviewIssues!(input, signal), { signal: requestSignal, label: "Targeted re-review" });
     const byIssue = new Map(output.assessments.map((assessment) => [assessment.issueId, assessment]));
     if (byIssue.size !== issues.length || issues.some((issue) => !byIssue.has(issue.id))) throw new ApiError(502, "rereview_output_invalid", "Targeted re-review must return one conclusion for every issue");
     const allResolved = issues.every((issue) => byIssue.get(issue.id)!.resolved) && !output.regressions.length;
@@ -169,9 +177,9 @@ export class AgentTaskService {
   list(projectId: string) { return this.database.snapshot().agentTaskPlans.filter((plan) => plan.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
   resolutions(projectId: string) { return this.database.snapshot().issueResolutions.filter((resolution) => resolution.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
 
-  private async documents(projectId: string) { const paths = textPaths(await this.workspaces.tree(projectId)); const documents: Array<{ path: string; content: string; version: number }> = []; let bytes = 0; for (const path of paths) { const opened = await this.workspaces.readTextFile(projectId, path); const size = Buffer.byteLength(opened.content); if (bytes + size > 500_000) continue; bytes += size; documents.push({ path, content: opened.content, version: opened.file.version }); } return documents; }
+  private async documents(projectId: string) { const paths = textPaths(await this.workspaces.tree(projectId)).filter((path) => path !== "memory.md"); const documents: Array<{ path: string; content: string; version: number }> = []; let bytes = 0; for (const path of paths) { const opened = await this.workspaces.readTextFile(projectId, path); const size = Buffer.byteLength(opened.content); if (bytes + size > 500_000) continue; bytes += size; documents.push({ path, content: opened.content, version: opened.file.version }); } return documents; }
   private issues(projectId: string, ids: string[]): ReviewIssue[] { const all = this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).flatMap((report) => report.issues); const issues = ids.map((id) => all.find((issue) => issue.id === id)).filter((issue): issue is ReviewIssue => Boolean(issue)); if (issues.length !== new Set(ids).size) throw new ApiError(404, "review_issue_not_found", "One or more review issues were not found"); return issues; }
-  private input(request: AgentTaskRequest, documents: Array<{ path: string; content: string; version: number }>, issues: ReviewIssue[], skill: AgentTaskInput["skill"], skillInstructions: string, venueInstructions: string): AgentTaskInput { return { objective: request.objective.trim(), scope: request.scope, issues: issues.map(toAgentIssue), documents, skill, skillInstructions, venueInstructions }; }
+  private input(request: AgentTaskRequest, documents: Array<{ path: string; content: string; version: number }>, issues: ReviewIssue[], skill: AgentTaskInput["skill"], skillInstructions: string, venueInstructions: string): AgentTaskInput { return { objective: request.objective.trim(), intent: request.intent ?? "revise", scope: request.scope, issues: issues.map(toAgentIssue), documents, skill, skillInstructions, venueInstructions }; }
   private getPlan(projectId: string, id: string) { const plan = this.database.snapshot().agentTaskPlans.find((item) => item.id === id && item.projectId === projectId); if (!plan) throw new ApiError(404, "agent_plan_not_found", "Agent plan not found"); return plan; }
   private validateFiles(files: DraftGeneratedFile[], plan: AgentTaskPlan) { const allowed = new Set(plan.affectedFiles); const normalized = files.map((file) => ({ ...file, path: normalizeWorkspacePath(file.path) })); if (!normalized.length || new Set(normalized.map((file) => file.path)).size !== normalized.length || normalized.some((file) => !allowed.has(file.path) || !isTextFile(file.path) || !file.content.trim())) throw new ApiError(502, "agent_files_invalid", "Agent returned empty, duplicate, binary, or out-of-plan files"); return normalized; }
   private mutateIssue(issues: ReviewIssue[], id: string, status: ReviewIssue["status"]) { const issue = issues.find((item) => item.id === id); if (issue) { issue.status = status; issue.updatedAt = now(); } }
@@ -203,4 +211,25 @@ function searchDocumentPaths(documents: Array<{ path: string; content: string }>
     const haystack = `${document.path}\n${document.content}`.toLowerCase();
     return terms.some((term) => haystack.includes(term));
   }).map((document) => document.path);
+}
+
+function stripIntentCommand(objective: string): string {
+  return objective.trim().replace(/^\/(?:draft|continue|revise)\b\s*/i, "").trim();
+}
+
+function parseIntentCommand(objective: string): AgentTaskIntent | undefined {
+  const intent = objective.trim().match(/^\/(draft|continue|revise)\b/i)?.[1]?.toLowerCase();
+  return intent === "draft" || intent === "continue" || intent === "revise" ? intent : undefined;
+}
+
+function classifyAgentIntent(objective: string, documents: Array<{ path: string; content: string }>): AgentTaskIntent {
+  const source = documents.map((document) => document.content).join("\n");
+  const prose = source.replace(/%.*$/gm, "").replace(/\\(?:documentclass|usepackage|begin|end|input|include)\b[^\n]*/g, "").replace(/\s+/g, " ").trim();
+  if (prose.length < 500) return "draft";
+  if (/\b(?:TODO|TBD|FIXME|placeholder|to be completed)\b/i.test(source)) return "continue";
+  return "revise";
+}
+
+function isNewDraftPath(path: string): boolean {
+  return /^(?!\.)(?!.*(?:^|\/)\.\.\/)[a-zA-Z0-9_./-]+\.(?:tex|bib)$/.test(path);
 }

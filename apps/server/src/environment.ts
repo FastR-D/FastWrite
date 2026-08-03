@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 export function loadEnvironmentFile(path: string, target: NodeJS.ProcessEnv = process.env): boolean {
   let content: string;
@@ -21,8 +21,11 @@ export function loadEnvironmentFile(path: string, target: NodeJS.ProcessEnv = pr
 }
 
 export function loadProjectEnvironment(target: NodeJS.ProcessEnv = process.env): string | null {
+  const isStandaloneExecutable = (Bun as unknown as { isStandaloneExecutable?: boolean }).isStandaloneExecutable === true || import.meta.dir.startsWith("/$bunfs/");
   const candidates = [
     target.FASTWRITE_ENV_FILE,
+    isStandaloneExecutable ? resolve(dirname(process.execPath), ".env") : undefined,
+    resolve(import.meta.dir, ".env"),
     resolve(import.meta.dir, "../../..", ".env"),
     resolve(process.cwd(), ".env")
   ].filter((path): path is string => Boolean(path));

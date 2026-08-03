@@ -5,7 +5,6 @@ import type { JsonDatabase } from "../storage/database";
 import type { WorkspaceService } from "../workspace/workspace-service";
 import type { AgentProvider, DraftGeneratedFile } from "./provider";
 import type { SkillRegistry } from "./skill-registry";
-import type { MemoryService } from "./memory-service";
 import { createFileChange, replaceFileChange } from "./change-set";
 import { isAgentCancellation, runAgentOperation } from "./agent-operation";
 
@@ -16,8 +15,7 @@ export class DraftService {
     private readonly database: JsonDatabase,
     private readonly workspaces: WorkspaceService,
     private readonly skills: SkillRegistry,
-    private readonly provider?: AgentProvider,
-    private readonly memories?: MemoryService
+    private readonly provider?: AgentProvider
   ) {}
 
   async plan(projectId: string, request: DraftRequest, requestSignal?: AbortSignal): Promise<DraftPlanResponse> {
@@ -25,7 +23,6 @@ export class DraftService {
     this.validateRequest(request);
     const normalizedRequest = this.normalizeRequest(request);
     const project = this.workspaces.getProject(projectId);
-    const memory = this.memories?.confirmedContext(projectId) ?? { content: "" };
     const loaded = await this.skills.load(project.skill);
     const createdAt = now();
     const run: AgentRun = {
@@ -42,11 +39,10 @@ export class DraftService {
         { id: "draft", label: "Generate section drafts", status: "pending" },
         { id: "approval", label: "Review multi-file changes", status: "pending" }
       ],
-      ...(memory.version ? { memoryVersion: memory.version } : {})
     };
     await this.database.mutate((state) => state.agentRuns.push(run));
     try {
-      const input = { request: normalizedRequest, skill: project.skill, skillInstructions: withMemory(loaded.instructions, memory.content), venueInstructions: loaded.venueInstructions };
+      const input = { request: normalizedRequest, skill: project.skill, skillInstructions: loaded.instructions, venueInstructions: loaded.venueInstructions };
       const result = await runAgentOperation<{ outline: DraftOutlineSection[] }>((signal) => this.provider!.planDraft!(input, signal), { signal: requestSignal, label: "Draft planning" });
       const outline = this.validateOutline(result.outline, project.mainDocument);
       const plan: DraftPlan = {
@@ -81,7 +77,6 @@ export class DraftService {
     const project = this.workspaces.getProject(projectId);
     const checkedOutline = this.validateOutline(outline, project.mainDocument);
     const loaded = await this.skills.load(project.skill);
-    const memory = this.memories?.confirmedContext(projectId) ?? { content: "" };
     await this.database.mutate((state) => {
       const storedPlan = state.draftPlans.find((item) => item.id === planId)!;
       storedPlan.status = "generating";
@@ -98,7 +93,7 @@ export class DraftService {
         outline: checkedOutline,
         mainDocument: project.mainDocument,
         skill: project.skill,
-        skillInstructions: withMemory(loaded.instructions, memory.content),
+        skillInstructions: loaded.instructions,
         venueInstructions: loaded.venueInstructions
       };
       const result = await runAgentOperation<{ files: DraftGeneratedFile[] }>((signal) => this.provider!.generateDraft!(input, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: "Draft generation" });
@@ -229,5 +224,3 @@ export class DraftService {
     });
   }
 }
-
-function withMemory(skill: string, memory: string): string { return memory ? `${skill}\n\nConfirmed Paper Memory (treat as project facts):\n${memory}` : skill; }

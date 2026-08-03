@@ -4,7 +4,6 @@ import type { JsonDatabase } from "../storage/database";
 import type { WorkspaceService } from "../workspace/workspace-service";
 import type { AgentProvider, ReviewAgentOutput } from "./provider";
 import type { SkillRegistry } from "./skill-registry";
-import type { MemoryService } from "./memory-service";
 import { isAgentCancellation, runAgentOperation } from "./agent-operation";
 
 function now() { return new Date().toISOString(); }
@@ -12,15 +11,14 @@ function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap(
 function flattenOutline(items: OutlineItem[]): OutlineItem[] { return items.flatMap((item) => [item, ...flattenOutline(item.children)]); }
 
 export class ReviewService {
-  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider, private readonly memories?: MemoryService) {}
+  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider) {}
 
   async run(projectId: string, sourceOnly = false, requestSignal?: AbortSignal): Promise<ReviewResponse> {
     if (!this.provider?.review) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable Review Agent");
     const project = this.workspaces.getProject(projectId);
     const compileRecord = this.database.snapshot().compileRecords.filter((record) => record.projectId === projectId && record.projectVersion === project.version && record.status === "success").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (!compileRecord && !sourceOnly) throw new ApiError(409, "compile_required", "Compile the current project version or explicitly continue with a source-only review");
-    const memory = this.memories?.confirmedContext(projectId) ?? { content: "" };
-    const discoveredPaths = textPaths(await this.workspaces.tree(projectId));
+    const discoveredPaths = textPaths(await this.workspaces.tree(projectId)).filter((path) => path !== "memory.md");
     const paths = [project.mainDocument, ...discoveredPaths.filter((path) => path !== project.mainDocument)];
     const documents: Array<{ path: string; content: string; version: number }> = [];
     let contextBytes = 0;
@@ -43,7 +41,6 @@ export class ReviewService {
       files: documents.map((document) => ({ path: document.path, version: document.version, digest: new Bun.CryptoHasher("sha256").update(document.content).digest("hex") })),
       sourceOnly: !compileRecord,
       createdAt,
-      ...(memory.version ? { memoryVersion: memory.version } : {}),
       ...(compileRecord ? { compileRecordId: compileRecord.id } : {})
     };
     const run: AgentRun = {
@@ -60,13 +57,12 @@ export class ReviewService {
         { id: "evidence", label: "Collect section evidence", status: "running" },
         { id: "synthesis", label: "Synthesize and deduplicate issues", status: "pending" }
       ],
-      ...(memory.version ? { memoryVersion: memory.version } : {})
     };
     await this.database.mutate((state) => { state.reviewSnapshots.push(snapshot); state.agentRuns.push(run); });
     try {
       const [outline, skill] = await Promise.all([this.workspaces.outline(projectId), this.skills.load(project.skill)]);
       const result = await runAgentOperation<ReviewAgentOutput>(
-        (signal) => this.provider!.review!({ documents: documents.map(({ path, content }) => ({ path, content })), outline: flattenOutline(outline).map(({ path, title, line }) => ({ path, title, line })), skill: project.skill, skillInstructions: withMemory(skill.instructions, memory.content), venueInstructions: skill.venueInstructions }, signal),
+        (signal) => this.provider!.review!({ documents: documents.map(({ path, content }) => ({ path, content })), outline: flattenOutline(outline).map(({ path, title, line }) => ({ path, title, line })), skill: project.skill, skillInstructions: skill.instructions, venueInstructions: skill.venueInstructions }, signal),
         { signal: requestSignal, timeoutEnv: "FASTWRITE_REVIEW_TIMEOUT_MS", label: "Review", codePrefix: "review", cancelledMessage: "Review cancelled; no report was created", timeoutMessage: "Review timed out before a report was created" }
       );
       const reportId = `review_${crypto.randomUUID()}`;
@@ -152,6 +148,5 @@ export class ReviewService {
   }
 }
 
-function withMemory(skill: string, memory: string): string { return memory ? `${skill}\n\nConfirmed Paper Memory (treat as project facts):\n${memory}` : skill; }
 
 function severityPriority(severity: ReviewIssue["severity"]): number { return ({ blocking: 1, major: 2, minor: 3, suggestion: 4 })[severity]; }

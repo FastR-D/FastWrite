@@ -19,6 +19,17 @@ function outlineTitles(items: OutlineItem[]): string[] {
   return items.flatMap((item) => [item.title, ...outlineTitles(item.children)]);
 }
 
+function activeSectionTitle(items: OutlineItem[], path: string, line: number): string | undefined {
+  return items
+    .flatMap((item) => [item, ...flattenOutline(item.children)])
+    .filter((item) => item.path === path && item.line <= line)
+    .sort((left, right) => right.line - left.line)[0]?.title;
+}
+
+function flattenOutline(items: OutlineItem[]): OutlineItem[] {
+  return items.flatMap((item) => [item, ...flattenOutline(item.children)]);
+}
+
 export class CompletionService {
   constructor(
     private readonly workspaces: WorkspaceService,
@@ -50,8 +61,9 @@ export class CompletionService {
       const file = await this.workspaces.readTextFile(projectId, path);
       return `% ${path}\n${file.content}`;
     }));
-    const memory = this.memories.confirmedContext(projectId);
-    const memoryInstructions = memory.content ? `\n\nConfirmed Paper Memory (use only these confirmed facts):\n${memory.content}` : "";
+    const cursorLine = opened.content.slice(0, request.cursor).split("\n").length;
+    const memory = await this.memories.focusedWriterContext(projectId, opened.file.path, activeSectionTitle(outline, opened.file.path, cursorLine));
+    const memoryInstructions = memory.content ? `\n\nLocal Paper Context (paper core and current section only):\n${memory.content}` : "";
     const contextBefore = opened.content.slice(Math.max(0, request.cursor - BEFORE_LIMIT), request.cursor);
     const contextAfter = opened.content.slice(request.cursor, request.cursor + AFTER_LIMIT);
     const result = await this.provider.complete({
@@ -59,6 +71,7 @@ export class CompletionService {
       path: opened.file.path,
       contextBefore,
       contextAfter,
+      ...(memory.content ? { paperContext: memory.content } : {}),
       outline: outlineTitles(outline),
       bibliography: bibliographyParts.join("\n\n").slice(0, BIBLIOGRAPHY_LIMIT),
       skill: project.skill,

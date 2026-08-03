@@ -122,6 +122,9 @@ export const api = {
   memory: {
     get: (projectId: string, signal?: AbortSignal) => request<PaperMemory | null>(`/api/projects/${projectId}/memory`, signal ? { signal } : undefined),
     extract: (projectId: string, signal?: AbortSignal) => request<PaperMemory>(`/api/projects/${projectId}/memory/extract`, { method: "POST", ...(signal ? { signal } : {}) }),
+    apply: (projectId: string) => request<PaperMemory>(`/api/projects/${projectId}/memory/apply`, { method: "POST" }),
+    updateOverview: (projectId: string, body: { content: string; locked?: boolean }) => request<PaperMemory>(`/api/projects/${projectId}/memory/overview`, jsonInit("PATCH", body)),
+    updateSection: (projectId: string, sectionId: string, body: { content: string; locked?: boolean }) => request<PaperMemory>(`/api/projects/${projectId}/memory/sections/${encodeURIComponent(sectionId)}`, jsonInit("PATCH", body)),
     updateItem: (projectId: string, itemId: string, body: { status?: MemoryItemStatus; content?: string; label?: string }) => request<PaperMemory>(`/api/projects/${projectId}/memory/items/${itemId}`, jsonInit("PATCH", body)),
     rollback: (projectId: string) => request<PaperMemory>(`/api/projects/${projectId}/memory/rollback`, { method: "POST" })
   },
@@ -138,6 +141,9 @@ export const api = {
   compileResults: {
     latest: (projectId: string, signal?: AbortSignal) => request<CompileRecord | null>(`/api/projects/${projectId}/compile-results/latest`, signal ? { signal } : undefined),
     record: (projectId: string, body: { projectVersion: number; status: "success" | "error"; summary: string }) => request<CompileRecord>(`/api/projects/${projectId}/compile-results`, jsonInit("POST", body))
+  },
+  compiler: {
+    compileOnServer: (projectId: string, signal?: AbortSignal) => request<{ success: boolean; engine: "server"; log: string; error?: string; pdfBase64?: string; syncTexData?: string; workspacePaths: string[] }>(`/api/projects/${projectId}/compile`, { method: "POST", ...(signal ? { signal } : {}) })
   },
   completions: {
     suggest: (projectId: string, body: CompletionRequest, signal?: AbortSignal) => request<CompletionResponse>(`/api/projects/${projectId}/completions`, jsonInit("POST", body, signal))

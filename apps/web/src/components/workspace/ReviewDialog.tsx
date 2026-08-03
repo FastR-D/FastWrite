@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, ExternalLink, LoaderCircle, Merge, Plus, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ExternalLink, LoaderCircle, Maximize, Maximize2, Merge, Minimize2, Plus, ShieldCheck } from "lucide-react";
 import type { AgentRun, PaperProject, ReviewIssue, ReviewReport } from "@fastwrite/shared";
 import { api } from "../../api/client";
-import { Button } from "../ui/Button";
+import { Button, IconButton } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
 import type { CompileStateReport } from "./PdfPane";
 
 type ManualIssue = Pick<ReviewIssue, "category" | "severity" | "title" | "rationale" | "impact" | "suggestion">;
 const EMPTY_MANUAL: ManualIssue = { category: "soundness", severity: "major", title: "", rationale: "", impact: "", suggestion: "" };
+type ReviewDialogWidth = "large" | "wide" | "fullscreen";
 
 interface ReviewDialogProps {
   open: boolean;
@@ -29,7 +30,7 @@ export function ReviewDialog({ open, project, compileState, onRequestCompile, on
   const [file, setFile] = useState("all");
   const [status, setStatus] = useState("active");
   const [selected, setSelected] = useState<string[]>([]);
-  const [memoryVersion, setMemoryVersion] = useState<number | null>(null);
+  const [width, setWidth] = useState<ReviewDialogWidth>("wide");
   const [manualOpen, setManualOpen] = useState(false);
   const [manual, setManual] = useState<ManualIssue>(EMPTY_MANUAL);
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
@@ -41,14 +42,17 @@ export function ReviewDialog({ open, project, compileState, onRequestCompile, on
     setCategory(localStorage.getItem(`fastwrite.review.${project.id}.category`) ?? "all");
     setFile(localStorage.getItem(`fastwrite.review.${project.id}.file`) ?? "all");
     setStatus(localStorage.getItem(`fastwrite.review.${project.id}.status`) ?? "active");
+    const savedWidth = localStorage.getItem(`fastwrite.review.${project.id}.width`);
+    setWidth(savedWidth === "large" || savedWidth === "wide" || savedWidth === "fullscreen" ? savedWidth : "wide");
   }, [project.id]);
   useEffect(() => {
     localStorage.setItem(`fastwrite.review.${project.id}.severity`, severity);
     localStorage.setItem(`fastwrite.review.${project.id}.category`, category);
     localStorage.setItem(`fastwrite.review.${project.id}.file`, file);
     localStorage.setItem(`fastwrite.review.${project.id}.status`, status);
-  }, [project.id, severity, category, file, status]);
-  useEffect(() => { if (!open) return; const controller = new AbortController(); void Promise.all([refresh(controller.signal), api.memory.get(project.id, controller.signal).then((memory) => setMemoryVersion(memory?.version ?? null))]).catch(() => undefined); return () => { controller.abort(); runAbortRef.current?.abort(); }; }, [open, project.id]);
+    localStorage.setItem(`fastwrite.review.${project.id}.width`, width);
+  }, [project.id, severity, category, file, status, width]);
+  useEffect(() => { if (!open) return; const controller = new AbortController(); void refresh(controller.signal).catch(() => undefined); return () => { controller.abort(); runAbortRef.current?.abort(); }; }, [open, project.id]);
   useEffect(() => {
     if (!open || !loading) return;
     const controller = new AbortController();
@@ -72,8 +76,8 @@ export function ReviewDialog({ open, project, compileState, onRequestCompile, on
     (status === "all" || (status === "active" ? issue.status !== "dismissed" && issue.status !== "resolved" : issue.status === status))
   ).sort((a, b) => a.priority - b.priority) ?? [];
 
-  return <Dialog open={open} width="fullscreen" title="Paper Review" description={`${project.skill.name} · v${project.skill.version} · project v${project.version}`} onClose={() => { if (!loading) onClose(); }} footer={<><Button variant="ghost" disabled={loading} onClick={onClose}>Close</Button>{!compiledCurrentVersion && !loading ? <Button variant="secondary" loading={compiling} disabled={compiling} onClick={onRequestCompile}>{compiling ? "Compiling" : "Compile current version"}</Button> : null}{loading ? <Button variant="secondary" onClick={() => runAbortRef.current?.abort()}>Cancel review</Button> : <Button variant="primary" icon={<ShieldCheck />} onClick={() => void run(!compiledCurrentVersion)}>{report ? compiledCurrentVersion ? "Run new review" : "Run source-only review" : compiledCurrentVersion ? "Review paper" : "Continue source-only"}</Button>}</>}>
-    <div className="review-context" aria-label="Review input snapshot"><span>Project <strong>v{project.version}</strong></span><span>Skill <strong>v{project.skill.version}</strong></span><span>Memory <strong>{memoryVersion ? `v${memoryVersion}` : "none"}</strong></span><span>Compile <strong>{compiledCurrentVersion ? "current · success" : compiling ? "running" : compileState.state === "error" ? "current · failed" : "not current"}</strong></span></div>
+  return <Dialog open={open} width={width} className="review-dialog" title="Paper Review" description={`${project.skill.name} · v${project.skill.version} · saved ${snapshotTime(project.updatedAt)}`} headerActions={<div className="dialog-size-controls" aria-label="Review window size"><IconButton label="Compact review window" icon={<Minimize2 />} aria-pressed={width === "large"} onClick={() => setWidth("large")} /><IconButton label="Wide review window" icon={<Maximize />} aria-pressed={width === "wide"} onClick={() => setWidth("wide")} /><IconButton label="Fullscreen review window" icon={<Maximize2 />} aria-pressed={width === "fullscreen"} onClick={() => setWidth("fullscreen")} /></div>} onClose={() => { if (!loading) onClose(); }} footer={<><Button variant="ghost" disabled={loading} onClick={onClose}>Close</Button>{!compiledCurrentVersion && !loading ? <Button variant="secondary" loading={compiling} disabled={compiling} onClick={onRequestCompile}>{compiling ? "Compiling" : "Compile current version"}</Button> : null}{loading ? <Button variant="secondary" onClick={() => runAbortRef.current?.abort()}>Cancel review</Button> : <Button variant="primary" icon={<ShieldCheck />} onClick={() => void run(!compiledCurrentVersion)}>{report ? compiledCurrentVersion ? "Run new review" : "Run source-only review" : compiledCurrentVersion ? "Review paper" : "Continue source-only"}</Button>}</>}>
+    <div className="review-context" aria-label="Review input snapshot"><span>Saved snapshot <strong>{snapshotTime(project.updatedAt)}</strong></span><span>Skill <strong>v{project.skill.version}</strong></span><span>Compile <strong>{compiledCurrentVersion ? "current · success" : compiling ? "running" : compileState.state === "error" ? "current · failed" : "not current"}</strong></span></div>
     {loading ? <div className="agent-progress review-run-progress"><LoaderCircle className="spin" /><strong>Reviewing the frozen paper snapshot</strong><span>Collecting section evidence, applying the Writing Skill, and deduplicating issues.</span>{activeRun?.steps?.length ? <ol>{activeRun.steps.map((step) => <li key={step.id} className={`is-${step.status}`}><span>{step.status === "completed" ? <CheckCircle2 /> : step.status === "failed" ? <AlertTriangle /> : step.status === "running" ? <LoaderCircle className="spin" /> : null}</span><strong>{step.label}</strong><small>{step.status.replace("-", " ")}</small></li>)}</ol> : null}</div> : report ? <div className="review-report">
       <header className="review-summary"><div><span className={`recommendation recommendation--${report.recommendation}`}>{report.recommendation.replace("-", " ")}</span><strong>{report.overallAssessment}</strong></div><small>{report.issues.length} issues · saved report</small></header>
       <div className="review-columns"><section><h3><CheckCircle2 /> Strengths</h3>{report.strengths.map((item, index) => <p key={index}>{item}</p>)}</section><section><h3><AlertTriangle /> Weaknesses</h3>{report.weaknesses.map((item, index) => <p key={index}>{item}</p>)}</section></div>
@@ -99,9 +103,13 @@ export function ReviewDialog({ open, project, compileState, onRequestCompile, on
         })}
       </section>
       {report.nextSteps.length ? <section className="review-next"><h3>Suggested next steps</h3><ol>{report.nextSteps.map((step, index) => <li key={index}>{step}</li>)}</ol></section> : null}
-    </div> : <div className="review-empty"><ShieldCheck /><h3>Evidence-first paper review</h3><p>FastWrite freezes project version {project.version}, reads the confirmed {project.skill.name} Skill, then produces a structured report. {compiledCurrentVersion ? "The current version has a successful browser WASM compile." : "Compile first, or explicitly continue with a source-only review."} Review never edits paper files.</p></div>}
+    </div> : <div className="review-empty"><ShieldCheck /><h3>Evidence-first paper review</h3><p>FastWrite freezes the paper saved at {snapshotTime(project.updatedAt)}, reads the confirmed {project.skill.name} Skill, then produces a structured report. {compiledCurrentVersion ? "The current draft has a successful browser WASM compile." : "Compile first, or explicitly continue with a source-only review."} Review never edits paper files.</p></div>}
     {error ? <div className="form-error" role="alert">{error}</div> : null}
   </Dialog>;
 }
 
 function message(error: unknown) { return error instanceof Error ? error.message : "Review request failed"; }
+function snapshotTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "unknown time" : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}

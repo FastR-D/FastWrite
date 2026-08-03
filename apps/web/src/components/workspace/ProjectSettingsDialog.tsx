@@ -55,7 +55,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
         <label className="field"><span>Project name</span><input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label>
         <label className="field"><span>Main document</span><select value={mainDocument} onChange={(event) => setMainDocument(event.target.value)}>{texFiles.map((path) => <option key={path} value={path}>{path}</option>)}</select></label>
         <label className="field"><span>Writing profile</span><select value={profile} onChange={(event) => setProfile(event.target.value as WritingProfile)}>{WRITING_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-        <div className="settings-export"><div><strong>Automatic Git history</strong><span>Every accepted save is committed inside the managed workspace. FastWrite never writes backups into the imported source folder.</span></div></div>
+        <div className="settings-export"><div><strong>Automatic Git history</strong><span>Accepted saves create local Git checkpoints in the FastWrite project history.</span></div></div>
         <div className="settings-export"><div><strong>Workspace snapshot</strong><span>Download all source files as a portable tar.gz archive.</span></div><a className="button button--secondary button--medium" href={api.projects.exportUrl(project.id)} download><Download />Export</a></div>
       </div>
       {error ? <div className="form-error" role="alert">{error}</div> : null}

@@ -377,6 +377,8 @@ export interface ReviewResponse {
 
 export type MemoryCategory = "research-question" | "contribution" | "system-model" | "threat-model" | "term" | "experiment" | "limitation" | "open-question";
 export type MemoryItemStatus = "suggested" | "confirmed" | "rejected" | "needs-information" | "stale";
+export type MemoryOrigin = "ai" | "human";
+export type MemoryFreshness = "current" | "stale";
 
 export interface MemorySource {
   path: string;
@@ -386,13 +388,53 @@ export interface MemorySource {
   fileVersion: number;
 }
 
+export interface MemoryCandidate {
+  label: string;
+  content: string;
+  sources: MemorySource[];
+  createdAt: string;
+}
+
+export interface MemoryOverview {
+  content: string;
+  origin: MemoryOrigin;
+  humanEdited: boolean;
+  locked: boolean;
+  candidate?: MemoryCandidate;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemorySectionSummary {
+  id: string;
+  key: string;
+  path: string;
+  title: string;
+  content: string;
+  sources: MemorySource[];
+  origin: MemoryOrigin;
+  humanEdited: boolean;
+  locked: boolean;
+  freshness: MemoryFreshness;
+  candidate?: MemoryCandidate;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MemoryItem {
   id: string;
+  /** Stable identity used to reconcile regenerated facts without duplicating them. */
+  key?: string;
   category: MemoryCategory;
   label: string;
   content: string;
   status: MemoryItemStatus;
   sources: MemorySource[];
+  origin?: MemoryOrigin;
+  humanEdited?: boolean;
+  locked?: boolean;
+  freshness?: MemoryFreshness;
+  candidate?: MemoryCandidate;
   createdAt: string;
   updatedAt: string;
 }
@@ -402,6 +444,8 @@ export interface PaperMemory {
   projectId: string;
   version: number;
   projectVersion: number;
+  overview?: MemoryOverview;
+  sections?: MemorySectionSummary[];
   items: MemoryItem[];
   createdAt: string;
   updatedAt: string;
@@ -411,7 +455,10 @@ export interface AgentTaskRequest {
   objective: string;
   scope: { type: "file" | "section" | "project"; path?: string };
   issueIds?: string[];
+  intent?: AgentTaskIntent;
 }
+
+export type AgentTaskIntent = "draft" | "continue" | "revise";
 
 export type AgentTaskStatus = "proposed" | "generating" | "waiting-approval" | "accepted" | "cancelled" | "failed";
 
@@ -421,6 +468,7 @@ export interface AgentTaskPlan {
   agentRunId: string;
   status: AgentTaskStatus;
   request: AgentTaskRequest;
+  intent: AgentTaskIntent;
   steps: string[];
   affectedFiles: string[];
   risks: string[];

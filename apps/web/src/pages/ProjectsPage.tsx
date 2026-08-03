@@ -42,14 +42,14 @@ export function ProjectsPage() {
           <span className="brand__mark">F</span>
           <span>FastWrite</span>
         </a>
-        <span className="skill-badge">Skill-driven writing</span>
+        <span className="skill-badge">Agentic Paper Writing</span>
       </header>
       <main className="projects-main">
         <section className="projects-hero">
           <div>
-            <p className="eyebrow">ACADEMIC WRITING WORKSPACE</p>
+            <p className="eyebrow">WORKSPACE</p>
             <h1>Your papers, ready to write.</h1>
-            <p>Import an existing LaTeX project or start a managed paper workspace. FastWrite never edits the source directory.</p>
+            <p>Import an existing LaTeX project or start a new paper in a focused writing workspace.</p>
           </div>
           <div className="projects-hero__actions">
             <Button variant="primary" icon={<Plus />} onClick={() => setImportOpen(true)}>Import paper</Button>
@@ -59,7 +59,7 @@ export function ProjectsPage() {
 
         <section className="projects-section" aria-labelledby="recent-projects">
           <div className="section-heading">
-            <div><h2 id="recent-projects">Recent projects</h2><p>Managed copies stored in this FastWrite workspace.</p></div>
+            <div><h2 id="recent-projects">Recent projects</h2><p>Papers available in this FastWrite workspace.</p></div>
             <span>{projects.length} {projects.length === 1 ? "project" : "projects"}</span>
           </div>
           {error ? <div className="page-error" role="alert"><strong>Could not load projects</strong><span>{error}</span><Button size="small" onClick={() => void loadProjects()}>Try again</Button></div> : null}

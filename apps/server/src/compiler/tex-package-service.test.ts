@@ -50,7 +50,7 @@ describe("dynamic TeX packages", () => {
   test("uses the file index when a style name differs from its TeX Live package", async () => {
     const directory = await temporaryDirectory();
     const service = new TexPackageService(directory, mockFetch(async (url) => {
-      if (url.includes("ctan.org/json")) return Response.json({ errors: ["Not found"] });
+      if (url.includes("ctan.org/json")) return Response.json({ errors: ["Not found"] }, { status: 404 });
       if (url.includes("file-to-package.json")) return Response.json({ "algorithm.sty": "algorithms" });
       return new Response(null, { status: 404 });
     }));

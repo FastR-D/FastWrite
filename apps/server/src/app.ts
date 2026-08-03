@@ -27,7 +27,9 @@ import { AgentTaskService } from "./agent/agent-task-service";
 import { CompletionService } from "./agent/completion-service";
 import { SkillRegistry } from "./agent/skill-registry";
 import { TexPackageService, type TexPackageProvider } from "./compiler/tex-package-service";
-import { config } from "./config";
+import { LatexCompileService } from "./compiler/latex-compile-service";
+import { embeddedWebFile } from "./embedded-web";
+import { config, type AgentProviderConfiguration } from "./config";
 import { GithubService } from "./imports/github-service";
 import { UploadService } from "./imports/upload-service";
 import { ApiError, errorResponse, json, readJson, withRuntimeHeaders } from "./http";
@@ -46,6 +48,7 @@ interface Services {
   agentTasks: AgentTaskService;
   completions: CompletionService;
   texPackages: TexPackageProvider;
+  latexCompiler: LatexCompileService;
 }
 
 type Handler = (request: Request, params: Record<string, string>, url: URL) => Promise<Response> | Response;
@@ -62,6 +65,10 @@ export interface ApplicationOptions {
   texPackages?: TexPackageProvider;
 }
 
+function providerFor(configuration: AgentProviderConfiguration): AgentProvider | undefined {
+  return configuration.apiKey ? new OpenAIAgentProvider(configuration.apiKey, configuration.model, configuration.baseURL) : undefined;
+}
+
 export async function createApplication(dataDirectory = config.dataDirectory, options: ApplicationOptions = {}) {
   const database = new JsonDatabase(dataDirectory);
   await database.initialize();
@@ -71,14 +78,21 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   await uploads.initialize();
   const texPackages = options.texPackages ?? new TexPackageService(dataDirectory);
   await texPackages.initialize();
-  const provider = options.agentProvider ?? (config.openAIKey ? new OpenAIAgentProvider(config.openAIKey, config.agentModel, config.openAIBaseURL) : undefined);
-  const memories = new MemoryService(database, workspaces, new SkillRegistry(config.skillsDirectory), provider);
-  const revisions = new ReviseService(database, workspaces, new SkillRegistry(config.skillsDirectory), provider, memories);
-  const drafts = new DraftService(database, workspaces, new SkillRegistry(config.skillsDirectory), provider, memories);
-  const reviews = new ReviewService(database, workspaces, new SkillRegistry(config.skillsDirectory), provider, memories);
-  const agentTasks = new AgentTaskService(database, workspaces, new SkillRegistry(config.skillsDirectory), provider, memories);
-  const completions = new CompletionService(workspaces, new SkillRegistry(config.skillsDirectory), provider, memories);
-  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages };
+  const defaultProvider = options.agentProvider;
+  const providers = {
+    completion: defaultProvider ?? providerFor(config.agentProviders.completion),
+    agent: defaultProvider ?? providerFor(config.agentProviders.agent),
+    revise: defaultProvider ?? providerFor(config.agentProviders.revise),
+    review: defaultProvider ?? providerFor(config.agentProviders.review),
+    memory: defaultProvider ?? providerFor(config.agentProviders.memory)
+  };
+  const memories = new MemoryService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.memory);
+  const revisions = new ReviseService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.revise, memories);
+  const drafts = new DraftService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.agent);
+  const reviews = new ReviewService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.review);
+  const agentTasks = new AgentTaskService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.agent, memories, providers.review);
+  const completions = new CompletionService(workspaces, new SkillRegistry(config.skillsDirectory), providers.completion, memories);
+  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler: new LatexCompileService(dataDirectory, workspaces) };
   const routes = buildRoutes(services);
 
   return async function fetch(request: Request): Promise<Response> {
@@ -98,7 +112,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
 }
 
-function buildRoutes({ database, workspaces, uploads, github, revisions, drafts, reviews, memories, agentTasks, completions, texPackages }: Services): Route[] {
+function buildRoutes({ database, workspaces, uploads, github, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler }: Services): Route[] {
   return [
     route("GET", "/api/health", async () => json({ status: "ok" })),
     route("GET", "/api/texlive/:packageName", async (_request, params, url) => texPackages.texLiveArchive(required(params, "packageName"), url.searchParams.get("tlYear"))),
@@ -179,10 +193,19 @@ function buildRoutes({ database, workspaces, uploads, github, revisions, drafts,
     }),
     route("POST", "/api/projects/:projectId/review-issues", async (request, params) => json(await reviews.createIssue(required(params, "projectId"), await readJson<Parameters<ReviewService["createIssue"]>[1]>(request)), 201)),
     route("POST", "/api/projects/:projectId/review-issues/:issueId/merge", async (request, params) => { const body = await readJson<{ duplicateIds: string[]; reason?: string }>(request); return json(await reviews.mergeIssues(required(params, "projectId"), required(params, "issueId"), body.duplicateIds, body.reason)); }),
-    route("GET", "/api/projects/:projectId/memory", async (_request, params) => json(memories.latest(required(params, "projectId")))),
+    route("GET", "/api/projects/:projectId/memory", async (_request, params) => json(await memories.get(required(params, "projectId")))),
     route("POST", "/api/projects/:projectId/memory/extract", async (_request, params) => json(await memories.extract(required(params, "projectId")), 201)),
+    route("POST", "/api/projects/:projectId/memory/apply", async (_request, params) => json(await memories.applyReviewed(required(params, "projectId")))),
+    route("PATCH", "/api/projects/:projectId/memory/overview", async (request, params) => {
+      const body = await readJson<{ content: string; locked?: boolean }>(request);
+      return json(await memories.updateOverview(required(params, "projectId"), body.content, body.locked !== false, request.signal));
+    }),
+    route("PATCH", "/api/projects/:projectId/memory/sections/:sectionId", async (request, params) => {
+      const body = await readJson<{ content: string; locked?: boolean }>(request);
+      return json(await memories.updateSection(required(params, "projectId"), required(params, "sectionId"), body.content, body.locked !== false, request.signal));
+    }),
     route("PATCH", "/api/projects/:projectId/memory/items/:itemId", async (request, params) => {
-      return json(await memories.updateItem(required(params, "projectId"), required(params, "itemId"), await readJson<{ status?: MemoryItemStatus; content?: string; label?: string }>(request)));
+      return json(await memories.updateItem(required(params, "projectId"), required(params, "itemId"), await readJson<{ status?: MemoryItemStatus; content?: string; label?: string }>(request), request.signal));
     }),
     route("POST", "/api/projects/:projectId/memory/rollback", async (_request, params) => json(await memories.rollback(required(params, "projectId")))),
     route("GET", "/api/projects/:projectId/agent-tasks", async (_request, params) => json(agentTasks.list(required(params, "projectId")))),
@@ -198,6 +221,7 @@ function buildRoutes({ database, workspaces, uploads, github, revisions, drafts,
       workspaces.getProject(projectId);
       return json(database.snapshot().compileRecords.filter((record) => record.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null);
     }),
+    route("POST", "/api/projects/:projectId/compile", async (_request, params) => json(await latexCompiler.compile(required(params, "projectId")))),
     route("POST", "/api/projects/:projectId/compile-results", async (request, params) => {
       const projectId = required(params, "projectId");
       const project = workspaces.getProject(projectId);
@@ -313,9 +337,19 @@ async function serveWeb(pathname: string): Promise<Response> {
     if (/^bundles\//.test(requested) || /^(?:busytex\.wasm|worker\.js)$/.test(requested)) headers["cache-control"] = "public, max-age=3600";
     return new Response(Bun.file(candidate), { headers });
   }
+  const embedded = embeddedWebFile(requested);
+  if (embedded) return new Response(embedded, { headers: webHeaders(requested) });
   const index = join(config.webDirectory, "index.html");
   if (existsSync(index)) return new Response(Bun.file(index), { headers: { "content-type": "text/html; charset=utf-8" } });
+  const embeddedIndex = embeddedWebFile("index.html");
+  if (embeddedIndex) return new Response(embeddedIndex, { headers: { "content-type": "text/html; charset=utf-8" } });
   return json({ error: { code: "web_not_built", message: "Web client is not built. Run the development server or build the project." } }, 404);
+}
+
+function webHeaders(path: string): Record<string, string> {
+  const headers: Record<string, string> = { "content-type": mimeType(extname(path)) };
+  if (/^bundles\//.test(path) || /^(?:busytex\.wasm|worker\.js)$/.test(path)) headers["cache-control"] = "public, max-age=3600";
+  return headers;
 }
 
 export function mimeType(extension: string): string {

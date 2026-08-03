@@ -7,8 +7,11 @@ export interface ReviseAgentInput {
   workingText: string;
   history: ReviseTurn[];
   sectionTitle?: string;
+  selectionIsSectionScaffold: boolean;
   contextBefore: string;
   contextAfter: string;
+  /** Compact overview and active-section context, not the full Paper Memory. */
+  paperContext?: string;
   skill: PaperSkillRef;
   skillInstructions: string;
   venueInstructions: string;
@@ -25,16 +28,19 @@ export interface AgentProvider {
   generateDraft?(input: DraftAgentInput & { outline: DraftOutlineSection[]; mainDocument: string }, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }>;
   review?(input: ReviewAgentInput, signal?: AbortSignal): Promise<ReviewAgentOutput>;
   extractMemory?(input: MemoryAgentInput, signal?: AbortSignal): Promise<MemoryAgentOutput>;
+  summarizeMemory?(input: MemoryHierarchyInput, signal?: AbortSignal): Promise<MemoryHierarchyOutput>;
+  polishMemory?(input: MemoryPolishInput, signal?: AbortSignal): Promise<{ content: string }>;
   planAgentTask?(input: AgentTaskInput, signal?: AbortSignal): Promise<AgentTaskPlanOutput>;
   generateAgentTask?(input: AgentTaskInput & AgentTaskPlanOutput, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }>;
   rereviewIssues?(input: AgentTaskInput & { issues: AgentTaskIssue[] }, signal?: AbortSignal): Promise<{ assessments: Array<{ issueId: string; resolved: boolean; assessment: string }>; regressions: string[] }>;
   complete?(input: CompletionAgentInput, signal?: AbortSignal): Promise<{ suggestion: string }>;
 }
-export interface CompletionAgentInput { intent: "sentence" | "latex" | "formula" | "citation"; path: string; contextBefore: string; contextAfter: string; outline: string[]; bibliography: string; skill: PaperSkillRef; skillInstructions: string; venueInstructions: string }
+export interface CompletionAgentInput { intent: "sentence" | "latex" | "formula" | "citation"; path: string; contextBefore: string; contextAfter: string; paperContext?: string; outline: string[]; bibliography: string; skill: PaperSkillRef; skillInstructions: string; venueInstructions: string }
 
 export interface AgentTaskIssue { id: string; title: string; rationale: string; suggestion: string; evidence: Array<{ path: string; excerpt: string }> }
 export interface AgentTaskInput {
   objective: string;
+  intent: "draft" | "continue" | "revise";
   scope: { type: "file" | "section" | "project"; path?: string };
   issues: AgentTaskIssue[];
   documents: Array<{ path: string; content: string; version: number }>;
@@ -53,6 +59,28 @@ export interface MemoryAgentInput {
 
 export interface MemoryAgentOutput {
   items: Array<{ category: MemoryCategory; label: string; content: string; sources: Array<{ path: string; excerpt: string; section: string | null; line: number | null }> }>;
+}
+
+export interface MemoryHierarchyInput {
+  outline: Array<{ path: string; title: string; line: number }>;
+  facts: Array<{ category: MemoryCategory; label: string; content: string; sources: Array<{ path: string; section?: string }> }>;
+  skill: PaperSkillRef;
+  skillInstructions: string;
+  venueInstructions: string;
+}
+
+export interface MemoryHierarchyOutput {
+  overview: string;
+  sections: Array<{ path: string; title: string; content: string }>;
+}
+
+export interface MemoryPolishInput {
+  kind: "overview" | "section" | "fact";
+  title: string;
+  content: string;
+  skill: PaperSkillRef;
+  skillInstructions: string;
+  venueInstructions: string;
 }
 
 export interface ReviewAgentInput {
@@ -109,15 +137,17 @@ export class OpenAIAgentProvider implements AgentProvider {
     return this.structured<ReviseAgentOutput>(
       `${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`,
       {
-        task: "Continue revising only the selected span. Return a complete replacement for that span and keep the surrounding text unchanged.",
+        task: "Revise only the selected span and return its complete replacement. When selectionIsSectionScaffold is true, preserve the LaTeX section heading and draft concrete section prose from Reviewed Local Paper Context and adjacent manuscript context. Prefer supplied terminology, contributions, findings, and limitations over generic bracketed placeholders. Use an explicit placeholder only when neither source contains enough evidence; never invent evidence, citations, or results.",
         instruction: input.instruction,
         venue: input.skill.venue,
         section: input.sectionTitle ?? "unknown",
+        selectionIsSectionScaffold: input.selectionIsSectionScaffold,
         contextBefore: input.contextBefore,
         originalSelectedText: input.selection.text,
         currentCandidate: input.workingText,
         conversation: input.history,
-        contextAfter: input.contextAfter
+        contextAfter: input.contextAfter,
+        localPaperContext: input.paperContext ?? ""
       },
       "fastwrite_revise",
       {
@@ -230,8 +260,56 @@ export class OpenAIAgentProvider implements AgentProvider {
     );
   }
 
+  async summarizeMemory(input: MemoryHierarchyInput, signal?: AbortSignal): Promise<MemoryHierarchyOutput> {
+    return this.structured(
+      `${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`,
+      {
+        task: "Create a concise hierarchical Paper Memory from the supplied evidence-backed facts. Do not invent facts. Write one paper overview and one compact summary for each supplied outline section. Preserve uncertainty and TODOs.",
+        outline: input.outline,
+        facts: input.facts
+      },
+      "fastwrite_paper_memory_hierarchy",
+      {
+        type: "object", additionalProperties: false,
+        properties: {
+          overview: { type: "string" },
+          sections: {
+            type: "array",
+            items: {
+              type: "object", additionalProperties: false,
+              properties: { path: { type: "string" }, title: { type: "string" }, content: { type: "string" } },
+              required: ["path", "title", "content"]
+            }
+          }
+        },
+        required: ["overview", "sections"]
+      },
+      signal
+    );
+  }
+
+  async polishMemory(input: MemoryPolishInput, signal?: AbortSignal): Promise<{ content: string }> {
+    return this.structured(
+      `${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`,
+      {
+        task: "Polish this user-edited Paper Memory entry into concise, consistent academic English. The input may mix Chinese and English. Preserve every technical term, number, citation, uncertainty marker, TODO, and evidence boundary. Do not add, remove, infer, or strengthen facts.",
+        kind: input.kind,
+        title: input.title,
+        content: input.content
+      },
+      "fastwrite_paper_memory_polish",
+      {
+        type: "object",
+        additionalProperties: false,
+        properties: { content: { type: "string" } },
+        required: ["content"]
+      },
+      signal
+    );
+  }
+
   async planAgentTask(input: AgentTaskInput, signal?: AbortSignal): Promise<AgentTaskPlanOutput> {
-    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: "Plan a scoped paper revision. Do not write files yet.", objective: input.objective, scope: input.scope, issues: input.issues, availableFiles: input.documents.map((document) => document.path) }, "fastwrite_agent_plan", {
+    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Plan a ${input.intent} paper task. Do not write files yet. For draft or continue tasks, you may propose new workspace-relative .tex or .bib files.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, availableFiles: input.documents.map((document) => document.path) }, "fastwrite_agent_plan", {
       type: "object", additionalProperties: false, properties: {
         steps: { type: "array", minItems: 1, items: { type: "string" } }, affectedFiles: { type: "array", minItems: 1, items: { type: "string" } }, risks: { type: "array", items: { type: "string" } }, validation: { type: "array", minItems: 1, items: { type: "string" } }
       }, required: ["steps", "affectedFiles", "risks", "validation"]
@@ -239,7 +317,7 @@ export class OpenAIAgentProvider implements AgentProvider {
   }
 
   async generateAgentTask(input: AgentTaskInput & AgentTaskPlanOutput, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }> {
-    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: "Execute the approved revision plan. Return complete contents only for files that must change. Preserve unsupported claims and LaTeX syntax.", objective: input.objective, scope: input.scope, issues: input.issues, plan: { steps: input.steps, affectedFiles: input.affectedFiles, risks: input.risks, validation: input.validation }, documents: input.documents }, "fastwrite_agent_files", {
+    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Execute the approved ${input.intent} paper plan. Return complete contents only for files that must change. Preserve unsupported claims and LaTeX syntax.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, plan: { steps: input.steps, affectedFiles: input.affectedFiles, risks: input.risks, validation: input.validation }, documents: input.documents }, "fastwrite_agent_files", {
       type: "object", additionalProperties: false, properties: { files: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, properties: { path: { type: "string" }, content: { type: "string" }, rationale: { type: "string" } }, required: ["path", "content", "rationale"] } } }, required: ["files"]
     }, signal);
   }
@@ -254,12 +332,29 @@ export class OpenAIAgentProvider implements AgentProvider {
   }
 
   async complete(input: CompletionAgentInput, signal?: AbortSignal): Promise<{ suggestion: string }> {
-    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Continue the current file at the cursor using the inferred ${input.intent} intent. For TeX prose, write only the natural next sentence; for .bib, complete a BibTeX entry; inside math or an unfinished LaTeX command, complete only that syntax. Return an empty suggestion when evidence is insufficient. Never invent citations, results, or claims.`, path: input.path, contextBefore: input.contextBefore, contextAfter: input.contextAfter, outline: input.outline, bibliography: input.bibliography }, "fastwrite_completion", { type: "object", additionalProperties: false, properties: { suggestion: { type: "string" } }, required: ["suggestion"] }, signal);
+    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Continue the current file at the cursor using the inferred ${input.intent} intent. For TeX prose, write only the natural next sentence; for .bib, complete a BibTeX entry; inside math or an unfinished LaTeX command, complete only that syntax. Use Local Paper Context when it supplies concrete information instead of emitting generic placeholders. Return an empty suggestion only when both nearby text and Local Paper Context lack sufficient evidence. Never invent citations, results, or claims.`, path: input.path, contextBefore: input.contextBefore, contextAfter: input.contextAfter, localPaperContext: input.paperContext ?? "", outline: input.outline, bibliography: input.bibliography }, "fastwrite_completion", { type: "object", additionalProperties: false, properties: { suggestion: { type: "string" } }, required: ["suggestion"] }, signal);
   }
 
   private async structured<T>(instructions: string, input: unknown, name: string, schema: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+    const model = await this.resolveModel();
+    if (this.customBaseURL) {
+      const response = await this.client.chat.completions.create({
+        model,
+        messages: [
+          {
+            role: "system",
+            content: `${instructions}\n\nReturn only one valid JSON object matching the following schema. JSON-escape every backslash in string values, especially LaTeX commands.\n\nSchema (${name}):\n${JSON.stringify(schema)}`
+          },
+          { role: "user", content: JSON.stringify(input) }
+        ],
+        response_format: { type: "json_object" }
+      }, signal ? { signal } : undefined);
+      const content = response.choices[0]?.message.content;
+      if (!content) throw new Error("The configured model returned no structured output");
+      return JSON.parse(content) as T;
+    }
     const response = await this.client.responses.create({
-      model: await this.resolveModel(),
+      model,
       store: false,
       instructions,
       input: JSON.stringify(input),

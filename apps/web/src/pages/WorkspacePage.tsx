@@ -48,9 +48,11 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [error, setError] = useState("");
   const [sidebarWidth, setSidebarWidth] = useStoredNumber("fastwrite.sidebar-width", 254);
   const [pdfWidth, setPdfWidth] = useStoredNumber("fastwrite.pdf-width", 440);
+  const [aiHeight, setAiHeight] = useStoredNumber("fastwrite.ai-height", 322);
   const [sidebarBeforeCollapse, setSidebarBeforeCollapse] = useState(254);
   const [pdfBeforeCollapse, setPdfBeforeCollapse] = useState(440);
-  const [resizing, setResizing] = useState<"sidebar" | "pdf" | null>(null);
+  const [resizing, setResizing] = useState<"sidebar" | "pdf" | "ai" | null>(null);
+  const [aiFullscreen, setAiFullscreen] = useState(false);
   const [newFileOpen, setNewFileOpen] = useState(false);
   const [addFileOpen, setAddFileOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -127,10 +129,13 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       if (resizing === "sidebar") {
         const next = Math.max(0, Math.min(420, event.clientX - rect.left));
         setSidebarWidth(next < 76 ? 0 : next);
-      } else {
+      } else if (resizing === "pdf") {
         const next = Math.max(0, Math.min(780, rect.right - event.clientX));
         const max = Math.max(300, rect.width - Math.max(sidebarWidth, 48) - 420);
         setPdfWidth(next < 150 ? 0 : Math.min(next, max));
+      } else {
+        const next = Math.max(220, Math.min(Math.max(220, rect.height - 250), rect.bottom - event.clientY));
+        setAiHeight(next);
       }
     };
     const onUp = () => setResizing(null);
@@ -142,7 +147,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       document.removeEventListener("pointerup", onUp);
       document.body.classList.remove("is-resizing");
     };
-  }, [pdfWidth, resizing, setPdfWidth, setSidebarWidth, sidebarWidth]);
+  }, [resizing, setAiHeight, setPdfWidth, setSidebarWidth, sidebarWidth]);
 
   const selectNode = (node: WorkspaceTreeNode) => {
     if (node.type === "directory") return;
@@ -226,6 +231,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
 
   if (loading) return <WorkspaceLoading />;
   if (error || !project) return <WorkspaceError message={error || "Project not found"} />;
+  const pdfSourceLocation = selection ? { path: selection.path, line: selection.startLine } : cursorLocation.path ? cursorLocation : null;
 
   return (
     <div className="workspace-page">
@@ -246,7 +252,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         {sidebarWidth > 0 ? (
           <aside className="workspace-sidebar" style={{ width: sidebarWidth }}>
             <section className="sidebar-section sidebar-section--files">
-              <header className="panel-heading"><div><FolderTree /><span>Files</span></div><div><IconButton label={checkpointState === "saving" ? "Saving Git checkpoint" : checkpointState === "saved" ? "Git checkpoint saved" : "Save Git checkpoint"} icon={<GitCommitHorizontal />} disabled={checkpointState === "saving"} onClick={async () => { setCheckpointState("saving"); try { await api.projects.checkpoint(projectId); setCheckpointState("saved"); window.setTimeout(() => setCheckpointState("idle"), 2000); } catch { setCheckpointState("error"); } }} /><IconButton label="New file" icon={<FilePlus2 />} onClick={() => setNewFileOpen(true)} /><IconButton label="Add external file" icon={<Upload />} onClick={() => setAddFileOpen(true)} /><IconButton label="Rename selected file" icon={<Pencil />} disabled={selectedNode?.type !== "file"} onClick={() => setRenameOpen(true)} /><IconButton label="Move selected file to trash" icon={<Trash2 />} variant="danger" disabled={selectedNode?.type !== "file" || selectedPath === project.mainDocument} onClick={() => { setDeleteError(""); setDeleteOpen(true); }} /><IconButton label="Collapse files panel" icon={<ChevronLeft />} onClick={collapseSidebar} /></div></header>
+              <header className="panel-heading"><div><FolderTree /><span>Files</span></div><div><IconButton label={checkpointState === "saving" ? "Saving local history checkpoint" : checkpointState === "saved" ? "Local history checkpoint saved" : checkpointState === "error" ? "Retry local history checkpoint" : "Save local history checkpoint"} icon={<GitCommitHorizontal />} disabled={checkpointState === "saving"} onClick={async () => { setCheckpointState("saving"); try { await api.projects.checkpoint(projectId); setCheckpointState("saved"); window.setTimeout(() => setCheckpointState("idle"), 2000); } catch { setCheckpointState("error"); } }} /><IconButton label="New file" icon={<FilePlus2 />} onClick={() => setNewFileOpen(true)} /><IconButton label="Add external file" icon={<Upload />} onClick={() => setAddFileOpen(true)} /><IconButton label="Rename selected file" icon={<Pencil />} disabled={selectedNode?.type !== "file"} onClick={() => setRenameOpen(true)} /><IconButton label="Move selected file to trash" icon={<Trash2 />} variant="danger" disabled={selectedNode?.type !== "file" || selectedPath === project.mainDocument} onClick={() => { setDeleteError(""); setDeleteOpen(true); }} /><IconButton label="Collapse files panel" icon={<ChevronLeft />} onClick={collapseSidebar} /></div></header>
               <FileTree nodes={tree} selectedPath={selectedPath} mainDocument={project.mainDocument} onSelect={selectNode} onExpand={expandDirectory} />
             </section>
             <section className="sidebar-section sidebar-section--outline">
@@ -255,7 +261,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             </section>
           </aside>
         ) : (
-          <button className="collapsed-rail collapsed-rail--left" onClick={collapseSidebar} aria-label="Expand files panel"><ChevronRight /><span>Files</span></button>
+          <button className="collapsed-rail collapsed-rail--left" onClick={collapseSidebar} aria-label="Expand files panel" title="Expand files panel"><ChevronRight /></button>
         )}
         <PanelDivider label="Resize files panel" active={resizing === "sidebar"} value={sidebarWidth} min={0} max={420} onPointerDown={() => setResizing("sidebar")} onKeyboardChange={setSidebarWidth} />
 
@@ -269,7 +275,20 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               <div className="editor-empty"><FolderTree /><h3>Select a source file</h3><p>Choose a LaTeX, Markdown or BibTeX file from the project tree.</p></div>
             )}
           </section>
-          <AiWorkspace project={project} selection={selection} sectionSelection={sectionSelection} onUseSelection={(nextSelection) => { setSelection(nextSelection); setTargetSelection(nextSelection); }} onPrepareLocalRevision={prepareLocalRevision} compileState={compileState} onRequestCompile={() => setCompileRequest((value) => value + 1)} onNavigate={(path, line) => { void navigateToPath(path, line); }} onFileChanged={async (path, range) => {
+          <PanelDivider label="Resize AI workspace" orientation="horizontal" active={resizing === "ai"} value={aiHeight} min={220} max={760} onPointerDown={() => setResizing("ai")} onKeyboardChange={setAiHeight} />
+          <AiWorkspace project={project} selection={selection} sectionSelection={sectionSelection} height={aiHeight} onSetHeight={setAiHeight} fullscreen={aiFullscreen} onToggleFullscreen={() => setAiFullscreen((value) => !value)} onUseSelection={(nextSelection) => { setSelection(nextSelection); setTargetSelection(nextSelection); }} onClearSelection={() => { setSelection(null); setTargetSelection(null); }} onRestoreSelection={async (savedSelection) => {
+            try {
+              const opened = await api.projects.readFile(projectId, savedSelection.path);
+              if (opened.file.version !== savedSelection.fileVersion || opened.content.slice(savedSelection.from, savedSelection.to) !== savedSelection.text) return false;
+              const restored = makeSelection(savedSelection.path, opened, savedSelection.from, savedSelection.to);
+              setSelectedPath(savedSelection.path);
+              setFileDocument(opened);
+              setSelection(restored);
+              setTargetSelection(restored);
+              setCursorLocation({ path: restored.path, line: restored.startLine });
+              return true;
+            } catch { return false; }
+          }} onPrepareLocalRevision={prepareLocalRevision} compileState={compileState} onRequestCompile={() => setCompileRequest((value) => value + 1)} onNavigate={(path, line) => { void navigateToPath(path, line); }} onFileChanged={async (path, range) => {
             const updatedProject = await refreshWorkspace(undefined, path);
             setProject(updatedProject);
             setSelectedPath(path);
@@ -289,11 +308,11 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         <PanelDivider label="Resize PDF preview" active={resizing === "pdf"} value={pdfWidth} min={0} max={780} reverse onPointerDown={() => setResizing("pdf")} onKeyboardChange={setPdfWidth} />
         {pdfWidth > 0 ? (
           <div className="workspace-pdf" style={{ width: pdfWidth }}>
-            <PdfPane projectId={projectId} projectVersion={project.version} mainDocument={project.mainDocument} tree={tree} sourceLocation={cursorLocation.path ? cursorLocation : null} compileRequest={compileRequest} onCompileState={handleCompileState} onSyncToSource={(location) => { void navigateToPath(location.path, location.line); }} />
+            <PdfPane projectId={projectId} projectVersion={project.version} mainDocument={project.mainDocument} tree={tree} sourceLocation={pdfSourceLocation} compileRequest={compileRequest} onCompileState={handleCompileState} onSyncToSource={(location) => { void navigateToPath(location.path, location.line); }} />
             <IconButton className="pdf-collapse" label="Collapse PDF preview" icon={<PanelRightClose />} onClick={collapsePdf} />
           </div>
         ) : (
-          <button className="collapsed-rail collapsed-rail--right" onClick={collapsePdf} aria-label="Expand PDF preview"><PanelRightOpen /><span>PDF</span></button>
+          <button className="collapsed-rail collapsed-rail--right" onClick={collapsePdf} aria-label="Expand PDF preview" title="Expand PDF preview"><PanelRightOpen /></button>
         )}
       </div>
 
@@ -306,11 +325,13 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   );
 }
 
-function PanelDivider({ label, active, value, min, max, reverse = false, onPointerDown, onKeyboardChange }: { label: string; active: boolean; value: number; min: number; max: number; reverse?: boolean; onPointerDown: () => void; onKeyboardChange: (value: number) => void }) {
-  return <div className={`panel-divider ${active ? "is-active" : ""}`} role="separator" aria-label={label} aria-orientation="vertical" aria-valuemin={min} aria-valuemax={max} aria-valuenow={Math.round(value)} tabIndex={0} onKeyDown={(event) => {
+function PanelDivider({ label, active, value, min, max, reverse = false, orientation = "vertical", onPointerDown, onKeyboardChange }: { label: string; active: boolean; value: number; min: number; max: number; reverse?: boolean; orientation?: "vertical" | "horizontal"; onPointerDown: () => void; onKeyboardChange: (value: number) => void }) {
+  const decreaseKey = orientation === "horizontal" ? "ArrowDown" : "ArrowLeft";
+  const increaseKey = orientation === "horizontal" ? "ArrowUp" : "ArrowRight";
+  return <div className={`panel-divider panel-divider--${orientation} ${active ? "is-active" : ""}`} role="separator" aria-label={label} aria-orientation={orientation} aria-valuemin={min} aria-valuemax={max} aria-valuenow={Math.round(value)} tabIndex={0} onKeyDown={(event) => {
     const direction = reverse ? -1 : 1;
-    if (event.key === "ArrowLeft") { event.preventDefault(); onKeyboardChange(Math.min(max, Math.max(min, value - 16 * direction))); }
-    else if (event.key === "ArrowRight") { event.preventDefault(); onKeyboardChange(Math.min(max, Math.max(min, value + 16 * direction))); }
+    if (event.key === decreaseKey) { event.preventDefault(); onKeyboardChange(Math.min(max, Math.max(min, value - 16 * direction))); }
+    else if (event.key === increaseKey) { event.preventDefault(); onKeyboardChange(Math.min(max, Math.max(min, value + 16 * direction))); }
     else if (event.key === "Home") { event.preventDefault(); onKeyboardChange(min); }
     else if (event.key === "End") { event.preventDefault(); onKeyboardChange(max); }
   }} onPointerDown={(event) => { event.preventDefault(); onPointerDown(); }}><span /></div>;

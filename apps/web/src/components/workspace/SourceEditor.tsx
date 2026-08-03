@@ -2,9 +2,10 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import "monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution";
-import { AlertCircle, Check, CloudOff, LoaderCircle, Sparkles, Undo2, X } from "lucide-react";
+import { AlertCircle, Check, CloudOff, LoaderCircle, Sparkles, Undo2 } from "lucide-react";
 import type { CompletionKind, CompletionResponse, FileContentResponse, SourceLocation, TextSelection } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
+import { completionSuffix } from "./completion";
 
 type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
 type CompletionMetricEvent = "suggested" | "cancelled" | "accepted" | "ignored" | "error";
@@ -117,6 +118,7 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
   const decorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
+  const completionDecorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   const disposablesRef = useRef<monaco.IDisposable[]>([]);
   const applyingExternalRef = useRef(false);
   const currentPathRef = useRef("");
@@ -233,6 +235,7 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
     });
     editorRef.current = editor;
     decorationsRef.current = editor.createDecorationsCollection();
+    completionDecorationsRef.current = editor.createDecorationsCollection();
     disposablesRef.current = [
       editor.onDidChangeModelContent(() => {
         if (!applyingExternalRef.current) contentChangeRef.current(editor.getValue());
@@ -247,6 +250,7 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
       completionAbortRef.current?.abort();
       disposablesRef.current.forEach((item) => item.dispose());
       decorationsRef.current?.clear();
+      completionDecorationsRef.current?.clear();
       editor.setModel(null);
       modelRef.current?.dispose();
       editor.dispose();
@@ -268,6 +272,7 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
       currentPathRef.current = document.file.path;
       editor.setScrollPosition({ scrollTop: 0, scrollLeft: 0 });
       decorationsRef.current?.clear();
+      completionDecorationsRef.current?.clear();
       setAcceptedCompletion(null);
     } else if (modelRef.current && modelRef.current.getValue() !== document.content) {
       applyingExternalRef.current = true;
@@ -310,6 +315,29 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
   }, [completionEnabled, document.content, document.file.path, document.file.version, editorReady, projectId]);
 
   useEffect(() => {
+    const model = modelRef.current;
+    const decorations = completionDecorationsRef.current;
+    const next = completion;
+    if (!model || !decorations || !next || next.path !== currentPathRef.current || next.fileVersion !== versionRef.current || next.cursor !== cursorRef.current) {
+      decorations?.clear();
+      return;
+    }
+    const position = model.getPositionAt(next.cursor);
+    const suffix = completionSuffix(next.suggestion, model.getValueInRange(new monaco.Range(1, 1, position.lineNumber, position.column)));
+    if (!suffix) {
+      decorations.clear();
+      return;
+    }
+    decorations.set([{
+      range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+      options: {
+        after: { content: suffix, inlineClassName: "fastwrite-monaco-completion" },
+        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+      }
+    }]);
+  }, [completion, document.content, document.file.path, document.file.version, editorReady]);
+
+  useEffect(() => {
     const editor = editorRef.current;
     const model = modelRef.current;
     if (!editor || !model || !targetLine || currentPathRef.current !== document.file.path) return;
@@ -338,13 +366,15 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
     const model = modelRef.current;
     if (!next || !editor || !model || next.path !== currentPathRef.current || next.fileVersion !== versionRef.current || next.cursor !== cursorRef.current) return;
     suppressNextCompletionRef.current = true;
-    setAcceptedCompletion({ from: next.cursor, text: next.suggestion });
+    const suffix = completionSuffix(next.suggestion, model.getValueInRange(new monaco.Range(1, 1, model.getPositionAt(next.cursor).lineNumber, model.getPositionAt(next.cursor).column)));
+    if (!suffix) { ignoreCompletion(); return; }
+    setAcceptedCompletion({ from: next.cursor, text: suffix });
     recordCompletionMetric("accepted", next.kind);
     setCompletion(null);
     const position = model.getPositionAt(next.cursor);
-    editor.executeEdits("fastwrite-completion", [{ range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column), text: next.suggestion, forceMoveMarkers: true }]);
+    editor.executeEdits("fastwrite-completion", [{ range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column), text: suffix, forceMoveMarkers: true }]);
     editor.pushUndoStop();
-    const end = model.getPositionAt(next.cursor + next.suggestion.length);
+    const end = model.getPositionAt(next.cursor + suffix.length);
     editor.setPosition(end);
     editor.focus();
   };
@@ -398,7 +428,7 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
         </div>
       </div>
       <div ref={hostRef} className="monaco-editor-host" />
-      {completion ? <div className="completion-preview" role="status" aria-label="Writing completion preview"><div className="completion-preview__head"><span><Sparkles /> Skill suggestion</span><button type="button" aria-label="Ignore completion" onClick={ignoreCompletion}><X /></button></div><pre>{completion.suggestion}</pre><div className="completion-preview__actions"><span><kbd>Tab</kbd> accept · <kbd>Esc</kbd> ignore</span><button type="button" onClick={acceptCompletion}>Accept</button></div></div> : null}
+      {completion ? <span className="sr-only" role="status">Writing suggestion available. Press Tab to accept or Escape to ignore.</span> : null}
       {message ? <div className={`editor-message editor-message--${status}`} role="alert"><AlertCircle /> {message}</div> : null}
     </div>
   );

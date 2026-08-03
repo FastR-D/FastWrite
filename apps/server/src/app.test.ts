@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { ChangeSet, CompletionResponse, FileContentResponse, PaperProject, ReviseResponse, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { ChangeSet, CompletionResponse, FileContentResponse, PaperMemory, PaperProject, ReviseResponse, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
 import type { AgentProvider, CompletionAgentInput, ReviseAgentInput } from "./agent/provider";
 import { createApplication, mimeType } from "./app";
 
@@ -516,8 +516,35 @@ describe("workspace API", () => {
     const generated = await request(`/api/projects/${project.id}/agent-tasks/${retriedPlan.plan.id}/confirm`, { method: "POST" });
     expect(generated.status).toBe(201);
     expect(await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json()).toEqual(before);
-    const runs = await (await request(`/api/projects/${project.id}/agent-runs`)).json() as Array<{ status: string }>;
+    const runs = await (await request(`/api/projects/${project.id}/agent-runs`)).json() as Array<{ status: string; error?: string }>;
     expect(runs.map((run) => run.status).sort()).toEqual(["cancelled", "waiting-approval"]);
+    expect(runs.find((run) => run.status === "waiting-approval")?.error).toBeUndefined();
+  });
+
+  test("routes a unified Agent draft command through a reviewed plan that may create source files", async () => {
+    let seenIntent = "";
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async planAgentTask(input) { seenIntent = input.intent; return { steps: ["Create the editable outline"], affectedFiles: ["main.tex", "sections/introduction.tex", "references.bib"], risks: [], validation: ["Compile"] }; },
+      async generateAgentTask() { return { files: [
+        { path: "main.tex", content: "\\documentclass{article}\\begin{document}\\input{sections/introduction}\\end{document}", rationale: "Sets up the paper." },
+        { path: "sections/introduction.tex", content: "\\section{Introduction}\nTODO: Add evidence.", rationale: "Creates an editable outline section." },
+        { path: "references.bib", content: "% Add verified references.", rationale: "Creates the bibliography placeholder." }
+      ] }; }
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Unified Agent" }) })).json() as PaperProject;
+    const planned = await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "/draft Plan a paper about robust authentication", scope: { type: "project" } }) });
+    expect(planned.status).toBe(201);
+    const body = await planned.json() as { plan: { id: string; intent: string; affectedFiles: string[] } };
+    expect(seenIntent).toBe("draft");
+    expect(body.plan).toMatchObject({ intent: "draft", affectedFiles: ["main.tex", "sections/introduction.tex", "references.bib"] });
+    const generated = await request(`/api/projects/${project.id}/agent-tasks/${body.plan.id}/confirm`, { method: "POST" });
+    expect(generated.status).toBe(201);
+    const changeSet = await generated.json() as { changeSet: { id: string } };
+    expect((await request(`/api/projects/${project.id}/file?path=sections%2Fintroduction.tex`)).status).toBe(404);
+    expect((await request(`/api/projects/${project.id}/change-sets/${changeSet.changeSet.id}/accept`, { method: "POST" })).status).toBe(200);
+    expect(await (await request(`/api/projects/${project.id}/file?path=sections%2Fintroduction.tex`)).json()).toMatchObject({ content: expect.stringContaining("TODO") });
   });
 
   test("restores Review and IssueResolution state after a server restart", async () => {
@@ -542,8 +569,8 @@ describe("workspace API", () => {
     expect(resolutions[0]?.status).toBe("planned");
   });
 
-  test("versions evidence-backed Paper Memory and supplies only confirmed items to every Skill workflow", async () => {
-    const seen = { revise: "", draft: "", review: "", agent: "" };
+  test("supplies confirmed Paper Memory only to workflows that need its full or file-scoped context", async () => {
+    const seen = { revise: "", reviseMemory: "", draft: "", review: "", agent: "" };
     const outline = [
       { path: "sections/abstract.tex", title: "Abstract", purpose: "Summary" },
       { path: "sections/introduction.tex", title: "Introduction", purpose: "Motivation" },
@@ -557,7 +584,7 @@ describe("workspace API", () => {
         expect(input.documents.find((document) => document.path === "sections/method.tex")?.version).toBe(1);
         return { items: [{ category: "contribution", label: "Core contribution", content: "The paper introduces a privacy-preserving telemetry protocol.", sources: [{ path: "sections/method.tex", excerpt: "We introduce a privacy-preserving telemetry protocol.", section: "Method", line: null }] }] };
       },
-      async revise(input) { seen.revise = input.skillInstructions; return { replacement: "We present a privacy-preserving telemetry protocol.", rationale: "Concise phrasing." }; },
+      async revise(input) { seen.revise = input.skillInstructions; seen.reviseMemory = input.paperContext ?? ""; return { replacement: "We present a privacy-preserving telemetry protocol.", rationale: "Concise phrasing." }; },
       async planDraft(input) { seen.draft = input.skillInstructions; return { outline }; },
       async review(input) { seen.review = input.skillInstructions; return { overallAssessment: "Early draft.", recommendation: "borderline", strengths: [], weaknesses: [], nextSteps: [], issues: [] }; },
       async planAgentTask(input) { seen.agent = input.skillInstructions; return { steps: ["Inspect the argument"], affectedFiles: ["main.tex"], risks: [], validation: ["Compile"] }; }
@@ -573,20 +600,183 @@ describe("workspace API", () => {
     expect(memory).toMatchObject({ version: 1, items: [{ status: "suggested" }] });
     const confirmed = await (await request(`/api/projects/${project.id}/memory/items/${memory.items[0]!.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "confirmed" }) })).json() as { version: number };
     expect(confirmed.version).toBe(2);
+    const partiallyReviewedFile = await (await request(`/api/projects/${project.id}/file?path=memory.md`)).json() as FileContentResponse;
+    expect(partiallyReviewedFile.content).toContain("## Reviewed Context");
+    expect(partiallyReviewedFile.content).toContain("Core contribution");
+    expect(partiallyReviewedFile.content).not.toContain("### Overview");
+    expect(partiallyReviewedFile.content).not.toContain("### Method (sections/method.tex)");
 
     const current = (await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json()) as FileContentResponse;
     const from = current.content.indexOf(sentence);
     const revised = await request(`/api/projects/${project.id}/revisions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ command: "academic-polish", selection: { path: "main.tex", text: sentence, from, to: from + sentence.length, startLine: 2, endLine: 2, fileVersion: current.file.version } }) });
-    expect((await revised.json() as { run: { memoryVersion: number } }).run.memoryVersion).toBe(2);
+    expect((await revised.json() as { run: { memoryVersion?: number } }).run.memoryVersion).toBe(2);
     await request(`/api/projects/${project.id}/drafts`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ topic: "Telemetry", researchQuestion: "Can telemetry remain private?", contributions: ["A protocol"] }) });
     await request(`/api/projects/${project.id}/reviews`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourceOnly: true }) });
     await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "Inspect the paper argument", scope: { type: "project" } }) });
-    for (const value of Object.values(seen)) expect(value).toContain("[contribution] Core contribution: The paper introduces a privacy-preserving telemetry protocol.");
+    expect(seen.revise).not.toContain("[contribution] Core contribution: The paper introduces a privacy-preserving telemetry protocol.");
+    expect(seen.reviseMemory).toContain("[paper-overview] Core contribution: The paper introduces a privacy-preserving telemetry protocol.");
+    expect(seen.reviseMemory).not.toContain("[contribution] Core contribution: The paper introduces a privacy-preserving telemetry protocol.");
+    expect(seen.draft).not.toContain("Paper Memory");
+    expect(seen.agent).toContain("[contribution] Core contribution: The paper introduces a privacy-preserving telemetry protocol.");
+    expect(seen.review).not.toContain("Confirmed Paper Memory");
 
     const method = (await (await request(`/api/projects/${project.id}/file?path=sections%2Fmethod.tex`)).json()) as FileContentResponse;
     await request(`/api/projects/${project.id}/file?path=sections%2Fmethod.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: `${method.content}% changed`, baseVersion: method.file.version }) });
-    const stale = await (await request(`/api/projects/${project.id}/memory`)).json() as { items: Array<{ status: string }> };
-    expect(stale.items[0]?.status).toBe("stale");
+    const stale = await (await request(`/api/projects/${project.id}/memory`)).json() as { items: Array<{ status: string; freshness?: string }> };
+    expect(stale.items[0]).toMatchObject({ status: "confirmed", freshness: "stale" });
+  });
+
+  test("drafts a sparse Conclusion from reviewed local Memory and adjacent manuscript evidence", async () => {
+    let received: ReviseAgentInput | undefined;
+    const provider: AgentProvider = {
+      async extractMemory() {
+        return {
+          items: [
+            { category: "contribution", label: "Core method", content: "The paper introduces calibrated private aggregation.", sources: [{ path: "sections/evaluation.tex", excerpt: "Calibrated private aggregation reduces error by 18 percent.", section: "Evaluation", line: null }] },
+            { category: "experiment", label: "Primary result", content: "The evaluation reports an 18 percent error reduction.", sources: [{ path: "sections/evaluation.tex", excerpt: "Calibrated private aggregation reduces error by 18 percent.", section: "Evaluation", line: null }] }
+          ]
+        };
+      },
+      async summarizeMemory() {
+        return {
+          overview: "The paper introduces calibrated private aggregation and reports an 18 percent error reduction.",
+          sections: [
+            { path: "sections/evaluation.tex", title: "Evaluation", content: "Reports an 18 percent error reduction." },
+            { path: "sections/conclusion.tex", title: "Conclusion", content: "Conclude with the calibrated aggregation method, 18 percent result, and evidence limits." }
+          ]
+        };
+      },
+      async revise(input) {
+        received = input;
+        return { replacement: "\\section{Conclusion}\nCalibrated private aggregation reduces error by 18 percent under the evaluated setting.", rationale: "Uses reviewed paper evidence." };
+      }
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Sparse Conclusion" }) })).json() as PaperProject;
+    const main = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const mainContent = "\\documentclass{article}\n\\begin{document}\n\\input{sections/evaluation}\n\\input{sections/conclusion}\n\\end{document}\n";
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: mainContent, baseVersion: main.file.version }) });
+    await request(`/api/projects/${project.id}/files`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "sections/evaluation.tex", content: "\\section{Evaluation}\nCalibrated private aggregation reduces error by 18 percent.\n" }) });
+    const conclusionContent = "\\section{Conclusion}\nTODO: Summarize the supported findings and limitations.\n";
+    await request(`/api/projects/${project.id}/files`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "sections/conclusion.tex", content: conclusionContent }) });
+    expect((await request(`/api/projects/${project.id}/memory/extract`, { method: "POST" })).status).toBe(201);
+    expect((await request(`/api/projects/${project.id}/memory/apply`, { method: "POST" })).status).toBe(200);
+
+    const conclusion = await (await request(`/api/projects/${project.id}/file?path=sections%2Fconclusion.tex`)).json() as FileContentResponse;
+    const response = await request(`/api/projects/${project.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        instruction: "Write a concrete conclusion from the available paper evidence.",
+        selection: { path: conclusion.file.path, text: conclusion.content, from: 0, to: conclusion.content.length, startLine: 1, endLine: 2, fileVersion: conclusion.file.version }
+      })
+    });
+    expect(response.status).toBe(201);
+    expect(received?.selectionIsSectionScaffold).toBe(true);
+    expect(received?.sectionTitle).toBe("Conclusion");
+    expect(received?.contextBefore).toContain("[Adjacent paper section: Evaluation (sections/evaluation.tex)]");
+    expect(received?.contextBefore).toContain("reduces error by 18 percent");
+    expect(received?.paperContext).toContain("[paper-overview]");
+    expect(received?.paperContext).toContain("[current-section:Conclusion]");
+    expect(received?.paperContext).not.toContain("[current-section:Evaluation]");
+  });
+
+  test("keeps human-locked hierarchical Memory content and presents regenerated differences as candidates", async () => {
+    let extraction = 0;
+    const polishCalls: Array<{ kind: string; content: string }> = [];
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async extractMemory() {
+        extraction += 1;
+        return {
+          items: [{
+            category: "contribution",
+            label: "Core contribution",
+            content: extraction === 1 ? "The protocol protects telemetry metadata." : "The protocol protects telemetry and endpoint metadata.",
+            sources: [{ path: "main.tex", excerpt: "The protocol protects telemetry metadata.", section: "Introduction", line: null }]
+          }]
+        };
+      },
+      async summarizeMemory() {
+        return {
+          overview: extraction === 1 ? "The paper proposes a telemetry protocol." : "The paper proposes an expanded telemetry protocol.",
+          sections: [{ path: "main.tex", title: "Introduction", content: extraction === 1 ? "Introduces telemetry protection." : "Introduces expanded telemetry protection." }]
+        };
+      },
+      async polishMemory(input) {
+        polishCalls.push({ kind: input.kind, content: input.content });
+        return { content: input.content === "用户确认 telemetry-only claim." ? "The user confirms the telemetry-only claim." : input.content };
+      }
+    };
+    const request = await testApplication(provider);
+    const project = (await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Hierarchical Memory" }) })).json()) as PaperProject;
+    const opened = (await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json()) as FileContentResponse;
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: `${opened.content}\nThe protocol protects telemetry metadata.`, baseVersion: opened.file.version }) });
+
+    const first = (await (await request(`/api/projects/${project.id}/memory/extract`, { method: "POST" })).json()) as PaperMemory;
+    expect(first.overview?.content).toBe("The paper proposes a telemetry protocol.");
+    expect(first.sections?.some((section) => section.title === "Introduction")).toBe(true);
+    const fact = first.items[0]!;
+    const section = first.sections?.find((item) => item.title === "Introduction")!;
+
+    const confirmed = (await (await request(`/api/projects/${project.id}/memory/items/${fact.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "confirmed", content: "用户确认 telemetry-only claim." }) })).json()) as PaperMemory;
+    const overview = (await (await request(`/api/projects/${project.id}/memory/overview`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "Human-authored paper overview." }) })).json()) as PaperMemory;
+    const updatedSection = (await (await request(`/api/projects/${project.id}/memory/sections/${section.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "Human-authored introduction summary." }) })).json()) as PaperMemory;
+    expect(confirmed.items[0]?.locked).toBe(true);
+    expect(overview.overview?.locked).toBe(true);
+    expect(updatedSection.sections?.find((item) => item.id === section.id)?.locked).toBe(true);
+    expect(polishCalls).toEqual([
+      { kind: "fact", content: "用户确认 telemetry-only claim." },
+      { kind: "overview", content: "Human-authored paper overview." },
+      { kind: "section", content: "Human-authored introduction summary." }
+    ]);
+
+    const regenerated = (await (await request(`/api/projects/${project.id}/memory/extract`, { method: "POST" })).json()) as PaperMemory;
+    const preserved = regenerated.items.find((item) => item.id === fact.id)!;
+    expect(regenerated.items).toHaveLength(1);
+    expect(preserved).toMatchObject({ content: "The user confirms the telemetry-only claim.", locked: true, humanEdited: true });
+    expect(preserved.candidate?.content).toBe("The protocol protects telemetry and endpoint metadata.");
+    expect(regenerated.overview?.content).toBe("Human-authored paper overview.");
+    expect(regenerated.overview?.candidate?.content).toBe("The paper proposes an expanded telemetry protocol.");
+    expect(regenerated.sections?.find((item) => item.id === section.id)?.content).toBe("Human-authored introduction summary.");
+    expect(regenerated.sections?.find((item) => item.id === section.id)?.candidate?.content).toBe("Introduces expanded telemetry protection.");
+  });
+
+  test("writes a reviewable root memory.md and supplies its user instructions without re-ingesting the file", async () => {
+    let agentInstructions = "";
+    let agentPaths: string[] = [];
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async extractMemory() {
+        return { items: [{ category: "contribution", label: "Core result", content: "The system protects telemetry metadata.", sources: [{ path: "main.tex", excerpt: "The system protects telemetry metadata.", section: "Introduction", line: null }] }] };
+      },
+      async summarizeMemory() { return { overview: "A telemetry privacy system.", sections: [{ path: "main.tex", title: "Introduction", content: "Introduces the telemetry privacy result." }] }; },
+      async planAgentTask(input) { agentInstructions = input.skillInstructions; agentPaths = input.documents.map((document) => document.path); return { steps: ["Inspect the argument"], affectedFiles: ["main.tex"], risks: [], validation: ["Compile"] }; }
+    };
+    const request = await testApplication(provider);
+    const project = (await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Durable Memory" }) })).json()) as PaperProject;
+    const main = (await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json()) as FileContentResponse;
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: `${main.content}\n\\section{Introduction}\nThe system protects telemetry metadata.`, baseVersion: main.file.version }) });
+
+    const extracted = await request(`/api/projects/${project.id}/memory/extract`, { method: "POST" });
+    expect(extracted.status).toBe(201);
+    const candidateFile = (await (await request(`/api/projects/${project.id}/file?path=memory.md`)).json()) as FileContentResponse;
+    expect(candidateFile.content).toContain("## Candidate Context");
+    expect(candidateFile.content).toContain("## User Instructions");
+    const instructions = candidateFile.content.replace(/<!-- Add durable [^]*?-->/, "Never broaden the threat model or invent evaluation results.");
+    await request(`/api/projects/${project.id}/file?path=memory.md`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: instructions, baseVersion: candidateFile.file.version }) });
+
+    const applied = await request(`/api/projects/${project.id}/memory/apply`, { method: "POST" });
+    expect(applied.status).toBe(200);
+    expect((await applied.json() as PaperMemory).items[0]).toMatchObject({ status: "confirmed", locked: true });
+    const reviewedFile = (await (await request(`/api/projects/${project.id}/file?path=memory.md`)).json()) as FileContentResponse;
+    expect(reviewedFile.content).toContain("## Reviewed Context");
+    expect(reviewedFile.content).toContain("Never broaden the threat model");
+
+    await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "Inspect the paper argument", scope: { type: "project" } }) });
+    expect(agentInstructions).toContain("[user-instructions]");
+    expect(agentInstructions).toContain("Never broaden the threat model or invent evaluation results.");
+    expect(agentPaths).not.toContain("memory.md");
   });
 
   test("runs Review Issue through plan, multi-file approval, targeted re-review and rollback", async () => {
@@ -677,7 +867,9 @@ describe("workspace API", () => {
     expect(completion).toMatchObject({ path: "main.tex", cursor: current.content.length, fileVersion: current.file.version, kind: "auto" });
     expect(received?.contextBefore.length).toBeLessThanOrEqual(2_500);
     expect(received?.contextBefore).toEndWith(sentence);
-    expect(received?.skillInstructions).toContain("[contribution] Telemetry: The design protects aggregate telemetry.");
+    expect(received?.skillInstructions).toContain("[paper-overview] Telemetry: The design protects aggregate telemetry.");
+    expect(received?.skillInstructions).not.toContain("[contribution] Telemetry: The design protects aggregate telemetry.");
+    expect(received?.paperContext).toContain("[paper-overview] Telemetry: The design protects aggregate telemetry.");
     expect(received?.skill.id).toBe("ai-top-tier");
     expect(received?.venueInstructions).toContain("# AI Top-Tier");
     expect(received?.bibliography).toContain("Private Telemetry");

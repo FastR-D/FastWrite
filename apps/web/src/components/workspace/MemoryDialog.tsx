@@ -1,63 +1,106 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Check, Database, ExternalLink, LoaderCircle, RotateCcw, X } from "lucide-react";
-import type { MemoryItem, MemoryItemStatus, PaperMemory, PaperProject } from "@fastwrite/shared";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Check, Database, FileText, LoaderCircle, Pencil, RefreshCw, Save, X } from "lucide-react";
+import type { PaperMemory, PaperProject } from "@fastwrite/shared";
 import { api } from "../../api/client";
-import { Button } from "../ui/Button";
+import { Button, IconButton } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
+
+type Candidate = { title: string; current?: string; proposed: string };
+type MemoryPart = { key: string; title: string; content: string; candidate?: string | undefined } & (
+  | { kind: "overview" }
+  | { kind: "section"; id: string }
+  | { kind: "item"; id: string; label: string }
+);
 
 export function MemoryDialog({ open, project, onClose, onNavigate }: { open: boolean; project: PaperProject; onClose: () => void; onNavigate: (path: string, line?: number) => void }) {
   const [memory, setMemory] = useState<PaperMemory | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [operation, setOperation] = useState<"generating" | "applying" | "saving" | null>(null);
   const [error, setError] = useState("");
-  const [statusFilter, setStatusFilter] = useState("active");
-  const [categoryFilter, setCategoryFilter] = useState("all");
-  const [drafts, setDrafts] = useState<Record<string, { label: string; content: string }>>({});
+  const [editing, setEditing] = useState<MemoryPart | null>(null);
+  const [draft, setDraft] = useState("");
+  const loading = operation !== null;
 
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
-    api.memory.get(project.id, controller.signal).then((value) => { setMemory(value); seedDrafts(value, setDrafts); }).catch((failure) => setError(message(failure)));
+    setError("");
+    setEditing(null);
+    api.memory.get(project.id, controller.signal).then(setMemory).catch((failure) => setError(message(failure)));
     return () => controller.abort();
   }, [open, project.id]);
 
-  const extract = async () => {
-    setLoading(true); setError("");
-    try { const value = await api.memory.extract(project.id); setMemory(value); seedDrafts(value, setDrafts); }
+  const candidates = useMemo(() => candidateEntries(memory), [memory]);
+  const regenerate = async () => {
+    setOperation("generating"); setError("");
+    try { setMemory(await api.memory.extract(project.id)); }
     catch (failure) { setError(message(failure)); }
-    finally { setLoading(false); }
+    finally { setOperation(null); }
   };
-
-  const update = async (item: MemoryItem, status?: MemoryItemStatus) => {
-    const draft = drafts[item.id] ?? { label: item.label, content: item.content };
-    setError("");
+  const apply = async () => {
+    setOperation("applying"); setError("");
+    try { setMemory(await api.memory.apply(project.id)); }
+    catch (failure) { setError(message(failure)); }
+    finally { setOperation(null); }
+  };
+  const beginEdit = (part: MemoryPart) => { setEditing(part); setDraft(part.content); setError(""); };
+  const savePart = async () => {
+    if (!editing || !draft.trim()) return;
+    setOperation("saving"); setError("");
     try {
-      const value = await api.memory.updateItem(project.id, item.id, { ...(status ? { status } : {}), label: draft.label, content: draft.content });
-      setMemory(value); seedDrafts(value, setDrafts);
+      const updated = editing.kind === "overview"
+        ? await api.memory.updateOverview(project.id, { content: draft })
+        : editing.kind === "section"
+          ? await api.memory.updateSection(project.id, editing.id, { content: draft })
+          : await api.memory.updateItem(project.id, editing.id, { content: draft, label: editing.label });
+      setMemory(updated);
+      setEditing(null);
     } catch (failure) { setError(message(failure)); }
+    finally { setOperation(null); }
   };
+  const parts = useMemo(() => memoryParts(memory), [memory]);
 
-  const rollback = async () => {
-    setError("");
-    try { const value = await api.memory.rollback(project.id); setMemory(value); seedDrafts(value, setDrafts); }
-    catch (failure) { setError(message(failure)); }
-  };
-
-  const visible = useMemo(() => memory?.items.filter((item) => {
-    const statusMatches = statusFilter === "all" || (statusFilter === "active" ? item.status !== "rejected" : item.status === statusFilter);
-    return statusMatches && (categoryFilter === "all" || item.category === categoryFilter);
-  }) ?? [], [memory, statusFilter, categoryFilter]);
-  const confirmed = memory?.items.filter((item) => item.status === "confirmed").length ?? 0;
-  const stale = memory?.items.filter((item) => item.status === "stale").length ?? 0;
-
-  return <Dialog open={open} width="large" title="Paper Memory" description={memory ? `Memory v${memory.version} · project v${memory.projectVersion} · ${confirmed} confirmed` : "Confirmed project facts shared by Agent, Revise, and Review"} onClose={() => { if (!loading) onClose(); }} footer={<><Button variant="ghost" onClick={onClose}>Close</Button>{memory && memory.version > 1 ? <Button variant="secondary" icon={<RotateCcw />} onClick={() => void rollback()}>Restore previous</Button> : null}<Button variant="primary" icon={loading ? <LoaderCircle className="spin" /> : <Database />} loading={loading} onClick={() => void extract()}>{memory ? "Re-extract suggestions" : "Generate Memory"}</Button></>}>
-    {loading ? <div className="agent-progress"><LoaderCircle className="spin" /><strong>Extracting evidence-backed paper facts</strong><span>Suggestions remain untrusted until you confirm them.</span></div> : memory ? <div className="memory-panel">
-      {stale ? <div className="memory-stale"><AlertTriangle /> {stale} confirmed item{stale === 1 ? " is" : "s are"} stale because its source file changed.</div> : null}
-      <div className="memory-toolbar"><label>Category <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">All</option>{["research-question", "contribution", "system-model", "threat-model", "term", "experiment", "limitation", "open-question"].map((category) => <option key={category} value={category}>{category.replace("-", " ")}</option>)}</select></label><label>Status <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="active">Active</option><option value="all">All</option><option value="suggested">Suggested</option><option value="confirmed">Confirmed</option><option value="stale">Stale</option><option value="needs-information">Needs information</option><option value="rejected">Rejected</option></select></label><span>{visible.length} items</span></div>
-      <div className="memory-list">{visible.map((item) => { const draft = drafts[item.id] ?? { label: item.label, content: item.content }; return <article className={`memory-card memory-card--${item.status}`} key={item.id}><header><span>{item.category.replace("-", " ")}</span><strong>{item.status.replace("-", " ")}</strong></header><input aria-label={`Label for ${item.label}`} value={draft.label} onChange={(event) => setDrafts((current) => ({ ...current, [item.id]: { ...draft, label: event.target.value } }))} /><textarea aria-label={`Memory content for ${item.label}`} value={draft.content} onChange={(event) => setDrafts((current) => ({ ...current, [item.id]: { ...draft, content: event.target.value } }))} /><div className="memory-sources">{item.sources.map((source, index) => <button key={`${source.path}-${index}`} onClick={() => { onNavigate(source.path, source.line); onClose(); }}><ExternalLink /><span><strong>{source.path}{source.line ? `:${source.line}` : ""}</strong><q>{source.excerpt}</q></span></button>)}</div><footer><Button size="small" variant="ghost" icon={<X />} onClick={() => void update(item, "rejected")}>Reject</Button><Button size="small" variant="secondary" onClick={() => void update(item, "needs-information")}>Needs info</Button><Button size="small" variant="primary" icon={<Check />} onClick={() => void update(item, "confirmed")}>{item.status === "confirmed" ? "Save" : "Confirm"}</Button></footer></article>; })}</div>
-    </div> : <div className="review-empty"><Database /><h3>Build a verifiable project memory</h3><p>Extract research questions, contributions, models, terminology, experiments, limitations, and open questions. Every suggestion must include exact source evidence.</p></div>}
+  return <Dialog open={open} width="large" title="Paper Memory" description={memory ? "Edit each memory part here; every save updates the root memory.md file." : "Create a durable project memory and instructions file."} onClose={() => { if (!loading) onClose(); }} footer={<>
+    <Button variant="ghost" onClick={onClose}>Close</Button>
+    {memory ? <Button variant="secondary" icon={<FileText />} onClick={() => { onNavigate("memory.md"); onClose(); }}>Open memory.md</Button> : null}
+    {memory && candidates.length ? <Button variant="primary" icon={<Check />} loading={loading} disabled={Boolean(editing)} onClick={() => void apply()}>Apply reviewed memory</Button> : null}
+    <Button variant={memory ? "secondary" : "primary"} icon={loading ? <LoaderCircle className="spin" /> : <RefreshCw />} loading={loading} onClick={() => void regenerate()}>{memory ? "Regenerate candidate" : "Generate Memory"}</Button>
+  </>}>
+    {loading ? <div className="agent-progress"><LoaderCircle className="spin" /><strong>{operation === "saving" ? "Polishing edited Memory" : operation === "applying" ? "Applying reviewed Memory" : "Building Paper Memory"}</strong><span>Existing user instructions remain unchanged.</span></div> : memory ? <div className="memory-panel memory-panel--review">
+      <section className="memory-file-callout"><FileText /><div><strong>memory.md is in the paper root</strong><span>User Instructions are edited directly in the file. Save any overview, section, or fact below to persist it immediately.</span></div></section>
+      <div className="memory-review-summary"><strong>{candidates.length ? `${candidates.length} candidate entries to review` : "Reviewed memory is current"}</strong><span>{parts.length} editable parts</span></div>
+      {parts.length ? <div className="memory-review">{parts.map((part) => <article className="memory-review-card" key={part.key}><header><span>{part.title}</span>{editing?.key === part.key ? <div><IconButton label="Polish and save memory part" icon={<Save />} variant="secondary" disabled={!draft.trim()} onClick={() => void savePart()} /><IconButton label="Cancel editing memory part" icon={<X />} onClick={() => setEditing(null)} /></div> : <IconButton label={`Edit ${part.title}`} icon={<Pencil />} onClick={() => beginEdit(part)} />}</header>{editing?.key === part.key ? <AutoSizeTextarea label={`Edit ${part.title}`} value={draft} onChange={setDraft} /> : <p className="memory-review-card__candidate">{part.content}</p>}{part.candidate && part.candidate !== part.content ? <div className="memory-candidate"><span>Regenerated candidate</span><p>{part.candidate}</p></div> : null}</article>)}</div> : <div className="memory-empty"><Database /><span>Regenerate after changing the manuscript to create editable memory parts.</span></div>}
+    </div> : <div className="review-empty"><Database /><h3>Build a paper memory</h3><p>Generate evidence-backed context, inspect the complete candidate, and save it as an editable root-level memory.md file.</p></div>}
     {error ? <div className="form-error" role="alert">{error}</div> : null}
   </Dialog>;
 }
 
-function seedDrafts(memory: PaperMemory | null, setter: React.Dispatch<React.SetStateAction<Record<string, { label: string; content: string }>>>) { setter(Object.fromEntries(memory?.items.map((item) => [item.id, { label: item.label, content: item.content }]) ?? [])); }
+function AutoSizeTextarea({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const textarea = ref.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${textarea.scrollHeight + 2}px`;
+  }, [value]);
+  return <textarea ref={ref} rows={1} aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} autoFocus />;
+}
+
+function memoryParts(memory: PaperMemory | null): MemoryPart[] {
+  if (!memory) return [];
+  const parts: MemoryPart[] = [];
+  if (memory.overview) parts.push({ key: "overview", kind: "overview", title: "Paper overview", content: memory.overview.content, candidate: memory.overview.candidate?.content });
+  for (const section of memory.sections ?? []) parts.push({ key: `section:${section.id}`, kind: "section", id: section.id, title: `${section.title} (${section.path})`, content: section.content, candidate: section.candidate?.content });
+  for (const item of memory.items) if (item.status !== "rejected") parts.push({ key: `item:${item.id}`, kind: "item", id: item.id, label: item.label, title: `${item.category}: ${item.label}`, content: item.content, candidate: item.candidate?.content });
+  return parts;
+}
+
+function candidateEntries(memory: PaperMemory | null): Candidate[] {
+  if (!memory) return [];
+  const entries: Candidate[] = [];
+  if (memory.overview) entries.push({ title: "Paper overview", ...(memory.overview.locked ? { current: memory.overview.content } : {}), proposed: memory.overview.candidate?.content ?? memory.overview.content });
+  for (const section of memory.sections ?? []) entries.push({ title: `${section.title} (${section.path})`, ...(section.locked ? { current: section.content } : {}), proposed: section.candidate?.content ?? section.content });
+  for (const item of memory.items) if (item.status !== "rejected") entries.push({ title: `${item.category}: ${item.label}`, ...(item.status === "confirmed" || item.locked ? { current: item.content } : {}), proposed: item.candidate?.content ?? item.content });
+  return entries.filter((entry) => !entry.current || entry.current !== entry.proposed);
+}
+
 function message(error: unknown) { return error instanceof Error ? error.message : "Paper Memory request failed"; }
