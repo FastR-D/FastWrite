@@ -2,127 +2,121 @@
 
 ## 1. 产品目标
 
-FastWrite 是面向安全与 AI 顶会论文的 AI 写作工作台。它保留 Overleaf 熟悉的文件、源码和 PDF 工作方式，用项目级 Writing Skill 驱动三个核心功能：
+FastWrite 是面向安全与 AI 顶会论文的 AI 写作工作台。用户始终在完整 LaTeX 项目中编辑，并通过四项核心功能完成从写作到审稿的闭环：
 
-1. **Agent**：从研究想法快速生成初稿，或完成跨文件修改。
-2. **Revise**：围绕当前文件中的一句、几句、一段或一节连续精修。
-3. **Review**：按项目 Writing Profile 审稿，形成可执行 Issue，并引导用户调用 Agent 或 Revise 逐项解决。
+1. **自动补全（Completion）**：在光标处预测下一句或 LaTeX 内容。
+2. **Agent 初稿与修改**：生成论文初稿，继续未完成内容，或执行跨文件修改。
+3. **逐段精修（Revise）**：围绕当前句子、段落或 Section 连续打磨，用户确认后再写入。
+4. **自动审稿与问题解决（Review）**：根据编译后的 PDF 提出审稿意见，并调用 Agent 或 Revise 协助解决。
 
-产品不建设复杂的 Prompt 模式系统。写作结构、语言风格和审稿标准都由项目 Skill 提供。项目只选择两类 Writing Profile：
-
-- `security-top4`：IEEE S&P、USENIX Security、ACM CCS 和 NDSS 共用同一套安全顶会写作与审稿规范，不再区分会议子 Profile。
-- `ai-top-tier`：AI 顶会共用的论文结构、实验论证、复现性、限制与审稿规范。
+四项功能按明确边界共享 Writing Skill、Paper Memory 和版本信息。Agent 与 Revise 的正文修改统一使用 ChangeSet；Completion 只有在用户按下 `Tab` 后插入；Review 不直接写正文。任何流程都不得编造实验、结果或引用。
 
 ## 2. 工作区
 
-界面采用紧凑的 Overleaf 式三栏布局和蓝色主题：
+工作区采用紧凑的三栏布局：左侧是文件与 Outline，中间是完整源码 Editor 和 `Revise / Agent` 工作区，右侧是 PDF、编译状态与 Diagnostics。Review 使用独立的宽屏工作区。
 
-```text
-┌──────────┬──────────────────────────┬──────────┐
-│ Files    │ Editor                   │ PDF      │
-│ Outline  ├──────────────────────────┤ Preview  │
-│          │ Revise chat              │          │
-└──────────┴──────────────────────────┴──────────┘
-```
+Editor 不把论文自动拆成句子或段落卡片。用户直接编辑源文件，通过选区、光标和 Outline 指定上下文。
 
-- 左侧：文件树和论文 Outline。
-- 中间上方：完整源文件 Editor；不自动拆分 Section、Paragraph 或 Sentence，不使用段落卡片。
-- 中间下方：单一 Revise 聊天窗口。
-- 右侧：浏览器 WASM LaTeX 编译、PDF、Diagnostics 和双向 SyncTeX。
-- Agent 与 Review 使用近全屏任务工作区，避免在狭窄面板中处理多文件内容。
+## 3. 四项核心功能
 
-顶层 AI 入口只使用 **Agent / Revise / Review** 三个产品术语。Academic polish、Condense 等只是 Revise 输入快捷 Prompt，不是模式；不出现 Diagnose、Refine、QuickFix。
+### 3.1 自动补全
 
-## 3. 三条核心流程
+用户只需开启一个 `Complete` 开关，不选择补全类型。停止输入约 500 ms 后，系统根据文件和光标上下文自动判断：
 
-### 3.1 Agent：快速初稿与跨文件编辑
+- 普通 TeX 正文：补全自然的下一句。
+- `.bib`：补全 BibTeX 条目。
+- 数学环境：补全公式。
+- 未完成的 LaTeX 命令：补全语法。
 
-用户先向 Agent 提交一段自然语言 research brief，其中可包含研究问题、贡献、威胁模型约束、已有材料和真实证据。Agent 必须：
+建议以内联虚文本显示；`Tab` 接受尚未输入的后缀，`Esc` 忽略。光标移动、继续输入或文件版本变化时，旧请求和旧建议必须失效。补全只使用附近文本、Outline、参考文献、Writing Skill，以及已审核的论文概览和当前 Section 摘要。
 
-1. 读取项目 Skill、Paper Memory 和现有文件。
-2. 先提出论文 Outline，不立即写文件。
-3. 用户确认或编辑 Outline 后生成多文件 ChangeSet。
-4. 以类似代码审查的方式逐文件展示 Diff。
-5. 支持逐文件、逐 hunk 接受或拒绝，并允许直接编辑候选内容。
-6. 只有接受的修改才写入受管理 Workspace；随后编译 PDF。
+**验收标准**：无类型选择；建议不遮挡正文；`Tab` 不重复插入用户已经输入的前缀；过期结果不能写入错误位置；关闭开关后不再请求。
 
-缺少实验、引用或事实时必须保留明确 TODO，不得捏造。Review 产生的跨章节问题也复用同一个 Agent 计划、ChangeSet 和审批链路。
+### 3.2 Agent 初稿与修改
 
-**验收标准**：用户能从一段 research brief 得到可编辑 Outline；生成后可依次查看每个文件；接受前源文件不变；接受局部 hunk 后只写入该部分；并发版本变化会阻止写入。
+Agent 使用同一入口处理三类任务：从 research brief 创建初稿、继续 TODO/空白章节、按自然语言要求修改现有论文。系统可自动判断任务意图，也允许用 `/draft`、`/continue`、`/revise` 明确指定。
 
-### 3.2 Revise：单文件连续精修
+流程固定为：
 
-用户可在 Editor 中选择任意一句、几句或一段；也可一键使用光标所在的整个 Section。随后在同一个聊天窗口连续提出要求。
+1. 读取 Writing Skill、完整已审核 Memory、User Instructions 和项目源码；若由 Review 发起，同时读取用户选中的审稿意见及其 PDF 证据。
+2. 先生成计划，列出步骤、影响文件、风险和验证方式，不立即修改文件。
+3. 用户确认计划后，Agent 才生成多文件 ChangeSet。
+4. 用户逐文件查看 Diff，可编辑候选，并逐 hunk 接受或拒绝。
+5. 只有接受的 hunk 写入 Workspace；随后立即创建内部 Git checkpoint、编译，并可回滚。
 
-每轮行为：
+初稿和继续写作可以创建新的 `.tex` / `.bib` 文件；普通修改不得越过已确认的影响文件。缺少证据的内容保留明确 TODO。
 
-1. Agent 读取原始选区、当前未接受候选、前后文、Section、Skill 和已确认 Memory。
-2. 回复完整替换候选、修改理由和词级 Diff。
-3. 用户可以继续追问；下一轮基于最新候选，而不是回到原文。
-4. 用户可以手动编辑候选，然后 Accept 或 Reject。
-5. Accept 后才写文件；新文本在 Editor 中继续保持选中，可立即进行下一轮精修。
-6. 支持 Rollback；新建选区时开始新的 Revise 会话。
+**验收标准**：确认计划前文件不变；ChangeSet 只能包含计划中的文件；局部接受只写入对应 hunk；源文件版本变化时阻止覆盖；任务切换 Tab 后仍可恢复。
 
-快捷 Prompt 只负责填充常用意图，例如 Academic polish、Logic check、Condense、Grammar。聊天窗口始终可输入自定义要求，不切换功能模式。
+### 3.3 逐段精修
 
-**验收标准**：连续两轮精修的第二轮收到第一轮候选；两轮未 Accept 时文件均不变；Accept 后只替换选区；焦点位于聊天窗口时 Editor 仍显示选区；整节选择不依赖自动分段 UI。
+用户在 Editor 中选择一句、一个段落或若干连续段落，也可使用光标所在的整个 Section，然后在 Revise 中连续提出修改要求。
 
-### 3.3 Review：审稿到逐项解决
+每轮精修基于当前未接受候选，而不是反复从原文开始。系统返回完整替换文本、修改理由和词级 Diff；用户可以继续追问、手工编辑候选、Accept 或 Reject。Accept 后立即创建内部 Git checkpoint，新文本继续保持选中，便于进入下一轮；已接受结果可以 Rollback。
 
-Review 固定当前项目版本，读取全文、Outline、Writing Skill、Memory 和编译状态，生成证据优先的结构化报告。每个 Issue 包含严重级别、类别、理由、影响、建议及源码证据。
+Revise 只读取当前选区、同一文件的前后文、精确 Section、Writing Skill，以及已审核的论文概览和当前 Section 摘要，不读取其他 Section 或未审核 Memory。Academic polish、Logic check、Condense、Grammar 等只是快捷指令，不是独立模式。
 
-每个有效 Issue 提供两条明确路径：
+**验收标准**：连续第二轮收到第一轮候选；Accept 前源文件不变；Accept 只替换原选区；Reject 不改文件；切换焦点或 Tab 不丢失对话、选区和候选。
 
-- **Revise locally**：有单文件直接证据时，打开并选中证据文本，把建议带入 Revise 聊天。
-- **Fix with Agent**：问题跨文件、跨章节或需要规划时，创建关联 Issue 的 Agent 任务。
+### 3.4 自动审稿与问题解决
 
-用户按优先级逐项处理，重新编译后可进行针对性复审；只有复审确认后才应标记 resolved。Review 自身不直接改正文。
+Review 必须以当前项目版本成功编译出的 **PDF** 为审稿正文，并按 Writing Skill 生成总体评价、优缺点、下一步和结构化审稿意见。冻结快照必须绑定实际 PDF artifact 与摘要；源码、Outline 和 SyncTeX 只用于把 PDF 中的证据定位回可编辑源码，不能代替 PDF 参与审稿判断。
 
-**验收标准**：Issue 可跳转到真实源码；本地路径能建立准确选区；Agent 路径保留 Issue 关联和影响文件；修改仍需 ChangeSet 审批；可区分 open、in revision、resolved 和 dismissed。
+一条**审稿意见（Review Issue）**是报告中的一个独立、可解决问题，包含类别、严重级别、优先级、理由、影响、建议，以及 PDF 页码和原文证据。能够可靠映射时，再附加源码路径和行号。审稿意见支持筛选、手工新增、合并重复项和状态跟踪。
+
+解决路径分为：
+
+- **Revise locally**：PDF 证据能可靠映射到一个源码选区时，跳转并选中原文，把该条审稿意见带入 Revise。
+- **Fix with Agent**：跨文件、跨章节或需要同时处理多条审稿意见时，把用户选中的意见及其 PDF 证据交给 Agent，复用计划、ChangeSet 和审批流程。
+
+“用户选中的审稿意见”不是额外类型，只是本次交给 Agent 或 Revise 处理的一条或多条 Review Issue。修改后必须生成新的成功编译 PDF，再针对这些原始意见进行 targeted re-review。只有新 PDF 中问题已解决且没有明显回归时才标记 `resolved`；否则重新打开。Review 不直接修改正文，也不读取 Paper Memory。
+
+**验收标准**：Review Provider 实际收到固定版本 PDF 或由该 PDF 渲染的页面；报告绑定 PDF 摘要；每条意见引用真实页码和 PDF 原文；可映射的证据能跳转到源码；所选意见与后续 Agent/Revise 修改及复审保持关联；没有新 PDF 时不能完成复审。
 
 ## 4. 共享约束
 
-### Skill
+### Writing Skill
 
-Skill 贯穿 Agent、Revise、Review 和实时补全。Writing Style 以 Skill 文件提供，不建设独立 Prompt 管理页面。任何 AI 请求都记录 Skill 与版本。Security Top-4 四个会议只读取同一个共享 Profile；会议名不是额外配置维度。
-
-### ChangeSet
-
-所有 AI 写操作使用同一个 ChangeSet 协议：
-
-```text
-Plan/Chat → Proposed ChangeSet → Diff/Edit → Accept/Reject → Compile → Rollback
-```
-
-- AI 不直接覆盖论文。
-- ChangeSet 保存基础文件版本，写入时检查冲突。
-- 单文件 Revise 与多文件 Agent 使用相同的审批、审计和回滚语义。
+项目选择 `security-top4` 或 `ai-top-tier`。Skill 同时约束 Completion、Agent、Revise 和 Review；每次 Agent Run 记录 Skill 与版本。
 
 ### Paper Memory
 
-Memory 只保存有源码证据且经用户确认的研究问题、贡献、术语、威胁模型、实验事实、限制和开放问题。未确认内容不能作为论文事实。
+Memory 只保存有源码证据且经用户审核的论文核心、Section 摘要和事实。Agent 使用完整已审核 Memory 与 User Instructions；Completion 和 Revise 只使用论文核心及当前 Section；Review 独立读取冻结 PDF，不使用 Memory。
 
-### 导入与部署
+### ChangeSet 与版本
 
-- Paper 支持本地目录上传和 GitHub 仓库导入。
-- 两种导入都复制到受管理 Workspace；不直接编辑来源目录。
-- 浏览器只通过相对 HTTP API 访问文件，兼容当前本机前后端、未来服务器部署和 Tauri。
-- 服务端部署时不能读取用户电脑的绝对路径。
+Agent 和 Revise 的写操作遵循：
 
-### PDF
+```text
+Request -> Plan/Proposal -> ChangeSet -> Diff/Edit -> Accept/Reject -> Compile -> Rollback
+```
 
-浏览器 WASM LaTeX、PDF 预览、编译错误定位和双向 SyncTeX 是核心能力，必须保留。Agent/Draft 修改接受后应以当前版本编译作为完成检查。
+ChangeSet 保存基础文件版本和对应的内部 Git checkpoint。写入前必须检查版本冲突；项目版本用于保存、编译结果和 Review 快照的一致性，不作为用户可见的同步版本。
+
+Rollback 必须基于内部 Git，采用 `revert` 语义而不是 `reset`：对该 ChangeSet 的 operation commit 生成反向修改，并把回滚结果提交为新的 checkpoint。后续不相关编辑必须保留；同一区域已被继续修改时进入三方冲突处理，不能覆盖后续内容，也不能仅因存在后续编辑就拒绝整个回滚。
+
+### Git 历史、GitHub 同步与冲突
+
+- 每个项目的 `history.git` 是无 remote 的内部恢复仓库。普通文本在停止修改两分钟后合并为一个 checkpoint；持续编辑时最迟十分钟保存一次。新建、上传、重命名、删除、AI Accept、Rollback、手动 checkpoint 和 Sync 前立即 checkpoint。
+- 内部 checkpoint message 只用于恢复和审计，对用户隐藏，永远不推送到 GitHub，也不需要 rebase。
+- 顶层只提供一个手动 `Sync` 按钮，不向用户暴露 Pull、Push、Rebase 或 Git 命令，也不在后台自动推送。后台只能只读检查远端状态。
+- 一次 Sync 固定执行：保存本地修改并 checkpoint -> 获取 GitHub -> 以 `lastSyncedCommit` 为基线三方合并 -> 必要时在同一对话框解决冲突 -> 写回 Workspace -> 编译 -> 如有本地净变化则创建一条公开 commit 并 fast-forward push。
+- 只有 GitHub 变化时更新本地 Workspace，不创建空 commit；只有本地变化或双方非重叠变化时自动完成同步，每次最多产生一条 FastWrite commit。
+- 冲突时暂停在当前 Sync 流程。每个文本冲突块同时展示 Base、FastWrite 和 GitHub 内容，并提供可编辑的最终结果；用户可以逐行或逐句保留、删除、改写任一侧内容，也可以直接输入新的合并文本。`Keep FastWrite` 和 `Keep GitHub` 只是一键填充当前冲突块的快捷操作，不限制用户手工合并。每个文本冲突都确认结果，且二进制、rename/delete、modify/delete 和路径冲突都完成显式结构选择（必要时指定最终路径/名称）后，才可用 `Apply & continue sync` 继续。
+- 若远端在 fetch 后再次变化，系统重新获取并对账，绝不 force-push。若最终主分支只希望保留一条 FastWrite 记录，使用独立同步分支和 GitHub Squash Merge，不改写共享历史。
+
+### 论文与编译
+
+项目支持本地目录和 GitHub 仓库复制导入。浏览器 WASM 与本地 LaTeX 编译、PDF Diagnostics 和双向 SyncTeX 是四项功能的验证底座。GitHub Sync 是 Workspace 支撑能力，不新增写作模式；GitHub 可作为 FastWrite 与 Overleaf 的交换层，但 Overleaf 端的 Pull/Push 仍由用户在 Overleaf 手动触发。Tauri 仍属后续范围。
 
 ## 5. P1 范围
 
-| 能力 | P1 要求 |
+| 功能 | P1 要求 |
 | --- | --- |
-| Workspace | 项目、受管理导入、文件树、Outline、连续源码编辑、导出 |
-| Agent | research brief、Outline 确认、多文件 Diff、逐文件/逐 hunk 审批、手工编辑 |
-| Revise | 任意选区/当前 Section、连续聊天、Diff、Accept/Reject/Rollback、持久选区 |
-| Review | 按 Security Top-4 或 AI Top-Tier Skill 结构化审稿、证据 Issue、本地 Revise/跨文件 Agent 路由、复审 |
-| Skill/Memory | Skill 全程生效；Memory 证据确认和版本记录 |
-| PDF | WASM 编译、PDF、Diagnostics、双向 SyncTeX |
-| 部署 | 本地目录/GitHub 复制导入；本机与服务器 Web 同一协议 |
+| 自动补全 | 自动意图、内联虚文本、取消与过期保护、Tab/Esc |
+| Agent 初稿与修改 | 计划确认、多文件 ChangeSet、逐 hunk 审批、编辑与回滚 |
+| 逐段精修 | 任意选区/当前 Section、连续对话、Diff、Accept/Reject/Rollback |
+| 自动审稿闭环 | 冻结 PDF、页码证据、Revise/Agent 路由、新 PDF 针对性复审 |
+| Git 历史与同步 | 内部聚合 checkpoint、Git-based revert、单一手动 Sync、单次最多一条公开 commit、三方冲突处理 |
 
-Tauri 属于 P2。P1 不新增第四种 Agent、不恢复三模式 Revise、不实现复杂 Prompt 管理器，也不恢复自动分段 Editor。
+P1 不新增更多 AI 模式，不恢复自动分段 Editor，也不建设复杂 Prompt 管理器。

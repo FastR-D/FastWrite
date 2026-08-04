@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   FilePlus2,
   FolderTree,
   GitCommitHorizontal,
@@ -10,6 +12,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Pencil,
+  RefreshCw,
   Trash2,
   Upload
 } from "lucide-react";
@@ -23,10 +26,13 @@ import { OutlineTree } from "../components/workspace/OutlineTree";
 import { PdfPane, type CompileStateReport } from "../components/workspace/PdfPane";
 import { ProjectSettingsDialog } from "../components/workspace/ProjectSettingsDialog";
 import { RenameFileDialog } from "../components/workspace/RenameFileDialog";
-import { SourceEditor } from "../components/workspace/SourceEditor";
+import { SourceEditor, type SourceEditorHandle } from "../components/workspace/SourceEditor";
 import { AiWorkspace } from "../components/workspace/AiWorkspace";
+import { GithubSyncDialog } from "../components/workspace/GithubSyncDialog";
+import type { CompileFailureContext, CompileRepairRequest } from "../components/workspace/compileRepair";
 import { navigate } from "../lib/navigation";
 import { currentSectionSelection } from "../lib/sectionSelection";
+import { FASTWRITE_SAVE_EVENT } from "../lib/keyboard";
 
 interface WorkspacePageProps {
   projectId: string;
@@ -35,6 +41,7 @@ interface WorkspacePageProps {
 export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const treeRef = useRef<WorkspaceTreeNode[]>([]);
+  const editorRef = useRef<SourceEditorHandle>(null);
   const [project, setProject] = useState<PaperProject | null>(null);
   const [tree, setTree] = useState<WorkspaceTreeNode[]>([]);
   const [outline, setOutline] = useState<OutlineItem[]>([]);
@@ -49,21 +56,40 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [sidebarWidth, setSidebarWidth] = useStoredNumber("fastwrite.sidebar-width", 254);
   const [pdfWidth, setPdfWidth] = useStoredNumber("fastwrite.pdf-width", 440);
   const [aiHeight, setAiHeight] = useStoredNumber("fastwrite.ai-height", 322);
+  const [outlineHeight, setOutlineHeight] = useStoredNumber("fastwrite.outline-height", 250);
+  const [outlineCollapsed, setOutlineCollapsed] = useStoredBoolean("fastwrite.outline-collapsed", false);
   const [sidebarBeforeCollapse, setSidebarBeforeCollapse] = useState(254);
   const [pdfBeforeCollapse, setPdfBeforeCollapse] = useState(440);
-  const [resizing, setResizing] = useState<"sidebar" | "pdf" | "ai" | null>(null);
+  const [resizing, setResizing] = useState<"sidebar" | "pdf" | "ai" | "outline" | null>(null);
   const [aiFullscreen, setAiFullscreen] = useState(false);
   const [newFileOpen, setNewFileOpen] = useState(false);
   const [addFileOpen, setAddFileOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const [settingsTree, setSettingsTree] = useState<WorkspaceTreeNode[]>([]);
   const [deleteError, setDeleteError] = useState("");
   const [compileRequest, setCompileRequest] = useState(0);
   const [compileState, setCompileState] = useState<CompileStateReport>({ state: "idle", compiledVersion: null });
+  const [compileRepairRequest, setCompileRepairRequest] = useState<CompileRepairRequest | null>(null);
   const [checkpointState, setCheckpointState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const handleCompileState = useCallback((report: CompileStateReport) => setCompileState((current) => report.state === "idle" && current.state === "success" ? current : report), []);
+  const fixCompileWithAgent = useCallback((failure: CompileFailureContext) => {
+    setCompileRepairRequest((current) => ({ id: (current?.id ?? 0) + 1, failure }));
+    setAiHeight(Math.max(aiHeight, 380));
+  }, [aiHeight, setAiHeight]);
+  const updateOutlineHeight = useCallback((next: number) => {
+    const available = containerRef.current?.clientHeight ?? 760;
+    setOutlineHeight(Math.min(Math.max(120, available - 160), Math.max(120, next)));
+    setOutlineCollapsed(false);
+  }, [setOutlineCollapsed, setOutlineHeight]);
+
+  useEffect(() => {
+    const save = () => { void editorRef.current?.flush().catch(() => undefined); };
+    window.addEventListener(FASTWRITE_SAVE_EVENT, save);
+    return () => window.removeEventListener(FASTWRITE_SAVE_EVENT, save);
+  }, []);
 
   const commitTree = useCallback((nextTree: WorkspaceTreeNode[]) => {
     treeRef.current = nextTree;
@@ -133,9 +159,11 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         const next = Math.max(0, Math.min(780, rect.right - event.clientX));
         const max = Math.max(300, rect.width - Math.max(sidebarWidth, 48) - 420);
         setPdfWidth(next < 150 ? 0 : Math.min(next, max));
-      } else {
+      } else if (resizing === "ai") {
         const next = Math.max(220, Math.min(Math.max(220, rect.height - 250), rect.bottom - event.clientY));
         setAiHeight(next);
+      } else {
+        updateOutlineHeight(rect.bottom - event.clientY);
       }
     };
     const onUp = () => setResizing(null);
@@ -147,7 +175,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       document.removeEventListener("pointerup", onUp);
       document.body.classList.remove("is-resizing");
     };
-  }, [resizing, setAiHeight, setPdfWidth, setSidebarWidth, sidebarWidth]);
+  }, [resizing, setAiHeight, setPdfWidth, setSidebarWidth, sidebarWidth, updateOutlineHeight]);
 
   const selectNode = (node: WorkspaceTreeNode) => {
     if (node.type === "directory") return;
@@ -229,6 +257,20 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     } else setPdfWidth(pdfBeforeCollapse);
   };
 
+  const refreshAfterSync = useCallback(async () => {
+    const nextProject = await refreshWorkspace(undefined, selectedPath ?? undefined);
+    const preferredPath = selectedPath && findNode(treeRef.current, selectedPath) ? selectedPath : nextProject.mainDocument;
+    setSelectedPath(preferredPath);
+    try {
+      setFileDocument(await api.projects.readFile(projectId, preferredPath));
+    } catch {
+      setSelectedPath(nextProject.mainDocument);
+      setFileDocument(await api.projects.readFile(projectId, nextProject.mainDocument));
+    }
+    setSelection(null);
+    setTargetSelection(null);
+  }, [projectId, refreshWorkspace, selectedPath]);
+
   if (loading) return <WorkspaceLoading />;
   if (error || !project) return <WorkspaceError message={error || "Project not found"} />;
   const pdfSourceLocation = selection ? { path: selection.path, line: selection.startLine } : cursorLocation.path ? cursorLocation : null;
@@ -244,6 +286,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         </div>
         <div className="workspace-topbar__right">
           <span className="skill-badge">{project.skill.name}</span>
+          {project.source.type === "github" ? <Button className="workspace-sync-button" size="small" variant="secondary" icon={<RefreshCw />} onClick={() => setSyncOpen(true)}>Sync</Button> : null}
           <IconButton label="Project settings" icon={<MoreHorizontal />} onClick={() => void openSettings()} />
         </div>
       </header>
@@ -255,20 +298,21 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               <header className="panel-heading"><div><FolderTree /><span>Files</span></div><div><IconButton label={checkpointState === "saving" ? "Saving local history checkpoint" : checkpointState === "saved" ? "Local history checkpoint saved" : checkpointState === "error" ? "Retry local history checkpoint" : "Save local history checkpoint"} icon={<GitCommitHorizontal />} disabled={checkpointState === "saving"} onClick={async () => { setCheckpointState("saving"); try { await api.projects.checkpoint(projectId); setCheckpointState("saved"); window.setTimeout(() => setCheckpointState("idle"), 2000); } catch { setCheckpointState("error"); } }} /><IconButton label="New file" icon={<FilePlus2 />} onClick={() => setNewFileOpen(true)} /><IconButton label="Add external file" icon={<Upload />} onClick={() => setAddFileOpen(true)} /><IconButton label="Rename selected file" icon={<Pencil />} disabled={selectedNode?.type !== "file"} onClick={() => setRenameOpen(true)} /><IconButton label="Move selected file to trash" icon={<Trash2 />} variant="danger" disabled={selectedNode?.type !== "file" || selectedPath === project.mainDocument} onClick={() => { setDeleteError(""); setDeleteOpen(true); }} /><IconButton label="Collapse files panel" icon={<ChevronLeft />} onClick={collapseSidebar} /></div></header>
               <FileTree nodes={tree} selectedPath={selectedPath} mainDocument={project.mainDocument} onSelect={selectNode} onExpand={expandDirectory} />
             </section>
-            <section className="sidebar-section sidebar-section--outline">
-              <header className="panel-heading panel-heading--plain"><span>Document outline</span></header>
-              <OutlineTree items={outline} onSelect={selectOutline} />
+            {!outlineCollapsed ? <PanelDivider label="Resize document outline" orientation="horizontal" active={resizing === "outline"} value={outlineHeight} min={120} max={640} onPointerDown={() => setResizing("outline")} onKeyboardChange={updateOutlineHeight} /> : null}
+            <section className={`sidebar-section sidebar-section--outline${outlineCollapsed ? " is-collapsed" : ""}`} style={{ height: outlineCollapsed ? 35 : outlineHeight }}>
+              <header className="panel-heading panel-heading--plain"><span>Document outline</span><IconButton label={outlineCollapsed ? "Expand document outline" : "Collapse document outline"} icon={outlineCollapsed ? <ChevronUp /> : <ChevronDown />} onClick={() => setOutlineCollapsed(!outlineCollapsed)} /></header>
+              {!outlineCollapsed ? <OutlineTree items={outline} onSelect={selectOutline} /> : null}
             </section>
           </aside>
         ) : (
-          <button className="collapsed-rail collapsed-rail--left" onClick={collapseSidebar} aria-label="Expand files panel" title="Expand files panel"><ChevronRight /></button>
+          <button className="collapsed-rail collapsed-rail--left" onClick={collapseSidebar} aria-label="Expand files panel" title="Expand files panel"><ChevronRight /><span>Files</span></button>
         )}
         <PanelDivider label="Resize files panel" active={resizing === "sidebar"} value={sidebarWidth} min={0} max={420} onPointerDown={() => setResizing("sidebar")} onKeyboardChange={setSidebarWidth} />
 
         <main className="workspace-center">
           <section className="editor-region">
             {fileDocument ? (
-              <SourceEditor projectId={projectId} document={fileDocument} targetLine={targetLine} targetSelection={targetSelection} onSelection={(nextSelection) => { setSelection(nextSelection); if (nextSelection || !targetSelection) setTargetSelection(null); }} onCursor={setCursorLocation} onSaved={(saved) => { setFileDocument(saved); void refreshWorkspace(undefined, saved.file.path); }} />
+              <SourceEditor ref={editorRef} projectId={projectId} document={fileDocument} targetLine={targetLine} targetSelection={targetSelection} onSelection={(nextSelection) => { setSelection(nextSelection); if (nextSelection || !targetSelection) setTargetSelection(null); }} onCursor={setCursorLocation} onSaved={async (saved) => { setFileDocument((current) => current?.file.path === saved.file.path ? saved : current); await refreshWorkspace(undefined, saved.file.path); }} />
             ) : selectedNode?.type === "file" && selectedNode.kind === "image" ? (
               <AssetPreview projectId={projectId} path={selectedNode.path} name={selectedNode.name} />
             ) : (
@@ -276,7 +320,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             )}
           </section>
           <PanelDivider label="Resize AI workspace" orientation="horizontal" active={resizing === "ai"} value={aiHeight} min={220} max={760} onPointerDown={() => setResizing("ai")} onKeyboardChange={setAiHeight} />
-          <AiWorkspace project={project} selection={selection} sectionSelection={sectionSelection} height={aiHeight} onSetHeight={setAiHeight} fullscreen={aiFullscreen} onToggleFullscreen={() => setAiFullscreen((value) => !value)} onUseSelection={(nextSelection) => { setSelection(nextSelection); setTargetSelection(nextSelection); }} onClearSelection={() => { setSelection(null); setTargetSelection(null); }} onRestoreSelection={async (savedSelection) => {
+          <AiWorkspace project={project} selection={selection} sectionSelection={sectionSelection} height={aiHeight} fullscreen={aiFullscreen} onToggleFullscreen={() => setAiFullscreen((value) => !value)} onUseSelection={(nextSelection) => { setSelection(nextSelection); setTargetSelection(nextSelection); }} onClearSelection={() => { setSelection(null); setTargetSelection(null); }} onRestoreSelection={async (savedSelection) => {
             try {
               const opened = await api.projects.readFile(projectId, savedSelection.path);
               if (opened.file.version !== savedSelection.fileVersion || opened.content.slice(savedSelection.from, savedSelection.to) !== savedSelection.text) return false;
@@ -288,7 +332,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               setCursorLocation({ path: restored.path, line: restored.startLine });
               return true;
             } catch { return false; }
-          }} onPrepareLocalRevision={prepareLocalRevision} compileState={compileState} onRequestCompile={() => setCompileRequest((value) => value + 1)} onNavigate={(path, line) => { void navigateToPath(path, line); }} onFileChanged={async (path, range) => {
+          }} onPrepareLocalRevision={prepareLocalRevision} compileState={compileState} compileRepairRequest={compileRepairRequest} onRequestCompile={() => setCompileRequest((value) => value + 1)} onNavigate={(path, line) => { void navigateToPath(path, line); }} onWorkspaceChanged={async () => { await refreshWorkspace(undefined, selectedPath ?? undefined); }} onFileChanged={async (path, range) => {
             const updatedProject = await refreshWorkspace(undefined, path);
             setProject(updatedProject);
             setSelectedPath(path);
@@ -308,11 +352,11 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         <PanelDivider label="Resize PDF preview" active={resizing === "pdf"} value={pdfWidth} min={0} max={780} reverse onPointerDown={() => setResizing("pdf")} onKeyboardChange={setPdfWidth} />
         {pdfWidth > 0 ? (
           <div className="workspace-pdf" style={{ width: pdfWidth }}>
-            <PdfPane projectId={projectId} projectVersion={project.version} mainDocument={project.mainDocument} tree={tree} sourceLocation={pdfSourceLocation} compileRequest={compileRequest} onCompileState={handleCompileState} onSyncToSource={(location) => { void navigateToPath(location.path, location.line); }} />
+            <PdfPane projectId={projectId} projectVersion={project.version} mainDocument={project.mainDocument} tree={tree} sourceLocation={pdfSourceLocation} compileRequest={compileRequest} onCompileState={handleCompileState} onFixWithAgent={fixCompileWithAgent} onSyncToSource={(location) => { void navigateToPath(location.path, location.line); }} />
             <IconButton className="pdf-collapse" label="Collapse PDF preview" icon={<PanelRightClose />} onClick={collapsePdf} />
           </div>
         ) : (
-          <button className="collapsed-rail collapsed-rail--right" onClick={collapsePdf} aria-label="Expand PDF preview" title="Expand PDF preview"><PanelRightOpen /></button>
+          <button className="collapsed-rail collapsed-rail--right" onClick={collapsePdf} aria-label="Expand PDF preview" title="Expand PDF preview"><PanelRightOpen /><span>PDF</span></button>
         )}
       </div>
 
@@ -320,7 +364,8 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       <AddFileDialog open={addFileOpen} projectId={projectId} onClose={() => setAddFileOpen(false)} onAdded={async (path) => { setAddFileOpen(false); await refreshWorkspace(undefined, path); setSelectedPath(path); }} />
       <RenameFileDialog open={renameOpen} projectId={projectId} path={selectedPath ?? ""} onClose={() => setRenameOpen(false)} onRenamed={async (path) => { setRenameOpen(false); await refreshWorkspace(undefined, path); setSelectedPath(path); }} />
       <ProjectSettingsDialog open={settingsOpen} project={project} tree={settingsTree} onClose={() => setSettingsOpen(false)} onSaved={async (updated) => { setProject(updated); setSettingsOpen(false); await refreshWorkspace(undefined, updated.mainDocument); setSelectedPath(updated.mainDocument); }} />
-      <Dialog open={deleteOpen} title="Move file to trash?" description={selectedPath ?? ""} onClose={() => setDeleteOpen(false)} footer={<><Button variant="ghost" onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="danger" icon={<Trash2 />} onClick={async () => { if (!selectedPath) return; setDeleteError(""); try { await api.projects.deleteFile(projectId, selectedPath); setDeleteOpen(false); setSelectedPath(project.mainDocument); await refreshWorkspace(); } catch (deleteFailure) { setDeleteError(deleteFailure instanceof Error ? deleteFailure.message : "Could not delete file"); } }}>Move to trash</Button></>}><p className="dialog-copy">The file is moved to the project trash and can be recovered from workspace storage.</p>{deleteError ? <div className="form-error" role="alert">{deleteError}</div> : null}</Dialog>
+      {project.source.type === "github" ? <GithubSyncDialog open={syncOpen} project={project} compileState={compileState} onClose={() => setSyncOpen(false)} onFlushEditor={() => editorRef.current?.flush() ?? Promise.resolve()} onWorkspaceApplied={refreshAfterSync} onRequestCompile={() => setCompileRequest((value) => value + 1)} /> : null}
+      <Dialog open={deleteOpen} title="Move file to trash?" description={selectedPath ?? ""} onClose={() => setDeleteOpen(false)} footer={<><Button variant="ghost" onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="danger" icon={<Trash2 />} onClick={async () => { if (!selectedPath) return; setDeleteError(""); try { await editorRef.current?.flush(); await api.projects.deleteFile(projectId, selectedPath); setDeleteOpen(false); setSelectedPath(project.mainDocument); await refreshWorkspace(); } catch (deleteFailure) { setDeleteError(deleteFailure instanceof Error ? deleteFailure.message : "Could not delete file"); } }}>Move to trash</Button></>}><p className="dialog-copy">The file is moved to the project trash and can be recovered from workspace storage.</p>{deleteError ? <div className="form-error" role="alert">{deleteError}</div> : null}</Dialog>
     </div>
   );
 }
@@ -425,6 +470,18 @@ function useStoredNumber(key: string, initial: number): [number, (value: number)
   const update = useCallback((next: number) => {
     setValue(next);
     localStorage.setItem(key, String(Math.round(next)));
+  }, [key]);
+  return [value, update];
+}
+
+function useStoredBoolean(key: string, initial: boolean): [boolean, (value: boolean) => void] {
+  const [value, setValue] = useState(() => {
+    const stored = localStorage.getItem(key);
+    return stored === null ? initial : stored === "true";
+  });
+  const update = useCallback((next: boolean) => {
+    setValue(next);
+    localStorage.setItem(key, String(next));
   }, [key]);
   return [value, update];
 }

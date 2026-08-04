@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type MutableRefObject } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import "monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution";
@@ -9,6 +9,7 @@ import { completionSuffix } from "./completion";
 
 type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
 type CompletionMetricEvent = "suggested" | "cancelled" | "accepted" | "ignored" | "error";
+type SaveTarget = { path: string; baseVersion: number };
 
 declare global {
   interface Window {
@@ -108,12 +109,16 @@ interface SourceEditorProps {
   document: FileContentResponse;
   targetLine: number | null;
   targetSelection: TextSelection | null;
-  onSaved: (document: FileContentResponse) => void;
+  onSaved: (document: FileContentResponse) => void | Promise<void>;
   onSelection: (selection: TextSelection | null) => void;
   onCursor: (location: SourceLocation) => void;
 }
 
-export function SourceEditor({ projectId, document, targetLine, targetSelection, onSaved, onSelection, onCursor }: SourceEditorProps) {
+export interface SourceEditorHandle {
+  flush: () => Promise<void>;
+}
+
+export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ projectId, document, targetLine, targetSelection, onSaved, onSelection, onCursor }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
@@ -135,6 +140,7 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
   const shouldCompleteRef = useRef(false);
   const suppressNextCompletionRef = useRef(false);
   const versionRef = useRef(document.file.version);
+  const savedContentRef = useRef(document.content);
   const [editorReady, setEditorReady] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("saved");
   const [message, setMessage] = useState("");
@@ -165,29 +171,45 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
     setCompletionLoading(false);
   };
 
-  const save = async (content: string) => {
+  const save = async (content: string, propagateError = false, target: SaveTarget = { path: currentPathRef.current, baseVersion: versionRef.current }) => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    setStatus("saving");
+    if (currentPathRef.current === target.path) setStatus("saving");
     try {
-      const path = documentRef.current.file.path;
-      const result = await api.projects.saveFile(projectId, path, { content, baseVersion: versionRef.current }, controller.signal);
-      versionRef.current = result.file.version;
-      setStatus("saved");
-      setMessage("");
-      onSaved({ file: result.file, content });
+      const result = await api.projects.saveFile(projectId, target.path, { content, baseVersion: target.baseVersion }, controller.signal);
+      if (currentPathRef.current === target.path) {
+        versionRef.current = result.file.version;
+        savedContentRef.current = content;
+        setStatus("saved");
+        setMessage("");
+      }
+      await onSaved({ file: result.file, content });
     } catch (error) {
       if ((error as DOMException).name === "AbortError") return;
-      if (error instanceof ApiClientError && error.status === 409) {
-        setStatus("conflict");
-        setMessage("This file changed elsewhere. Reopen it before saving again.");
-      } else {
-        setStatus("error");
-        setMessage(error instanceof Error ? error.message : "Save failed");
+      if (currentPathRef.current === target.path) {
+        if (error instanceof ApiClientError && error.status === 409) {
+          setStatus("conflict");
+          setMessage("This file changed elsewhere. Reopen it before saving again.");
+        } else {
+          setStatus("error");
+          setMessage(error instanceof Error ? error.message : "Save failed");
+        }
       }
+      if (propagateError) throw error;
     }
   };
+
+  const flush = async () => {
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    timerRef.current = null;
+    const content = modelRef.current?.getValue();
+    if (content !== undefined && content !== savedContentRef.current) {
+      await save(content, true, { path: currentPathRef.current, baseVersion: versionRef.current });
+    }
+  };
+
+  useImperativeHandle(ref, () => ({ flush }));
 
   const update = (content: string) => {
     setStatus("dirty");
@@ -197,7 +219,8 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
     shouldCompleteRef.current = !suppressNextCompletionRef.current;
     suppressNextCompletionRef.current = false;
     if (timerRef.current) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => void save(content), 850);
+    const target = { path: currentPathRef.current, baseVersion: versionRef.current };
+    timerRef.current = window.setTimeout(() => void save(content, false, target), 850);
   };
   contentChangeRef.current = update;
 
@@ -264,6 +287,8 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
     if (!editorReady || !editor) return;
     const pathChanged = currentPathRef.current !== document.file.path;
     if (pathChanged) {
+      cancelCompletion();
+      setCompletionError("");
       editor.setModel(null);
       modelRef.current?.dispose();
       const uri = monaco.Uri.from({ scheme: "fastwrite", authority: projectId, path: `/${document.file.path}` });
@@ -281,6 +306,7 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
     }
     editor.updateOptions({ ariaLabel: `Source editor for ${document.file.path}` });
     versionRef.current = document.file.version;
+    savedContentRef.current = document.content;
     setStatus("saved");
     setMessage("");
     setCompletion(null);
@@ -301,7 +327,8 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
           recordCompletionMetric("suggested", result.kind, performance.now() - startedAt);
         }
       } catch (error) {
-        if ((error as DOMException).name !== "AbortError" && !(error instanceof ApiClientError && error.status === 409)) {
+        const stillCurrent = expected.path === currentPathRef.current && expected.fileVersion === versionRef.current && expected.cursor === cursorRef.current;
+        if (stillCurrent && (error as DOMException).name !== "AbortError" && !(error instanceof ApiClientError && error.status === 409)) {
           setCompletionError(error instanceof Error ? error.message : "Completion unavailable");
           recordCompletionMetric("error", completionKind);
         }
@@ -432,7 +459,7 @@ export function SourceEditor({ projectId, document, targetLine, targetSelection,
       {message ? <div className={`editor-message editor-message--${status}`} role="alert"><AlertCircle /> {message}</div> : null}
     </div>
   );
-}
+});
 
 function emitSelection(
   editor: monaco.editor.IStandaloneCodeEditor,

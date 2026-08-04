@@ -8,6 +8,8 @@ import type {
   DraftPlanResponse,
   DraftRequest,
   GithubImportRequest,
+  GithubSyncResolution,
+  GithubSyncRun,
   OutlineItem,
   PaperFile,
   PaperProject,
@@ -95,7 +97,10 @@ export const api = {
     cancel: (id: string) => request<void>(`/api/upload-sessions/${id}`, { method: "DELETE" })
   },
   github: {
-    import: (body: GithubImportRequest, signal?: AbortSignal) => request<PaperProject>("/api/project-imports/github", jsonInit("POST", body, signal))
+    import: (body: GithubImportRequest, signal?: AbortSignal) => request<PaperProject>("/api/project-imports/github", jsonInit("POST", body, signal)),
+    startSync: (projectId: string, signal?: AbortSignal) => request<GithubSyncRun>(`/api/projects/${projectId}/github-sync`, { method: "POST", ...(signal ? { signal } : {}) }),
+    resolveSync: (projectId: string, syncId: string, resolutions: GithubSyncResolution[]) => request<GithubSyncRun>(`/api/projects/${projectId}/github-sync/${syncId}/resolve`, jsonInit("POST", { resolutions })),
+    finalizeSync: (projectId: string, syncId: string) => request<GithubSyncRun>(`/api/projects/${projectId}/github-sync/${syncId}/finalize`, { method: "POST" })
   },
   revisions: {
     propose: (projectId: string, body: ReviseRequest, signal?: AbortSignal) => request<ReviseResponse>(`/api/projects/${projectId}/revisions`, jsonInit("POST", body, signal)),
@@ -104,7 +109,8 @@ export const api = {
     rollback: (projectId: string, changeSetId: string) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/rollback`, { method: "POST" }),
     get: (projectId: string, changeSetId: string, signal?: AbortSignal) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}`, signal ? { signal } : undefined),
     edit: (projectId: string, changeSetId: string, body: ChangeSetEditRequest) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}`, jsonInit("PATCH", body)),
-    decide: (projectId: string, changeSetId: string, body: ChangeSetDecisionRequest) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/decide`, jsonInit("POST", body))
+    decide: (projectId: string, changeSetId: string, body: ChangeSetDecisionRequest) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/decide`, jsonInit("POST", body)),
+    finish: (projectId: string, changeSetId: string) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/finish`, { method: "POST" })
   },
   drafts: {
     list: (projectId: string, signal?: AbortSignal) => request<DraftPlan[]>(`/api/projects/${projectId}/drafts`, signal ? { signal } : undefined),
@@ -124,8 +130,11 @@ export const api = {
     extract: (projectId: string, signal?: AbortSignal) => request<PaperMemory>(`/api/projects/${projectId}/memory/extract`, { method: "POST", ...(signal ? { signal } : {}) }),
     apply: (projectId: string) => request<PaperMemory>(`/api/projects/${projectId}/memory/apply`, { method: "POST" }),
     updateOverview: (projectId: string, body: { content: string; locked?: boolean }) => request<PaperMemory>(`/api/projects/${projectId}/memory/overview`, jsonInit("PATCH", body)),
+    acceptOverviewCandidate: (projectId: string) => request<PaperMemory>(`/api/projects/${projectId}/memory/overview/accept`, { method: "POST" }),
     updateSection: (projectId: string, sectionId: string, body: { content: string; locked?: boolean }) => request<PaperMemory>(`/api/projects/${projectId}/memory/sections/${encodeURIComponent(sectionId)}`, jsonInit("PATCH", body)),
+    acceptSectionCandidate: (projectId: string, sectionId: string) => request<PaperMemory>(`/api/projects/${projectId}/memory/sections/${encodeURIComponent(sectionId)}/accept`, { method: "POST" }),
     updateItem: (projectId: string, itemId: string, body: { status?: MemoryItemStatus; content?: string; label?: string }) => request<PaperMemory>(`/api/projects/${projectId}/memory/items/${itemId}`, jsonInit("PATCH", body)),
+    acceptItemCandidate: (projectId: string, itemId: string) => request<PaperMemory>(`/api/projects/${projectId}/memory/items/${itemId}/accept`, { method: "POST" }),
     rollback: (projectId: string) => request<PaperMemory>(`/api/projects/${projectId}/memory/rollback`, { method: "POST" })
   },
   agentTasks: {

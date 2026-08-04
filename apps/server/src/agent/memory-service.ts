@@ -141,6 +141,51 @@ export class MemoryService {
     return this.saveAndSync(latest);
   }
 
+  async acceptOverviewCandidate(projectId: string): Promise<PaperMemory> {
+    const latest = this.requireLatest(projectId);
+    const candidate = latest.overview?.candidate;
+    if (!latest.overview || !candidate) throw new ApiError(409, "memory_candidate_not_found", "Paper overview has no regenerated candidate");
+    latest.overview.content = candidate.content;
+    latest.overview.origin = "ai";
+    latest.overview.humanEdited = false;
+    latest.overview.locked = true;
+    latest.overview.updatedAt = now();
+    delete latest.overview.candidate;
+    return this.saveAndSync(latest);
+  }
+
+  async acceptSectionCandidate(projectId: string, sectionId: string): Promise<PaperMemory> {
+    const latest = this.requireLatest(projectId);
+    const section = latest.sections?.find((candidate) => candidate.id === sectionId);
+    if (!section?.candidate) throw new ApiError(409, "memory_candidate_not_found", "Paper Memory section has no regenerated candidate");
+    section.content = section.candidate.content;
+    section.sources = section.candidate.sources;
+    section.origin = "ai";
+    section.humanEdited = false;
+    section.locked = true;
+    section.updatedAt = now();
+    delete section.candidate;
+    return this.saveAndSync(latest);
+  }
+
+  async acceptItemCandidate(projectId: string, itemId: string): Promise<PaperMemory> {
+    const latest = this.requireLatest(projectId);
+    const item = latest.items.find((candidate) => candidate.id === itemId);
+    if (!item?.candidate) throw new ApiError(409, "memory_candidate_not_found", "Paper Memory fact has no regenerated candidate");
+    item.label = item.candidate.label;
+    item.content = item.candidate.content;
+    item.sources = item.candidate.sources;
+    item.key = itemKey(item.category, item.label);
+    item.origin = "ai";
+    item.humanEdited = false;
+    item.status = "confirmed";
+    item.locked = true;
+    item.freshness = freshness(item.sources, this.database.snapshot().fileVersions[projectId] ?? {});
+    item.updatedAt = now();
+    delete item.candidate;
+    return this.saveAndSync(latest);
+  }
+
   rollback(projectId: string): Promise<PaperMemory> {
     const memories = this.database.snapshot().paperMemories.filter((memory) => memory.projectId === projectId).sort((a, b) => b.version - a.version);
     if (memories.length < 2) throw new ApiError(409, "memory_no_previous_version", "Paper Memory has no previous version");

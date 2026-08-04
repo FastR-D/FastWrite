@@ -12,9 +12,9 @@ type MemoryPart = { key: string; title: string; content: string; candidate?: str
   | { kind: "item"; id: string; label: string }
 );
 
-export function MemoryDialog({ open, project, onClose, onNavigate }: { open: boolean; project: PaperProject; onClose: () => void; onNavigate: (path: string, line?: number) => void }) {
+export function MemoryDialog({ open, project, onClose, onNavigate, onChanged }: { open: boolean; project: PaperProject; onClose: () => void; onNavigate: (path: string, line?: number) => void; onChanged: () => void | Promise<void> }) {
   const [memory, setMemory] = useState<PaperMemory | null>(null);
-  const [operation, setOperation] = useState<"generating" | "applying" | "saving" | null>(null);
+  const [operation, setOperation] = useState<"generating" | "applying" | "saving" | "accepting" | null>(null);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<MemoryPart | null>(null);
   const [draft, setDraft] = useState("");
@@ -32,13 +32,13 @@ export function MemoryDialog({ open, project, onClose, onNavigate }: { open: boo
   const candidates = useMemo(() => candidateEntries(memory), [memory]);
   const regenerate = async () => {
     setOperation("generating"); setError("");
-    try { setMemory(await api.memory.extract(project.id)); }
+    try { setMemory(await api.memory.extract(project.id)); await onChanged(); }
     catch (failure) { setError(message(failure)); }
     finally { setOperation(null); }
   };
   const apply = async () => {
     setOperation("applying"); setError("");
-    try { setMemory(await api.memory.apply(project.id)); }
+    try { setMemory(await api.memory.apply(project.id)); await onChanged(); }
     catch (failure) { setError(message(failure)); }
     finally { setOperation(null); }
   };
@@ -54,6 +54,22 @@ export function MemoryDialog({ open, project, onClose, onNavigate }: { open: boo
           : await api.memory.updateItem(project.id, editing.id, { content: draft, label: editing.label });
       setMemory(updated);
       setEditing(null);
+      await onChanged();
+    } catch (failure) { setError(message(failure)); }
+    finally { setOperation(null); }
+  };
+  const acceptCandidate = async (part: MemoryPart) => {
+    if (!part.candidate) return;
+    setOperation("accepting"); setError("");
+    try {
+      const updated = part.kind === "overview"
+        ? await api.memory.acceptOverviewCandidate(project.id)
+        : part.kind === "section"
+          ? await api.memory.acceptSectionCandidate(project.id, part.id)
+          : await api.memory.acceptItemCandidate(project.id, part.id);
+      setMemory(updated);
+      setEditing(null);
+      await onChanged();
     } catch (failure) { setError(message(failure)); }
     finally { setOperation(null); }
   };
@@ -65,10 +81,10 @@ export function MemoryDialog({ open, project, onClose, onNavigate }: { open: boo
     {memory && candidates.length ? <Button variant="primary" icon={<Check />} loading={loading} disabled={Boolean(editing)} onClick={() => void apply()}>Apply reviewed memory</Button> : null}
     <Button variant={memory ? "secondary" : "primary"} icon={loading ? <LoaderCircle className="spin" /> : <RefreshCw />} loading={loading} onClick={() => void regenerate()}>{memory ? "Regenerate candidate" : "Generate Memory"}</Button>
   </>}>
-    {loading ? <div className="agent-progress"><LoaderCircle className="spin" /><strong>{operation === "saving" ? "Polishing edited Memory" : operation === "applying" ? "Applying reviewed Memory" : "Building Paper Memory"}</strong><span>Existing user instructions remain unchanged.</span></div> : memory ? <div className="memory-panel memory-panel--review">
+    {loading ? <div className="agent-progress"><LoaderCircle className="spin" /><strong>{operation === "saving" ? "Polishing edited Memory" : operation === "accepting" ? "Accepting Memory candidate" : operation === "applying" ? "Applying reviewed Memory" : "Building Paper Memory"}</strong><span>Existing user instructions remain unchanged.</span></div> : memory ? <div className="memory-panel memory-panel--review">
       <section className="memory-file-callout"><FileText /><div><strong>memory.md is in the paper root</strong><span>User Instructions are edited directly in the file. Save any overview, section, or fact below to persist it immediately.</span></div></section>
       <div className="memory-review-summary"><strong>{candidates.length ? `${candidates.length} candidate entries to review` : "Reviewed memory is current"}</strong><span>{parts.length} editable parts</span></div>
-      {parts.length ? <div className="memory-review">{parts.map((part) => <article className="memory-review-card" key={part.key}><header><span>{part.title}</span>{editing?.key === part.key ? <div><IconButton label="Polish and save memory part" icon={<Save />} variant="secondary" disabled={!draft.trim()} onClick={() => void savePart()} /><IconButton label="Cancel editing memory part" icon={<X />} onClick={() => setEditing(null)} /></div> : <IconButton label={`Edit ${part.title}`} icon={<Pencil />} onClick={() => beginEdit(part)} />}</header>{editing?.key === part.key ? <AutoSizeTextarea label={`Edit ${part.title}`} value={draft} onChange={setDraft} /> : <p className="memory-review-card__candidate">{part.content}</p>}{part.candidate && part.candidate !== part.content ? <div className="memory-candidate"><span>Regenerated candidate</span><p>{part.candidate}</p></div> : null}</article>)}</div> : <div className="memory-empty"><Database /><span>Regenerate after changing the manuscript to create editable memory parts.</span></div>}
+      {parts.length ? <div className="memory-review">{parts.map((part) => <article className="memory-review-card" key={part.key}><header><span>{part.title}</span>{editing?.key === part.key ? <div><IconButton label="Polish and save memory part" icon={<Save />} variant="secondary" disabled={!draft.trim()} onClick={() => void savePart()} /><IconButton label="Cancel editing memory part" icon={<X />} onClick={() => setEditing(null)} /></div> : <IconButton label={`Edit ${part.title}`} icon={<Pencil />} onClick={() => beginEdit(part)} />}</header>{editing?.key === part.key ? <AutoSizeTextarea label={`Edit ${part.title}`} value={draft} onChange={setDraft} /> : <p className="memory-review-card__candidate">{part.content}</p>}{part.candidate && part.candidate !== part.content ? <div className="memory-candidate"><Button size="small" variant="primary" icon={<Check />} onClick={() => void acceptCandidate(part)}>Accept candidate</Button><p>{part.candidate}</p></div> : null}</article>)}</div> : <div className="memory-empty"><Database /><span>Regenerate after changing the manuscript to create editable memory parts.</span></div>}
     </div> : <div className="review-empty"><Database /><h3>Build a paper memory</h3><p>Generate evidence-backed context, inspect the complete candidate, and save it as an editable root-level memory.md file.</p></div>}
     {error ? <div className="form-error" role="alert">{error}</div> : null}
   </Dialog>;

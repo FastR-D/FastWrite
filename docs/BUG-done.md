@@ -2,6 +2,147 @@
 
 > **状态：全部已解决，并于 2026-08-04 完成回归验证。**
 
+## 2026-08-04 Agent 全量 Reject 后进入下一轮
+
+1. Agent 点 Reject all 没有效果；应该结束本轮 Agent 修改并进入下一轮修改需求输入界面。
+
+   **已解决（2026-08-04）**：全量 Reject 原本已在服务端正确结束 ChangeSet，但前端完成 `reset` 后又关闭 Agent Tab 并切到 Revise，导致下一轮 Agent composer 被隐藏。现在拒绝全部 pending hunk 或在全部逐项拒绝后完成审核，都会结束当前 ChangeSet、清空已拒绝的目标，并直接留在空白 Agent 需求输入界面；`Leave review` 仍只离开当前 Tab 并保留未完成审核。
+
+### 回归验证
+
+- `bun run typecheck`、`bun test`（106 pass）、生产构建和 `git diff --check` 通过。
+- 源码服务器完整 Chromium smoke 通过；新增回归先执行 `Reject pending & complete`，确认空白 Agent composer 可见并能立即创建第二轮任务，再继续验证逐 hunk 审核与冲突覆盖。
+- 新 `app-bin/fastwrite` 完整 Chromium smoke 通过，SHA-256 为 `66b0be899001824ffe075bfeeba7925368ee0e1ea9814d5f84f29eb5ee103404`。
+- 打包前后 `paperdata/database.json` SHA-256 均为 `8c973ebd2ee7e16e8bca81e83d05d585e963255fbd89cb8cd095025dd8aa75d6`，数据文件数均为 149。
+
+## 2026-08-04 Agent 审核语义、逐 hunk 编辑与冲突覆盖
+
+1. Agent 审核中的离开、批量决定和完成动作语义重复；总统计和文件统计需要显示完整状态名并按状态着色。
+
+   **已解决（2026-08-04）**：`Leave review` 只离开 Agent Tab，任务保持可恢复；仍有 pending 时显示 `Reject pending & complete` 与 `Accept pending & complete`，只处理剩余 pending hunk 并自动完成；全部逐项决定后只显示 `Complete review`，用于终结 ChangeSet 状态。左上总统计和右上文件统计完整显示 `Pending / Accepted / Rejected`，三种状态使用一致且可区分的颜色。
+
+2. Agent 不应整文件编辑 proposal，需要逐 hunk 精修并保留其他审核决定。
+
+   **已解决（2026-08-04）**：Agent 模式移除整文件 `Edit proposal`，每个 pending/rejected hunk 提供 `Edit hunk`。accepted hunk 必须先切换为 rejected 才能编辑；保存后保留同文件其他 hunk 的 ID 与 accepted/rejected 状态，并记录 `hunk-edited` 审计事件。
+
+3. Agent 审核期间 Workspace 文件可能被外部修改，覆盖必须重新 diff 并由用户显式确认。
+
+   **已解决（2026-08-04）**：决定 hunk 时若当前文件不再匹配已审核状态，服务端返回 `changeset_conflict_review_required`，前端展示 `Current workspace -> reviewed result`。只有点击 `Overwrite with reviewed result` 才覆盖；确认携带最新 `currentVersion`，文件再次变化后旧确认失效并返回新 diff。服务端先验证全部触及文件再写入，冲突不会造成部分应用，ChangeSet 也不会被永久卡在 conflict 状态。
+
+4. FastWrite 全局 `Ctrl+S` / `Cmd+S` 必须保存论文，不能让浏览器保存 HTML。
+
+   **已解决（2026-08-04）**：应用根级在 capture 阶段拦截快捷键并统一 flush 当前论文文件。真实浏览器将焦点放在非编辑器的 Agent 按钮后触发快捷键，浏览器默认保存被阻止，`main.tex` 立即通过 Workspace API 保存且文件版本递增。
+
+### 回归验证
+
+- `bun run typecheck`、`bun test`（102 pass）、`bun run build` 和 `git diff --check` 通过。
+- 源码服务器完整 Chromium smoke 通过；1440x900、1280x800、720x800 无页面横向溢出，Agent 统计与冲突对话框在 1440x900、720x800 均无重叠。
+- 同一套完整 smoke 以 `FASTWRITE_E2E_SERVER_BIN=./app-bin/fastwrite` 直接运行在 release 二进制上并通过，不是只验证源码服务器或健康接口。
+- 新 `app-bin/fastwrite` SHA-256 为 `0152600420f59e2ba5d7a780379a49a1f4d0f3f6517e18eb4637395dd8056580`；打包前后 `paperdata/database.json` SHA-256 均为 `8c973ebd2ee7e16e8bca81e83d05d585e963255fbd89cb8cd095025dd8aa75d6`，数据文件数均为 149。
+
+## 2026-08-04 Agent ChangeSet 审核、进度与生成粒度
+
+1. Agent 的 Accept file、Reject all / Accept all 需要严格区分 pending、accepted 和 rejected hunk，并允许已接受结果回退。
+
+   **已解决（2026-08-04）**：ChangeSet 使用显式结束审核状态；Accept file / Accept all 只处理 pending hunk，accepted 与 rejected 可以互相切换。总统计与文件标题显示完整 Pending、Accepted、Rejected 并按状态着色；紧凑文件行保留 P/A/R 计数。新文件的接受与拒绝也能正确创建或删除。
+
+2. Agent 工作阶段缺少逐文件进度，且审核结束需要明确的完成动作。
+
+   **已解决（2026-08-04）**：计划确认后按文件独立生成并更新 AgentRun steps 与 generation-progress 审计事件；审核界面将离开、批量决定并完成、无 pending 时完成三种动作分开，完成后可用 `New task` 返回 composer。
+
+3. Agent 生成不能删除用户留下的 LaTeX 注释；单次 LLM 上下文需要按计划文件拆分。
+
+   **已解决（2026-08-04）**：生成结果会恢复基线中的 LaTeX 注释，并对每个计划文件单独调用一次 LLM，限制辅助上下文范围。`/draft`、`/continue`、`/revise` 按钮改为内容自适应宽度。
+
+### 回归验证
+
+- `bun run release:check`：通过；typecheck、100 项源码测试、生产构建和完整 Chromium E2E 均通过。
+- 最新 `app-bin/fastwrite`：SHA-256 为 `f8f65b9d24a601dbb1e60c44bdffe3477e757b02c098ccba90c1e5d0479a6210`；保留现有 `paperdata/` 项目数据，未删除或重置。
+- 新二进制真实浏览器验证：健康接口返回 `{"status":"ok"}`；非编辑器焦点触发 `Ctrl-S` 时阻止浏览器保存 HTML，论文通过 Workspace API 保存且文件版本递增。
+
+## 2026-08-04 Paper Review、Agent 命令与全局保存收尾
+
+1. Paper Review 右上角的缩放按钮失效。
+
+   **已解决（2026-08-04）**：恢复 Compact、Wide 和 Fullscreen 三档尺寸切换，三档宽高严格递增，并保留手动调整后的 Review 宽度。release 真实浏览器已逐档验证。
+
+2. Agent 模式的 `/draft` 命令因缺少 `affectedFiles` 崩溃；同时需要确认 `/continue`、`/revise` 和完整初稿生成可用。
+
+   **已解决（2026-08-04）**：Agent 输出兼容缺失 `affectedFiles` 或 `files` 的响应，不再对 `undefined` 调用 `.map()`。完整文件生成统一使用 300 秒超时，规划和普通 AI 操作仍保持 120 秒。release 中真实执行并接受 `/draft`、`/continue`、`/revise`，ChangeSet 分别为 `change_5a392ebf-9896-4d86-a0a0-91c876d1137b`、`change_ee8a4706-4211-407d-be33-9d9116b3cdf7`、`change_e0f462a4-b658-4f4c-9ba2-86e939d20ea9`，三次变更均成功编译。
+
+3. Agent 模式的 `/draft`、`/continue`、`/revise` 应改成按钮，并在点击后保留用户已经输入的目标文本。
+
+   **已解决（2026-08-04）**：三个命令作为 composer 下方的直接入口展示，点击后替换已有命令但保留 objective；完成 Agent 任务后点击 `New task` 会回到空白 composer，不再循环展示已接受的历史任务。
+
+4. FastWrite 全局 `Ctrl+S` / `Cmd+S` 应保存论文，不能触发浏览器保存 HTML。
+
+   **已解决（2026-08-04）**：应用在 `window` 捕获阶段统一拦截保存快捷键并阻止浏览器默认行为；进入工作区后会立即 flush 当前论文源文件。release 中从非编辑器控件触发快捷键，确认没有 Save Page 对话框、文件版本递增、正文只有一个 `\\documentclass`，且服务器重新编译成功。
+
+### 回归验证
+
+- `bun run release:check`：通过；包含 typecheck、100 项源码测试、生产构建和完整 Chromium E2E。
+- `bun test`：100 项通过，0 失败。
+- `app-bin/fastwrite`：真实浏览器已验证全局保存、三个 Agent 命令、`New task`、Review 三档尺寸和编译流程，控制台无应用错误。
+- release 二进制 SHA-256：`f8f65b9d24a601dbb1e60c44bdffe3477e757b02c098ccba90c1e5d0479a6210`。
+
+## 2026-08-04 全局保存、Memory 候选、Revise 多轮与可调工作区
+
+1. 本地已有 Git commit，但界面没有 History；需要判断是否增加 History。
+
+   **已 Justify（2026-08-04）**：本轮不增加只读 History 列表。FastWrite 的内部 `history.git` 继续承担自动保存、结构变更和手动 checkpoint 的本地恢复基础；GitHub 提供公开 commit history。当前产品尚未提供浏览、比较与恢复的一体化操作，只展示 commit 列表会让用户误以为能够直接恢复。待这三项能力作为完整工作流实现后，再增加 History UI。
+
+2. `Ctrl+S` / `Cmd+S` 应在 Editor 中直接保存论文，而不是触发浏览器保存 HTML。
+
+   **已解决（2026-08-04）**：应用根级全局捕捉 `Ctrl+S` / `Cmd+S`，在任意焦点位置都阻止浏览器默认保存网页；工作区收到统一保存事件后立即 flush 当前论文文件。release 中将焦点放在 Agent 按钮时实测，文件版本从 1 增至 2，未出现浏览器保存对话框。
+
+3. Memory 的 regenerated candidate 缺少单项接受入口。
+
+   **已解决（2026-08-04）**：Overview、Section 和 Fact 候选均提供 `Accept candidate`。单项接受直接采用已经审核的候选，不再次调用 AI polish；接受后立即更新 `memory.md` 和工作区版本，并触发重新编译。release 真实模型生成 4 个候选后，接受 Overview 使候选数降为 3；新二进制继续接受 Section 后从 3 降为 2，PDF 从等待编译自动恢复为 current/success。
+
+4. Revise 需要在 Accept 前支持人工编辑候选，并基于人工稿继续多轮对话。
+
+   **已解决（2026-08-04）**：每轮 Revise 都以最新未接受候选作为 `workingText`；用户可直接进入 Edit，修改完整候选，再在同一聊天中继续提出要求。Diff 始终比较原始论文选区和当前最新候选，只有最终 Accept 才写入文件，Reject 不改变正文。真实模型验证中，人工稿加入 `Manual draft`、`Across 120 manuscripts` 和 `cut`，下一轮成功在该人工稿上把 `cut` 改为 `reduced`；Reject 后 API 确认论文正文未变。
+
+5. Agent、Revise 和 Review 最大化窗口应默认 800px 居中，并可手动调整；Document Outline 应可调高度和折叠。
+
+   **已解决（2026-08-04）**：Agent/Revise 最大化主体默认 800px，小视口使用全部可用宽度，显式分隔条支持指针和键盘调整，宽度持久化并始终居中。Review 同样默认 800px，增加 `Resize Paper Review window` 分隔条，最小 560px、最大为视口可用宽度。Document Outline 使用专用水平分隔条，默认 250px、最小 120px、最大 640px 且受侧栏可用空间限制，高度持久化；折叠后保留底部 35px 标题栏。release 实测 Review 从 800px 调至 960px后仍居中，Outline 从 250px 调至 266px，并可在 35px 折叠态和展开态之间恢复。
+
+### 发布回归中追加修复
+
+- Completion 在模型返回不带前导空格的英文续写时会形成 `workflowreduces`；现在只在没有前缀重叠且两个 ASCII 单词边界直接相邻时补空格，同时保留部分单词回显去重。真实模型复验结果为 `workflow reduces ...`。
+- 快速编辑、切换或删除文件时，旧自动保存计时器曾读取新的当前路径，可能把旧文件内容写入主文件。保存任务现在固定捕获编辑发生时的路径和 base version；迟到的旧文件保存不会替换当前编辑器，删除前会先 flush。release 按原竞态路径连续复验两次，主文件 SHA-256 均保持 `6bf79d93...e66`，测试文件均进入回收站，且没有迟到的 Completion 错误。
+- 浏览器 E2E 已同步当前 SyncTeX、Agent Tab、Paper Memory 和 Completion 的无障碍名称与工作流，修正了长期失效的 release gate。
+
+### 回归验证
+
+- `bun run release:check`：通过；包含 typecheck、86 项源码测试、生产构建和完整 Chromium E2E。
+- `bun test`：90 项通过；包括全局保存快捷键、Memory 三类候选接受、Revise 多轮、GitHub Sync、Completion 边界和工作区 API 集成测试。
+- `bun run package:app`：通过；最终 release SHA-256 为 `3aa3b65e7bb8bccb490f8d6c9524ef82667fc589a8d4dc1593271bb5a45a2b3e`，`paperdata/` 原样保留。
+- release 真实功能：项目创建与设置、文件新建/重命名/回收站、全局保存、手动 Git checkpoint、导出、Browser WASM 与 Local LaTeX、PDF/SyncTeX、Completion、Outline、Revise、Memory、Review、Agent、GitHub 导入校验均通过。
+- 真实模型：Revise 多轮与人工稿、Memory 生成/应用/再生成/单项接受、Review、Agent plan/confirm/ChangeSet/Reject、Completion 均通过；Review 生成 6 个 evidence-linked issues。
+- 浏览器 E2E：1440x900、1280x800 和 720x800 均无页面横向溢出；Revise 操作不被遮挡；编译错误保留上一份 PDF；严重/关键可访问性违规为 0，最终 reload 无应用 console error。
+
+## 2026-08-04 GitHub Sync 与工作区折叠栏
+
+1. GitHub 同步应只有一个手动 `Sync` 入口，并完成保存、checkpoint、三方合并、冲突解决、编译和单 commit 推送。
+
+   **已解决（2026-08-04）**：GitHub 导入项目的顶栏只显示一个 `Sync`。点击后先强制保存当前 Editor，再创建内部 Git checkpoint；服务端以导入或上次同步 commit 为基线，在独立 staging repository 中合并 Workspace 与最新远端 HEAD。冲突会暂停在同一对话框；每个文本冲突块展示 Base、FastWrite 和 GitHub 内容，并允许在结果区逐行或逐句保留、删除、改写或重新输入，`Keep FastWrite` / `Keep GitHub` 只是当前冲突块的快捷填充。每个文本结果都确认，且二进制、rename/delete、modify/delete 和路径冲突都显式选择后，才能继续 Sync。合并结果写回 Workspace 并成功编译后，若相对远端存在净变化，只生成一条以最新远端为父的 `Sync from FastWrite` commit 并 fast-forward push；仅远端变化不创建空 commit。finalize 会复查 Workspace version 和远端 HEAD，任何一方在流程中变化都会停止，不执行 rebase、force-push 或覆盖新编辑。
+
+2. 左右 panel 折叠后缺少 `Files` / `PDF` 文字，折叠轨道又不能占用过多宽度。
+
+   **已解决（2026-08-04）**：左右折叠轨道恢复竖排 `Files` / `PDF`，保持原有 `18px` 宽度和展开图标。真实浏览器测得两个轨道均为 `18px`，标签横向占宽 `9px`，没有横向或纵向溢出。
+
+3. Agent / Revise panel 不需要 panel height 选项。
+
+   **已解决（2026-08-04）**：移除 `Panel height` 及 Compact / Comfortable / Tall 预设；保留原有水平分隔条拖拽、键盘调整和全屏入口，用户可直接控制高度。
+
+### 回归验证
+
+- `bun run typecheck`：通过。
+- `bun test`：84 项通过；新增本地 bare Git 集成测试覆盖本地 push、仅远端更新、文本冲突编辑和 fetch 后远端前进且不 force-push。
+- `bun run build`：通过（仅保留既有 WASM export 与大 chunk 警告）。
+- 真实浏览器：单一 `Sync` 入口、错误清洗、18px `Files/PDF` 折叠标签、无 `Panel height` 控件均通过，控制台无应用错误。
+
 ## 2026-08-04 PDF 初始适配、Memory 编辑与版本设计
 
 1. PDF 预览第一次打开时没有默认适配整个可见区域。

@@ -144,6 +144,41 @@ export interface GithubImportRequest {
   venue?: TargetVenue;
 }
 
+export type GithubSyncStatus = "conflicts" | "ready-to-compile" | "completed" | "remote-changed" | "failed";
+export type GithubSyncConflictKind = "text" | "binary" | "delete-modify";
+export type GithubSyncResolutionChoice = "fastwrite" | "github" | "edited";
+
+export interface GithubSyncConflict {
+  path: string;
+  kind: GithubSyncConflictKind;
+  baseContent?: string;
+  fastwriteContent?: string;
+  githubContent?: string;
+}
+
+export interface GithubSyncRun {
+  id: string;
+  projectId: string;
+  status: GithubSyncStatus;
+  repository: string;
+  branch: string;
+  baseCommit: string;
+  remoteCommit: string;
+  projectVersion?: number;
+  hasChangesToPush: boolean;
+  conflicts: GithubSyncConflict[];
+  pushedCommit?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GithubSyncResolution {
+  path: string;
+  choice: GithubSyncResolutionChoice;
+  content?: string;
+}
+
 export type ReviseCommandId =
   | "academic-polish"
   | "logic-check"
@@ -188,7 +223,7 @@ export interface AgentRun {
 
 export interface AgentAuditEvent {
   id: string;
-  action: "context-read" | "context-search" | "plan-created" | "execution-started" | "changes-proposed" | "proposal-edited" | "hunk-decision" | "compile" | "rollback";
+  action: "context-read" | "context-search" | "plan-created" | "execution-started" | "generation-progress" | "changes-proposed" | "proposal-edited" | "hunk-edited" | "hunk-decision" | "review-finished" | "compile" | "rollback";
   summary: string;
   paths?: string[];
   createdAt: string;
@@ -239,10 +274,24 @@ export interface TextChange {
 
 export interface ChangeSetDecisionRequest {
   decisions: Array<{ path: string; hunkIds: string[]; status: "accepted" | "rejected" }>;
+  overwriteConflicts?: Array<{ path: string; currentVersion: number | null }>;
 }
 
 export interface ChangeSetEditRequest {
-  changes: Array<{ path: string; after: string }>;
+  changes?: Array<{ path: string; after: string }>;
+  hunks?: Array<{ path: string; hunkId: string; after: string }>;
+}
+
+export interface ChangeSetConflictFile {
+  path: string;
+  currentContent: string | null;
+  reviewedContent: string;
+  currentVersion: number | null;
+}
+
+export interface ChangeSetConflictDetails {
+  changeSetId: string;
+  conflicts: ChangeSetConflictFile[];
 }
 
 export interface ChangeSet {
@@ -253,6 +302,8 @@ export interface ChangeSet {
   summary: string;
   rationale: string;
   changes: TextChange[];
+  approvalMode?: "explicit-finish";
+  reviewFinishedAt?: string;
   appliedFileVersion?: number;
   createdAt: string;
   updatedAt: string;

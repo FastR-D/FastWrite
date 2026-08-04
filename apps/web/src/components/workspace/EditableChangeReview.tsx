@@ -8,11 +8,13 @@ interface EditableChangeReviewProps {
   change: TextChange;
   busy: boolean;
   readOnly?: boolean;
+  editingDisabled?: boolean;
   onDecide: (hunkIds: string[], status: "accepted" | "rejected") => void;
-  onSave: (after: string) => Promise<void>;
+  onSave?: (after: string) => Promise<void>;
+  onEditHunk?: (hunkId: string, after: string) => Promise<void>;
 }
 
-export function EditableChangeReview({ change, busy, readOnly = false, onDecide, onSave }: EditableChangeReviewProps) {
+export function EditableChangeReview({ change, busy, readOnly = false, editingDisabled = false, onDecide, onSave, onEditHunk }: EditableChangeReviewProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(change.after);
   const [saving, setSaving] = useState(false);
@@ -28,7 +30,7 @@ export function EditableChangeReview({ change, busy, readOnly = false, onDecide,
     setSaving(true);
     setError("");
     try {
-      await onSave(draft);
+      await onSave!(draft);
       setEditing(false);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Could not save the edited proposal");
@@ -38,8 +40,8 @@ export function EditableChangeReview({ change, busy, readOnly = false, onDecide,
   };
 
   if (!editing) return <div className="editable-change-review">
-    {!readOnly ? <div className="editable-change-review__bar"><span>Review the generated Diff, or edit the proposed text before accepting.</span><Button size="small" variant="secondary" icon={<Pencil />} disabled={busy} onClick={() => setEditing(true)}>Edit proposal</Button></div> : null}
-    <ChangeHunkReview change={change} busy={busy} onDecide={onDecide} />
+    {!readOnly && onSave ? <div className="editable-change-review__bar"><span>{editingDisabled ? "This file has decided hunks; continue reviewing them below." : "Review the generated Diff, or edit the proposed text before accepting."}</span>{!editingDisabled ? <Button size="small" variant="secondary" icon={<Pencil />} disabled={busy} onClick={() => setEditing(true)}>Edit proposal</Button> : null}</div> : null}
+    <ChangeHunkReview change={change} busy={busy} readOnly={readOnly} onDecide={onDecide} {...(onEditHunk ? { onEditHunk } : {})} />
   </div>;
 
   return <div className="proposal-editor">

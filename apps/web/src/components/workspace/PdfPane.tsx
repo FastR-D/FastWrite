@@ -1,23 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { AlertTriangle, CheckCircle2, FileOutput, LoaderCircle, LocateFixed, Maximize2, Minimize2, OctagonX, RotateCw, Scan, Search, X, ZoomIn, ZoomOut } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileOutput, LoaderCircle, LocateFixed, Maximize2, Minimize2, OctagonX, RotateCw, Scan, Search, Wrench, X, ZoomIn, ZoomOut } from "lucide-react";
 import { parseLatexDiagnostics, parseSyncTex, pdfToSource, sourceToPdf, type PdfLocation, type SourceLocation, type SyncTexDocument, type WorkspaceTreeNode } from "@fastwrite/shared";
 import { Button, IconButton } from "../ui/Button";
 import { cancelCompiler, repairCompilerCache, subscribeCompilerProgress } from "../../services/latexCompiler";
 import { compileWorkspace } from "../../services/workspaceCompiler";
 import { api } from "../../api/client";
 import { fitPdfPageScale, MAX_PDF_SCALE, MIN_PDF_SCALE } from "./pdfScale";
+import { compilerLogExcerpt, shouldAutoCompile, type CompileEngine, type CompileFailureContext } from "./compileRepair";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export type CompileState = "idle" | "loading" | "compiling" | "success" | "error";
-export interface CompileStateReport { state: CompileState; compiledVersion: number | null }
-type CompileEngine = "browser" | "server";
+export interface CompileStateReport { state: CompileState; compiledVersion: number | null; failure?: CompileFailureContext }
 
-export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceLocation, compileRequest, onCompileState, onSyncToSource }: { projectId: string; projectVersion: number; mainDocument: string; tree: WorkspaceTreeNode[]; sourceLocation: SourceLocation | null; compileRequest: number; onCompileState: (report: CompileStateReport) => void; onSyncToSource: (location: SourceLocation) => void }) {
+export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceLocation, compileRequest, onCompileState, onFixWithAgent, onSyncToSource }: { projectId: string; projectVersion: number; mainDocument: string; tree: WorkspaceTreeNode[]; sourceLocation: SourceLocation | null; compileRequest: number; onCompileState: (report: CompileStateReport) => void; onFixWithAgent: (failure: CompileFailureContext) => void; onSyncToSource: (location: SourceLocation) => void }) {
   const paneRef = useRef<HTMLElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef(new Map<number, HTMLDivElement>());
@@ -41,13 +41,21 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [syncTex, setSyncTex] = useState<SyncTexDocument | null>(null);
   const [compiledVersion, setCompiledVersion] = useState<number | null>(null);
+  const [lastAttemptedVersion, setLastAttemptedVersion] = useState<number | null>(null);
   const [syncHighlight, setSyncHighlight] = useState<PdfLocation | null>(null);
   const [compiledWorkspacePaths, setCompiledWorkspacePaths] = useState<string[]>([]);
   const [fullscreen, setFullscreen] = useState(false);
   const workspacePaths = useMemo(() => compiledWorkspacePaths.length ? compiledWorkspacePaths : flattenWorkspacePaths(tree), [compiledWorkspacePaths, tree]);
   const diagnostics = useMemo(() => parseLatexDiagnostics(log, workspacePaths, mainDocument), [log, mainDocument, workspacePaths]);
   // The WASM compiler can retain failed intermediate passes in its log even when a later pass produces a PDF.
-  const visibleDiagnostics = state === "success" ? diagnostics.filter((diagnostic) => diagnostic.severity !== "error") : diagnostics;
+  const visibleDiagnostics = useMemo(() => state === "success" ? diagnostics.filter((diagnostic) => diagnostic.severity !== "error") : diagnostics, [diagnostics, state]);
+  const failure = useMemo<CompileFailureContext | undefined>(() => state === "error" ? {
+    engine: compileEngine,
+    mainDocument,
+    summary: progress,
+    diagnostics: visibleDiagnostics.map(({ severity, message, path, line }) => ({ severity, message, ...(path ? { path } : {}), ...(line ? { line } : {}) })),
+    logExcerpt: compilerLogExcerpt(log || progress)
+  } : undefined, [compileEngine, log, mainDocument, progress, state, visibleDiagnostics]);
   const activeSyncTex = compiledVersion === projectVersion ? syncTex : null;
 
   useEffect(() => { localStorage.setItem(`fastwrite.compile-engine.${projectId}`, compileEngine); }, [compileEngine, projectId]);
@@ -75,6 +83,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
 
   const compile = useCallback(async () => {
     hasCompiledRef.current = true;
+    setLastAttemptedVersion(projectVersion);
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -140,16 +149,16 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
   }, [compile]);
 
   useEffect(() => {
-    if (!hasCompiledRef.current || compiledVersion === null || compiledVersion === projectVersion) return;
+    if (!shouldAutoCompile(hasCompiledRef.current, lastAttemptedVersion, projectVersion)) return;
     if (autoCompileTimerRef.current) window.clearTimeout(autoCompileTimerRef.current);
     setProgress("Saved changes · waiting to recompile…");
     autoCompileTimerRef.current = window.setTimeout(() => void compile(), 1_200);
     return () => {
       if (autoCompileTimerRef.current) window.clearTimeout(autoCompileTimerRef.current);
     };
-  }, [compile, compiledVersion, projectVersion]);
+  }, [compile, lastAttemptedVersion, projectVersion]);
 
-  useEffect(() => { onCompileState({ state, compiledVersion }); }, [compiledVersion, onCompileState, state]);
+  useEffect(() => { onCompileState({ state, compiledVersion, ...(failure ? { failure } : {}) }); }, [compiledVersion, failure, onCompileState, state]);
 
   useEffect(() => {
     if (compileRequest === compileRequestRef.current) return;
@@ -255,6 +264,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
         {resourcePercent !== null ? <div className="compile-strip__meter" role="progressbar" aria-label="Compiler resource loading" aria-valuemin={0} aria-valuemax={100} aria-valuenow={resourcePercent} style={{ width: `${resourcePercent}%` }} /> : null}
         <CompileStatusIcon state={state} />
         <span>{progress}</span>
+        {failure ? <button className="compile-fix-agent" onClick={() => onFixWithAgent(failure)}><Wrench />Fix with Agent</button> : null}
         <label className="compile-engine"><span className="visually-hidden">Compilation engine</span><select value={compileEngine} disabled={isRunning} onChange={(event) => setCompileEngine(event.target.value as CompileEngine)}><option value="browser">Browser WASM</option><option value="server">Local LaTeX</option></select></label>
         {isRunning ? <button onClick={cancel}>Cancel</button> : <button onClick={() => void compile()}>{pdfUrl ? "Recompile" : "Compile"}</button>}
         {compileEngine === "browser" && state === "error" ? <button onClick={() => void repairAndRetry()}>Repair cache</button> : null}

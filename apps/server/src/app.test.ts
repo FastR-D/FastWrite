@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { ChangeSet, CompletionResponse, FileContentResponse, PaperMemory, PaperProject, ReviseResponse, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
-import type { AgentProvider, CompletionAgentInput, ReviseAgentInput } from "./agent/provider";
+import type { ChangeSet, ChangeSetConflictDetails, CompletionResponse, FileContentResponse, PaperMemory, PaperProject, ReviseResponse, SaveFileResponse, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { AgentProvider, AgentTaskPlanOutput, CompletionAgentInput, DraftGeneratedFile, ReviseAgentInput } from "./agent/provider";
 import { createApplication, mimeType } from "./app";
 
 const temporaryDirectories: string[] = [];
@@ -523,17 +523,25 @@ describe("workspace API", () => {
 
   test("routes a unified Agent draft command through a reviewed plan that may create source files", async () => {
     let seenIntent = "";
+    const generatedTargets: string[] = [];
     const provider: AgentProvider = {
       async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
       async planAgentTask(input) { seenIntent = input.intent; return { steps: ["Create the editable outline"], affectedFiles: ["main.tex", "sections/introduction.tex", "references.bib"], risks: [], validation: ["Compile"] }; },
-      async generateAgentTask() { return { files: [
-        { path: "main.tex", content: "\\documentclass{article}\\begin{document}\\input{sections/introduction}\\end{document}", rationale: "Sets up the paper." },
-        { path: "sections/introduction.tex", content: "\\section{Introduction}\nTODO: Add evidence.", rationale: "Creates an editable outline section." },
-        { path: "references.bib", content: "% Add verified references.", rationale: "Creates the bibliography placeholder." }
-      ] }; }
+      async generateAgentTask(input) {
+        const target = input.affectedFiles[0]!;
+        generatedTargets.push(target);
+        const generated: Record<string, DraftGeneratedFile> = {
+          "main.tex": { path: "main.tex", content: "\\documentclass{article}\\begin{document}\\input{sections/introduction}\\end{document}", rationale: "Sets up the paper." },
+          "sections/introduction.tex": { path: "sections/introduction.tex", content: "\\section{Introduction}\nTODO: Add evidence.", rationale: "Creates an editable outline section." },
+          "references.bib": { path: "references.bib", content: "% Add verified references.", rationale: "Creates the bibliography placeholder." }
+        };
+        return { files: [generated[target]!] };
+      }
     };
     const request = await testApplication(provider);
     const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Unified Agent" }) })).json() as PaperProject;
+    const originalMain = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: `${originalMain.content}% Keep this user instruction.\n`, baseVersion: originalMain.file.version }) });
     const planned = await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "/draft Plan a paper about robust authentication", scope: { type: "project" } }) });
     expect(planned.status).toBe(201);
     const body = await planned.json() as { plan: { id: string; intent: string; affectedFiles: string[] } };
@@ -541,10 +549,77 @@ describe("workspace API", () => {
     expect(body.plan).toMatchObject({ intent: "draft", affectedFiles: ["main.tex", "sections/introduction.tex", "references.bib"] });
     const generated = await request(`/api/projects/${project.id}/agent-tasks/${body.plan.id}/confirm`, { method: "POST" });
     expect(generated.status).toBe(201);
-    const changeSet = await generated.json() as { changeSet: { id: string } };
+    expect(generatedTargets).toEqual(["main.tex", "sections/introduction.tex", "references.bib"]);
+    const changeSet = await generated.json() as { changeSet: ChangeSet; run: { steps: Array<{ id: string; label: string; status: string }>; auditTrail: Array<{ action: string }> } };
+    expect(changeSet.changeSet).toMatchObject({ approvalMode: "explicit-finish", status: "proposed" });
+    expect(changeSet.run.steps).toEqual([
+      { id: "generate-file-1", label: "Generate main.tex", status: "completed" },
+      { id: "generate-file-2", label: "Generate sections/introduction.tex", status: "completed" },
+      { id: "generate-file-3", label: "Generate references.bib", status: "completed" }
+    ]);
+    expect(changeSet.run.auditTrail.filter((event) => event.action === "generation-progress")).toHaveLength(3);
+    expect(changeSet.changeSet.changes.find((change) => change.path === "main.tex")?.after).toContain("% Keep this user instruction.");
     expect((await request(`/api/projects/${project.id}/file?path=sections%2Fintroduction.tex`)).status).toBe(404);
-    expect((await request(`/api/projects/${project.id}/change-sets/${changeSet.changeSet.id}/accept`, { method: "POST" })).status).toBe(200);
-    expect(await (await request(`/api/projects/${project.id}/file?path=sections%2Fintroduction.tex`)).json()).toMatchObject({ content: expect.stringContaining("TODO") });
+    const mainChange = changeSet.changeSet.changes.find((change) => change.path === "main.tex")!;
+    expect((await request(`/api/projects/${project.id}/change-sets/${changeSet.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: [{ path: mainChange.path, hunkIds: mainChange.hunks!.map((hunk) => hunk.id), status: "accepted" }] }) })).status).toBe(200);
+    const editedIntroduction = "\\section{Introduction}\nTODO: Add bounded authentication evidence.";
+    const edited = await request(`/api/projects/${project.id}/change-sets/${changeSet.changeSet.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ changes: [{ path: "sections/introduction.tex", after: editedIntroduction }] }) });
+    expect(edited.status).toBe(200);
+    const editedChangeSet = await edited.json() as ChangeSet;
+    const introductionChange = editedChangeSet.changes.find((change) => change.path === "sections/introduction.tex")!;
+    expect((await request(`/api/projects/${project.id}/change-sets/${changeSet.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: [{ path: introductionChange.path, hunkIds: introductionChange.hunks!.map((hunk) => hunk.id), status: "accepted" }] }) })).status).toBe(200);
+    expect(await (await request(`/api/projects/${project.id}/file?path=sections%2Fintroduction.tex`)).json()).toMatchObject({ content: editedIntroduction });
+    expect((await request(`/api/projects/${project.id}/change-sets/${changeSet.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: [{ path: introductionChange.path, hunkIds: introductionChange.hunks!.map((hunk) => hunk.id), status: "rejected" }] }) })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/file?path=sections%2Fintroduction.tex`)).status).toBe(404);
+    const accepted = await request(`/api/projects/${project.id}/change-sets/${changeSet.changeSet.id}/accept`, { method: "POST" });
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toMatchObject({ status: "accepted", reviewFinishedAt: expect.any(String), changes: expect.arrayContaining([expect.objectContaining({ path: "sections/introduction.tex", hunks: expect.arrayContaining([expect.objectContaining({ status: "rejected" })]) })]) });
+    expect((await request(`/api/projects/${project.id}/file?path=sections%2Fintroduction.tex`)).status).toBe(404);
+  });
+
+  test("routes every explicit Agent command and repairs an incomplete compatible-model plan", async () => {
+    const seenIntents: string[] = [];
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async planAgentTask(input) {
+        seenIntents.push(input.intent);
+        if (input.intent === "draft") return { steps: ["Draft the paper"] } as AgentTaskPlanOutput;
+        return { steps: [`Run the ${input.intent} task`], affectedFiles: ["main.tex"], risks: [], validation: ["Compile"] };
+      }
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Agent commands" }) })).json() as PaperProject;
+    const objectives = [
+      "/draft Write a complete initial paper",
+      "/continue Finish every TODO section",
+      "/revise Improve the paper-wide argument"
+    ];
+    const plans: Array<{ intent: string; request: { objective: string }; affectedFiles: string[]; validation: string[] }> = [];
+    for (const objective of objectives) {
+      const response = await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective, scope: { type: "project" } }) });
+      expect(response.status).toBe(201);
+      plans.push(((await response.json()) as { plan: typeof plans[number] }).plan);
+    }
+    expect(seenIntents).toEqual(["draft", "continue", "revise"]);
+    expect(plans.map((plan) => plan.intent)).toEqual(["draft", "continue", "revise"]);
+    expect(plans.map((plan) => plan.request.objective)).toEqual(["Write a complete initial paper", "Finish every TODO section", "Improve the paper-wide argument"]);
+    expect(plans[0]?.affectedFiles).toEqual(["main.tex"]);
+    expect(plans[0]?.validation).toEqual(["Compile the resulting paper", "Review every proposed file before accepting"]);
+  });
+
+  test("returns a structured error when Agent execution omits generated files", async () => {
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async planAgentTask() { return { steps: ["Inspect the paper"], affectedFiles: ["main.tex"], risks: [], validation: ["Compile"] }; },
+      async generateAgentTask() { return {} as { files: never[] }; }
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Agent output validation" }) })).json() as PaperProject;
+    const planned = await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "/draft Make a paper", scope: { type: "project" } }) });
+    const plan = ((await planned.json()) as { plan: { id: string } }).plan;
+    const generated = await request(`/api/projects/${project.id}/agent-tasks/${plan.id}/confirm`, { method: "POST" });
+    expect(generated.status).toBe(502);
+    expect(await generated.json()).toMatchObject({ error: { code: "agent_files_invalid" } });
   });
 
   test("restores Review and IssueResolution state after a server restart", async () => {
@@ -740,6 +815,15 @@ describe("workspace API", () => {
     expect(regenerated.overview?.candidate?.content).toBe("The paper proposes an expanded telemetry protocol.");
     expect(regenerated.sections?.find((item) => item.id === section.id)?.content).toBe("Human-authored introduction summary.");
     expect(regenerated.sections?.find((item) => item.id === section.id)?.candidate?.content).toBe("Introduces expanded telemetry protection.");
+
+    const acceptedOverview = (await (await request(`/api/projects/${project.id}/memory/overview/accept`, { method: "POST" })).json()) as PaperMemory;
+    expect(acceptedOverview.overview).toMatchObject({ content: "The paper proposes an expanded telemetry protocol.", locked: true, humanEdited: false });
+    expect(acceptedOverview.overview?.candidate).toBeUndefined();
+    const acceptedSection = (await (await request(`/api/projects/${project.id}/memory/sections/${section.id}/accept`, { method: "POST" })).json()) as PaperMemory;
+    expect(acceptedSection.sections?.find((item) => item.id === section.id)).toMatchObject({ content: "Introduces expanded telemetry protection.", locked: true, humanEdited: false });
+    const acceptedFact = (await (await request(`/api/projects/${project.id}/memory/items/${fact.id}/accept`, { method: "POST" })).json()) as PaperMemory;
+    expect(acceptedFact.items.find((item) => item.id === fact.id)).toMatchObject({ content: "The protocol protects telemetry and endpoint metadata.", status: "confirmed", locked: true, humanEdited: false });
+    expect(polishCalls).toHaveLength(3);
   });
 
   test("writes a reviewable root memory.md and supplies its user instructions without re-ingesting the file", async () => {
@@ -905,10 +989,22 @@ describe("workspace API", () => {
     expect(intermediate.content).toContain("old result");
 
     const final = await (await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: [{ path: "main.tex", hunkIds: [change.hunks![1]!.id], status: "rejected" }] }) })).json() as ChangeSet;
-    expect(final.status).toBe("accepted");
+    expect(final.status).toBe("partially-accepted");
     expect(final.changes[0]!.hunks?.map((hunk) => hunk.status)).toEqual(["accepted", "rejected"]);
     const partiallyApplied = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
     expect(partiallyApplied.content).toBe(intermediate.content);
+
+    const reversed = await (await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: [{ path: "main.tex", hunkIds: [change.hunks![0]!.id], status: "rejected" }] }) })).json() as ChangeSet;
+    expect(reversed.changes[0]!.hunks?.map((hunk) => hunk.status)).toEqual(["rejected", "rejected"]);
+    expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toBe(original);
+
+    const reconsidered = await (await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: [{ path: "main.tex", hunkIds: [change.hunks![1]!.id], status: "accepted" }] }) })).json() as ChangeSet;
+    expect(reconsidered.changes[0]!.hunks?.map((hunk) => hunk.status)).toEqual(["rejected", "accepted"]);
+    const beforeFinish = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    expect(beforeFinish.content).toContain("old method");
+    expect(beforeFinish.content).toContain("new result");
+    const finished = await (await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/finish`, { method: "POST" })).json() as ChangeSet;
+    expect(finished).toMatchObject({ status: "accepted", approvalMode: "explicit-finish", reviewFinishedAt: expect.any(String) });
 
     const appliedProject = await (await request(`/api/projects/${project.id}`)).json() as PaperProject;
     await request(`/api/projects/${project.id}/compile-results`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectVersion: appliedProject.version, status: "success", summary: "Partial hunk fixture compiled" }) });
@@ -920,5 +1016,89 @@ describe("workspace API", () => {
     expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toBe(original);
     const rolledBackAudit = await (await request(`/api/projects/${project.id}/agent-runs`)).json() as Array<{ auditTrail: Array<{ action: string }> }>;
     expect(rolledBackAudit[0]!.auditTrail.some((event) => event.action === "rollback")).toBe(true);
+  });
+
+  test("edits one Agent hunk without resetting decisions in the same file", async () => {
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async planAgentTask() { return { steps: ["Revise two claims"], affectedFiles: ["main.tex"], risks: [], validation: ["Compile"] }; },
+      async generateAgentTask(input) {
+        const document = input.documents.find((candidate) => candidate.path === "main.tex")!;
+        return { files: [{ path: "main.tex", content: document.content.replace("old method", "new method").replace("old result", "new result"), rationale: "Updates two independent claims." }] };
+      }
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Hunk editing" }) })).json() as PaperProject;
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const original = "title\nkeep alpha\nold method\nkeep beta\nold result\nend\n";
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: original, baseVersion: opened.file.version }) });
+    const planned = await (await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "Update both claims", scope: { type: "project" } }) })).json() as { plan: { id: string } };
+    const generated = await (await request(`/api/projects/${project.id}/agent-tasks/${planned.plan.id}/confirm`, { method: "POST" })).json() as { changeSet: ChangeSet };
+    const change = generated.changeSet.changes[0]!;
+    const methodHunk = change.hunks!.find((hunk) => hunk.before.includes("old method"))!;
+    const resultHunk = change.hunks!.find((hunk) => hunk.before.includes("old result"))!;
+    await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: [{ path: change.path, hunkIds: [methodHunk.id], status: "accepted" }] }) });
+
+    const editedAfter = resultHunk.after.replace("new result", "author-refined result");
+    const editedResponse = await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ hunks: [{ path: change.path, hunkId: resultHunk.id, after: editedAfter }] }) });
+    expect(editedResponse.status).toBe(200);
+    const edited = await editedResponse.json() as ChangeSet;
+    expect(edited.changes[0]!.hunks?.map((hunk) => ({ id: hunk.id, status: hunk.status }))).toEqual([{ id: methodHunk.id, status: "accepted" }, { id: resultHunk.id, status: "pending" }]);
+    expect(edited.changes[0]!.after).toContain("author-refined result");
+    const beforeSecondAccept = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    expect(beforeSecondAccept.content).toContain("new method");
+    expect(beforeSecondAccept.content).toContain("old result");
+
+    await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: [{ path: change.path, hunkIds: [resultHunk.id], status: "accepted" }] }) });
+    expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toContain("author-refined result");
+    const runs = await (await request(`/api/projects/${project.id}/agent-runs`)).json() as Array<{ auditTrail: Array<{ action: string }> }>;
+    expect(runs[0]!.auditTrail.some((event) => event.action === "hunk-edited")).toBe(true);
+  });
+
+  test("previews external Agent conflicts and requires the latest version token before overwrite", async () => {
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async planAgentTask() { return { steps: ["Revise the method"], affectedFiles: ["main.tex"], risks: [], validation: ["Compile"] }; },
+      async generateAgentTask(input) {
+        const document = input.documents.find((candidate) => candidate.path === "main.tex")!;
+        return { files: [{ path: "main.tex", content: document.content.replace("old method", "reviewed method"), rationale: "Updates the method claim." }] };
+      }
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Conflict overwrite" }) })).json() as PaperProject;
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const original = "title\nold method\nend\n";
+    const savedOriginal = await (await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: original, baseVersion: opened.file.version }) })).json() as SaveFileResponse;
+    const planned = await (await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "Update the method", scope: { type: "project" } }) })).json() as { plan: { id: string } };
+    const generated = await (await request(`/api/projects/${project.id}/agent-tasks/${planned.plan.id}/confirm`, { method: "POST" })).json() as { changeSet: ChangeSet };
+    const change = generated.changeSet.changes[0]!;
+    const externalContent = original.replace("end", "external edit\nend");
+    const external = await (await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: externalContent, baseVersion: savedOriginal.file.version }) })).json() as SaveFileResponse;
+    const decisions = [{ path: change.path, hunkIds: change.hunks!.map((hunk) => hunk.id), status: "accepted" as const }];
+
+    const firstConflictResponse = await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions }) });
+    expect(firstConflictResponse.status).toBe(409);
+    const firstConflictBody = await firstConflictResponse.json() as { error: { code: string; details: ChangeSetConflictDetails } };
+    expect(firstConflictBody.error.code).toBe("changeset_conflict_review_required");
+    expect(firstConflictBody.error.details.conflicts[0]).toMatchObject({ path: "main.tex", currentContent: externalContent, currentVersion: external.file.version });
+    expect(firstConflictBody.error.details.conflicts[0]!.reviewedContent).toContain("reviewed method");
+    expect((await (await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}`)).json() as ChangeSet).status).toBe("proposed");
+    expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toBe(externalContent);
+
+    const changedAgainContent = externalContent.replace("end", "second external edit\nend");
+    const changedAgain = await (await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: changedAgainContent, baseVersion: external.file.version }) })).json() as SaveFileResponse;
+    const staleOverwriteResponse = await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions, overwriteConflicts: [{ path: "main.tex", currentVersion: external.file.version }] }) });
+    expect(staleOverwriteResponse.status).toBe(409);
+    const latestConflict = await staleOverwriteResponse.json() as { error: { details: ChangeSetConflictDetails } };
+    expect(latestConflict.error.details.conflicts[0]!.currentVersion).toBe(changedAgain.file.version);
+    expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toBe(changedAgainContent);
+
+    const overwrittenResponse = await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions, overwriteConflicts: [{ path: "main.tex", currentVersion: changedAgain.file.version }] }) });
+    expect(overwrittenResponse.status).toBe(200);
+    const overwritten = await overwrittenResponse.json() as ChangeSet;
+    expect(overwritten.status).toBe("partially-accepted");
+    const finalFile = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    expect(finalFile.content).toBe(latestConflict.error.details.conflicts[0]!.reviewedContent);
+    expect(finalFile.content).not.toContain("external edit");
   });
 });

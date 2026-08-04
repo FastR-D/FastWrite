@@ -4,6 +4,7 @@ import { extname, join } from "node:path";
 import type {
   CreateProjectRequest,
   GithubImportRequest,
+  GithubSyncResolution,
   DraftOutlineSection,
   DraftRequest,
   ReviewIssueStatus,
@@ -32,6 +33,7 @@ import { embeddedWebFile } from "./embedded-web";
 import { config, type AgentProviderConfiguration } from "./config";
 import { GithubService } from "./imports/github-service";
 import { UploadService } from "./imports/upload-service";
+import { GithubSyncService } from "./sync/github-sync-service";
 import { ApiError, errorResponse, json, readJson, withRuntimeHeaders } from "./http";
 import { JsonDatabase } from "./storage/database";
 import { WorkspaceService } from "./workspace/workspace-service";
@@ -41,6 +43,7 @@ interface Services {
   workspaces: WorkspaceService;
   uploads: UploadService;
   github: GithubService;
+  githubSync: GithubSyncService;
   revisions: ReviseService;
   drafts: DraftService;
   reviews: ReviewService;
@@ -92,7 +95,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const reviews = new ReviewService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.review);
   const agentTasks = new AgentTaskService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.agent, memories, providers.review);
   const completions = new CompletionService(workspaces, new SkillRegistry(config.skillsDirectory), providers.completion, memories);
-  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler: new LatexCompileService(dataDirectory, workspaces) };
+  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler: new LatexCompileService(dataDirectory, workspaces) };
   const routes = buildRoutes(services);
 
   return async function fetch(request: Request): Promise<Response> {
@@ -112,7 +115,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
 }
 
-function buildRoutes({ database, workspaces, uploads, github, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler }: Services): Route[] {
+function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler }: Services): Route[] {
   return [
     route("GET", "/api/health", async () => json({ status: "ok" })),
     route("GET", "/api/texlive/:packageName", async (_request, params, url) => texPackages.texLiveArchive(required(params, "packageName"), url.searchParams.get("tlYear"))),
@@ -133,6 +136,16 @@ function buildRoutes({ database, workspaces, uploads, github, revisions, drafts,
     }),
     route("POST", "/api/projects/:projectId/history/checkpoint", async (_request, params) => {
       return json(await workspaces.createHistoryCheckpoint(required(params, "projectId")), 201);
+    }),
+    route("POST", "/api/projects/:projectId/github-sync", async (_request, params) => {
+      return json(await githubSync.start(required(params, "projectId")), 201);
+    }),
+    route("POST", "/api/projects/:projectId/github-sync/:syncId/resolve", async (request, params) => {
+      const body = await readJson<{ resolutions: GithubSyncResolution[] }>(request);
+      return json(await githubSync.resolve(required(params, "projectId"), required(params, "syncId"), body.resolutions));
+    }),
+    route("POST", "/api/projects/:projectId/github-sync/:syncId/finalize", async (_request, params) => {
+      return json(await githubSync.finalize(required(params, "projectId"), required(params, "syncId")));
     }),
     route("GET", "/api/projects/:projectId/files", async (_request, params, url) => {
       const directory = url.searchParams.get("directory");
@@ -200,13 +213,16 @@ function buildRoutes({ database, workspaces, uploads, github, revisions, drafts,
       const body = await readJson<{ content: string; locked?: boolean }>(request);
       return json(await memories.updateOverview(required(params, "projectId"), body.content, body.locked !== false, request.signal));
     }),
+    route("POST", "/api/projects/:projectId/memory/overview/accept", async (_request, params) => json(await memories.acceptOverviewCandidate(required(params, "projectId")))),
     route("PATCH", "/api/projects/:projectId/memory/sections/:sectionId", async (request, params) => {
       const body = await readJson<{ content: string; locked?: boolean }>(request);
       return json(await memories.updateSection(required(params, "projectId"), required(params, "sectionId"), body.content, body.locked !== false, request.signal));
     }),
+    route("POST", "/api/projects/:projectId/memory/sections/:sectionId/accept", async (_request, params) => json(await memories.acceptSectionCandidate(required(params, "projectId"), required(params, "sectionId")))),
     route("PATCH", "/api/projects/:projectId/memory/items/:itemId", async (request, params) => {
       return json(await memories.updateItem(required(params, "projectId"), required(params, "itemId"), await readJson<{ status?: MemoryItemStatus; content?: string; label?: string }>(request), request.signal));
     }),
+    route("POST", "/api/projects/:projectId/memory/items/:itemId/accept", async (_request, params) => json(await memories.acceptItemCandidate(required(params, "projectId"), required(params, "itemId")))),
     route("POST", "/api/projects/:projectId/memory/rollback", async (_request, params) => json(await memories.rollback(required(params, "projectId")))),
     route("GET", "/api/projects/:projectId/agent-tasks", async (_request, params) => json(agentTasks.list(required(params, "projectId")))),
     route("GET", "/api/projects/:projectId/agent-runs", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().agentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); }),
@@ -267,6 +283,9 @@ function buildRoutes({ database, workspaces, uploads, github, revisions, drafts,
     }),
     route("POST", "/api/projects/:projectId/change-sets/:changeSetId/decide", async (request, params) => {
       return json(await revisions.decide(required(params, "projectId"), required(params, "changeSetId"), await readJson<ChangeSetDecisionRequest>(request)));
+    }),
+    route("POST", "/api/projects/:projectId/change-sets/:changeSetId/finish", async (_request, params) => {
+      return json(await revisions.finishReview(required(params, "projectId"), required(params, "changeSetId")));
     }),
     route("POST", "/api/projects/:projectId/change-sets/:changeSetId/reject", async (_request, params) => {
       return json(await revisions.reject(required(params, "projectId"), required(params, "changeSetId")));

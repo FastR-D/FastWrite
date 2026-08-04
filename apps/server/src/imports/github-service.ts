@@ -25,14 +25,7 @@ export class GithubService {
     const cloneDirectory = join(temporary, "repository");
 
     try {
-      const token = process.env.FASTWRITE_GITHUB_TOKEN?.trim();
-      const gitEnvironment = token ? {
-          ...process.env,
-          GIT_CONFIG_COUNT: "1",
-          GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-          GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
-          GIT_TERMINAL_PROMPT: "0"
-        } : { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+      const gitEnvironment = githubGitEnvironment();
       const clone = Bun.spawn(["git", "clone", "--depth", "1", "--no-tags", "--", location.cloneUrl, cloneDirectory], { stdout: "pipe", stderr: "pipe", env: gitEnvironment });
       const cloneError = await new Response(clone.stderr).text();
       if ((await clone.exited) !== 0) throw new ApiError(400, "github_clone_failed", cleanGitError(cloneError));
@@ -52,6 +45,7 @@ export class GithubService {
         throw new ApiError(500, "github_revision_failed", "The imported Git revision could not be resolved");
       }
 
+      const importedRef = requestedRef === "HEAD" ? await currentBranch(cloneDirectory) : requestedRef;
       const project = await this.workspaces.copyExternalDirectory({
         sourceDirectory: cloneDirectory,
         name: request.name?.trim() || location.repository,
@@ -60,7 +54,7 @@ export class GithubService {
         source: {
           type: "github",
           repository: `https://github.com/${location.owner}/${location.repository}`,
-          ref: requestedRef,
+          ref: importedRef,
           commit
         }
       });
@@ -94,9 +88,30 @@ export function parseGithubRepository(value: string): GithubLocation {
   return { owner, repository, cloneUrl: `https://github.com/${owner}/${repository}.git` };
 }
 
-function cleanGitError(message: string): string {
-  return message
+export function githubGitEnvironment(): Record<string, string | undefined> {
+  const token = process.env.FASTWRITE_GITHUB_TOKEN?.trim();
+  return token ? {
+    ...process.env,
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+    GIT_TERMINAL_PROMPT: "0"
+  } : { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+}
+
+export function cleanGitError(message: string): string {
+  const cleaned = message
+    .replace(/Cloning into '[^']+'\.\.\.\s*/gi, "")
     .replace(/https:\/\/[^@\s]+@github\.com/gi, "https://github.com")
     .replace(/Authorization:\s*(?:Basic|Bearer)\s+\S+/gi, "Authorization: [redacted]")
-    .trim().slice(-800) || "GitHub repository could not be cloned";
+    .trim();
+  if (/repository not found/i.test(cleaned)) return "GitHub repository not found or access was denied";
+  if (/authentication failed|could not read username/i.test(cleaned)) return "GitHub authentication failed. Check FASTWRITE_GITHUB_TOKEN.";
+  return cleaned.slice(-800) || "GitHub repository could not be cloned";
+}
+
+async function currentBranch(directory: string): Promise<string> {
+  const branch = Bun.spawn(["git", "-C", directory, "symbolic-ref", "--quiet", "--short", "HEAD"], { stdout: "pipe", stderr: "ignore" });
+  const name = (await new Response(branch.stdout).text()).trim();
+  return (await branch.exited) === 0 && name ? name : "HEAD";
 }

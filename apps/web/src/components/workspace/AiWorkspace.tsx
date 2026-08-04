@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Check, Database, LoaderCircle, Maximize2, Minimize2, Pencil, RotateCcw, Send, ShieldCheck, Sparkles, Trash2, Workflow, X } from "lucide-react";
+import { Bot, Check, Database, GripVertical, LoaderCircle, Maximize2, Minimize2, Pencil, RotateCcw, Send, ShieldCheck, Sparkles, Trash2, Workflow, X } from "lucide-react";
 import type { ChangeSet, PaperProject, ReviewIssue, ReviseCommandId, ReviseTurn, TextSelection } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { diffWords } from "../../lib/wordDiff";
@@ -8,13 +8,13 @@ import { ReviewDialog } from "./ReviewDialog";
 import { MemoryDialog } from "./MemoryDialog";
 import { AgentTaskWorkspace, type AgentTaskSeed } from "./AgentTaskDialog";
 import type { CompileStateReport } from "./PdfPane";
+import { compileRepairObjective, compileRepairPath, type CompileRepairRequest } from "./compileRepair";
 
 interface AiWorkspaceProps {
   project: PaperProject;
   selection: TextSelection | null;
   sectionSelection: TextSelection | null;
   height: number;
-  onSetHeight: (height: number) => void;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   onUseSelection: (selection: TextSelection) => void;
@@ -22,8 +22,10 @@ interface AiWorkspaceProps {
   onRestoreSelection: (selection: TextSelection) => Promise<boolean>;
   onFileChanged: (path: string, range?: { from: number; to: number }) => void | Promise<void>;
   onNavigate: (path: string, line?: number) => void;
+  onWorkspaceChanged: () => void | Promise<void>;
   onPrepareLocalRevision: (issue: ReviewIssue) => Promise<TextSelection | null>;
   compileState: CompileStateReport;
+  compileRepairRequest: CompileRepairRequest | null;
   onRequestCompile: () => void;
 }
 
@@ -40,7 +42,7 @@ const SHORTCUTS: ReadonlyArray<{ id: ReviseCommandId; label: string }> = [
 type PanelState = "idle" | "running" | "applying" | "accepted" | "error";
 interface ChatMessage { id: string; role: "user" | "assistant"; content: string; rationale?: string }
 
-export function AiWorkspace({ project, selection, sectionSelection, height, onSetHeight, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onPrepareLocalRevision, compileState, onRequestCompile }: AiWorkspaceProps) {
+export function AiWorkspace({ project, selection, sectionSelection, height, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onWorkspaceChanged, onPrepareLocalRevision, compileState, compileRepairRequest, onRequestCompile }: AiWorkspaceProps) {
   const [instruction, setInstruction] = useState("");
   const [state, setState] = useState<PanelState>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -52,6 +54,8 @@ export function AiWorkspace({ project, selection, sectionSelection, height, onSe
   const [agentSeed, setAgentSeed] = useState<AgentTaskSeed>({});
   const [editingProposal, setEditingProposal] = useState(false);
   const [editedAfter, setEditedAfter] = useState("");
+  const [fullscreenWidth, setFullscreenWidth] = useState(() => Number.parseInt(localStorage.getItem("fastwrite.ai-fullscreen-width") ?? "", 10) || 800);
+  const [resizingWidth, setResizingWidth] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const requestRef = useRef<AbortController | null>(null);
@@ -59,8 +63,19 @@ export function AiWorkspace({ project, selection, sectionSelection, height, onSe
   const preserveNextSelectionRef = useRef(false);
   const restoredKeyRef = useRef("");
   const recoveryAttemptedRef = useRef("");
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const appliedCompileRepairRef = useRef<number | null>(null);
 
-  useEffect(() => () => requestRef.current?.abort(), []);
+  useEffect(() => () => { requestRef.current?.abort(); resizeCleanupRef.current?.(); }, []);
+  useEffect(() => {
+    if (!compileRepairRequest || appliedCompileRepairRef.current === compileRepairRequest.id) return;
+    appliedCompileRepairRef.current = compileRepairRequest.id;
+    setAgentSeed({
+      objective: compileRepairObjective(compileRepairRequest.failure),
+      path: compileRepairPath(compileRepairRequest.failure)
+    });
+    setActiveTab("agent");
+  }, [compileRepairRequest]);
   useEffect(() => { messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight }); }, [messages, state, editingProposal]);
   useEffect(() => {
     if (!fullscreen) return;
@@ -213,6 +228,26 @@ export function AiWorkspace({ project, selection, sectionSelection, height, onSe
   const diff = useMemo(() => changeSet ? diffWords(changeSet.changes[0]!.before, proposedAfter) : [], [changeSet, proposedAfter]);
   const busy = state === "running" || state === "applying";
   const canDecide = changeSet?.status === "proposed";
+  const updateFullscreenWidth = (next: number) => {
+    const width = Math.round(Math.min(Math.max(560, next), Math.max(560, window.innerWidth)));
+    setFullscreenWidth(width);
+    localStorage.setItem("fastwrite.ai-fullscreen-width", String(width));
+  };
+  const startWidthResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    resizeCleanupRef.current?.();
+    setResizingWidth(true);
+    const onMove = (moveEvent: PointerEvent) => updateFullscreenWidth(Math.abs(moveEvent.clientX - window.innerWidth / 2) * 2);
+    const cleanup = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", cleanup);
+      resizeCleanupRef.current = null;
+      setResizingWidth(false);
+    };
+    resizeCleanupRef.current = cleanup;
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", cleanup, { once: true });
+  };
 
   return (<>
     <section className={`ai-workspace${activeTab === "agent" ? " ai-workspace--agent" : ""}${fullscreen ? " ai-workspace--fullscreen" : ""}`} style={{ "--ai-workspace-height": `${height}px` } as React.CSSProperties} aria-label="AI writing workspace">
@@ -222,11 +257,11 @@ export function AiWorkspace({ project, selection, sectionSelection, height, onSe
           <button className="ai-header-action" onClick={() => setMemoryOpen(true)}><Database /> Memory</button>
           <button className="ai-header-action" onClick={() => setReviewOpen(true)}><ShieldCheck /> Review</button>
           {activeTab === "revise" ? <button className="ai-header-action" title="Clear current conversation" onClick={clearConversation}><Trash2 /> Clear</button> : null}
-          {activeTab === "revise" ? <label className="ai-height-control"><span>Panel height</span><select value={height < 360 ? "compact" : height < 560 ? "comfortable" : "tall"} onChange={(event) => onSetHeight(event.target.value === "compact" ? 280 : event.target.value === "comfortable" ? 460 : 660)}><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="tall">Tall</option></select></label> : null}
           <button className="ai-header-action" title={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={onToggleFullscreen}>{fullscreen ? <Minimize2 /> : <Maximize2 />}</button>
           <span className="ai-skill"><Bot /> {project.skill.name} · v{project.skill.version}</span>
         </div>
       </header>
+      <div className={`ai-workspace__body${resizingWidth ? " is-resizing-width" : ""}`} style={fullscreen ? { width: `min(${fullscreenWidth}px, 100%)` } : undefined}>
       <div hidden={activeTab !== "revise"} className="revise-chat">
         {selection ? <aside className="revise-context-strip"><span>{selection.path} · lines {selection.startLine}–{selection.endLine}</span><p title={selection.text}>{selection.text}</p><button type="button" title="Clear selected context" aria-label="Clear selected context" onClick={onClearSelection}><X /></button></aside> : null}
         <div ref={messagesRef} className="revise-chat__messages" aria-live="polite">
@@ -251,9 +286,16 @@ export function AiWorkspace({ project, selection, sectionSelection, height, onSe
         </form>
       </div>
       <div hidden={activeTab !== "agent"} className="agent-workspace-slot"><AgentTaskWorkspace open={activeTab === "agent"} project={project} seed={agentSeed} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onAccepted={onFileChanged} /></div>
+      {fullscreen ? <div className="ai-workspace__width-handle" role="separator" aria-label="Resize maximized AI workspace" aria-orientation="vertical" aria-valuemin={Math.min(560, window.innerWidth)} aria-valuemax={window.innerWidth} aria-valuenow={Math.min(fullscreenWidth, window.innerWidth)} tabIndex={0} onPointerDown={startWidthResize} onKeyDown={(event) => {
+        if (event.key === "ArrowLeft") { event.preventDefault(); updateFullscreenWidth(fullscreenWidth - 40); }
+        else if (event.key === "ArrowRight") { event.preventDefault(); updateFullscreenWidth(fullscreenWidth + 40); }
+        else if (event.key === "Home") { event.preventDefault(); updateFullscreenWidth(560); }
+        else if (event.key === "End") { event.preventDefault(); updateFullscreenWidth(window.innerWidth); }
+      }}><GripVertical /></div> : null}
+      </div>
     </section>
     <ReviewDialog open={reviewOpen} project={project} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setReviewOpen(false)} onNavigate={onNavigate} onReviseLocally={(issue) => void beginLocalRevision(issue)} onReviseWithAgent={(issueIds, objective) => { setAgentSeed({ issueIds, objective }); setReviewOpen(false); setActiveTab("agent"); }} />
-    <MemoryDialog open={memoryOpen} project={project} onClose={() => setMemoryOpen(false)} onNavigate={onNavigate} />
+    <MemoryDialog open={memoryOpen} project={project} onClose={() => setMemoryOpen(false)} onNavigate={onNavigate} onChanged={onWorkspaceChanged} />
   </>);
 }
 

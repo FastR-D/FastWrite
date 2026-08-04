@@ -1,5 +1,6 @@
 import type {
   AgentRun,
+  ChangeSetConflictFile,
   ChangeSetEditRequest,
   ChangeSetDecisionRequest,
   ChangeSet,
@@ -31,6 +32,14 @@ const COMMANDS: Record<ReviseCommandId, string> = {
 
 function timestamp(): string {
   return new Date().toISOString();
+}
+
+interface PreparedWorkspaceMutation {
+  path: string;
+  nextContent: string;
+  currentVersion: number;
+  action: "none" | "create" | "save" | "delete";
+  resolvedVersion?: number | null;
 }
 
 function flattenOutline(items: OutlineItem[]): OutlineItem[] {
@@ -140,27 +149,70 @@ export class ReviseService {
   async accept(projectId: string, changeSetId: string): Promise<ChangeSet> {
     const changeSet = this.getChangeSet(projectId, changeSetId);
     if (changeSet.changes.some((change) => !change.hunks?.length)) return this.acceptLegacy(projectId, changeSetId);
-    return this.decide(projectId, changeSetId, { decisions: changeSet.changes.map((change) => ({ path: change.path, hunkIds: change.hunks?.filter((hunk) => hunk.status === "pending").map((hunk) => hunk.id) ?? [], status: "accepted" })) });
+    const decisions = changeSet.changes.map((change) => ({ path: change.path, hunkIds: change.hunks?.filter((hunk) => hunk.status === "pending").map((hunk) => hunk.id) ?? [], status: "accepted" as const })).filter((decision) => decision.hunkIds.length);
+    const decided = decisions.length ? await this.decide(projectId, changeSetId, { decisions }) : changeSet;
+    return decided.approvalMode === "explicit-finish" ? this.finishReview(projectId, changeSetId) : decided;
   }
 
   async reject(projectId: string, changeSetId: string): Promise<ChangeSet> {
     const changeSet = this.getChangeSet(projectId, changeSetId);
     if (changeSet.changes.some((change) => !change.hunks?.length)) return this.rejectLegacy(projectId, changeSetId);
-    return this.decide(projectId, changeSetId, { decisions: changeSet.changes.map((change) => ({ path: change.path, hunkIds: change.hunks?.filter((hunk) => hunk.status === "pending").map((hunk) => hunk.id) ?? [], status: "rejected" })) });
+    const decisions = changeSet.changes.map((change) => ({ path: change.path, hunkIds: change.hunks?.filter((hunk) => hunk.status === "pending").map((hunk) => hunk.id) ?? [], status: "rejected" as const })).filter((decision) => decision.hunkIds.length);
+    const decided = decisions.length ? await this.decide(projectId, changeSetId, { decisions }) : changeSet;
+    return decided.approvalMode === "explicit-finish" ? this.finishReview(projectId, changeSetId) : decided;
   }
 
   async editProposal(projectId: string, changeSetId: string, request: ChangeSetEditRequest): Promise<ChangeSet> {
     const changeSet = this.getChangeSet(projectId, changeSetId);
-    if (changeSet.status !== "proposed") throw new ApiError(409, "changeset_not_editable", "Only an untouched proposal can be edited");
-    if (!request.changes.length) throw new ApiError(400, "changeset_edit_empty", "Edit at least one proposed file");
+    if (changeSet.status !== "proposed" && !(changeSet.approvalMode === "explicit-finish" && changeSet.status === "partially-accepted")) throw new ApiError(409, "changeset_not_editable", "Only a proposal still under review can be edited");
+    const requestedFiles = request.changes ?? [];
+    const requestedHunks = request.hunks ?? [];
+    if (!requestedFiles.length && !requestedHunks.length) throw new ApiError(400, "changeset_edit_empty", "Edit at least one proposed file or hunk");
+    if (requestedFiles.length && requestedHunks.length) throw new ApiError(400, "changeset_edit_mixed", "Edit files or hunks in one request, not both");
+
+    if (requestedHunks.length) {
+      const edits = new Map<string, { path: string; hunkId: string; after: string }>();
+      for (const edit of requestedHunks) {
+        const key = `${edit.path}\u0000${edit.hunkId}`;
+        if (edits.has(key)) throw new ApiError(400, "changeset_edit_duplicate", `Duplicate edit for hunk '${edit.hunkId}'`);
+        if (new TextEncoder().encode(edit.after).byteLength > 2_000_000) throw new ApiError(413, "changeset_edit_too_large", `Edited hunk '${edit.hunkId}' exceeds 2 MB`);
+        const change = changeSet.changes.find((candidate) => candidate.path === edit.path);
+        const hunk = change?.hunks?.find((candidate) => candidate.id === edit.hunkId);
+        if (!change || !hunk) throw new ApiError(400, "changeset_hunk_invalid", `Hunk '${edit.hunkId}' does not belong to '${edit.path}'`);
+        if (hunk.status === "accepted") throw new ApiError(409, "changeset_hunk_edit_accepted", `Change hunk '${edit.hunkId}' to reject before editing it`);
+        if (edit.after === hunk.after) throw new ApiError(400, "changeset_edit_unchanged", `Edited hunk '${edit.hunkId}' did not change`);
+        if (edit.after === hunk.before) throw new ApiError(400, "changeset_edit_matches_original", `Reject hunk '${edit.hunkId}' instead of editing it back to the original text`);
+        edits.set(key, edit);
+      }
+      return this.database.mutate((state) => {
+        const stored = state.changeSets.find((candidate) => candidate.id === changeSetId)!;
+        for (const edit of edits.values()) {
+          const change = stored.changes.find((candidate) => candidate.path === edit.path)!;
+          const hunk = change.hunks!.find((candidate) => candidate.id === edit.hunkId)!;
+          hunk.after = edit.after;
+          change.after = materializeProposedText(change.before, change.hunks!);
+        }
+        stored.updatedAt = timestamp();
+        const paths = [...new Set([...edits.values()].map((edit) => edit.path))];
+        const run = state.agentRuns.find((candidate) => candidate.id === stored.agentRunId);
+        if (run) {
+          run.auditTrail ??= [];
+          run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "hunk-edited", summary: `Edited ${edits.size} proposed hunk${edits.size === 1 ? "" : "s"} during review`, paths, createdAt: timestamp() });
+          run.updatedAt = timestamp();
+        }
+        return stored;
+      });
+    }
+
     const edits = new Map<string, string>();
-    for (const edit of request.changes) {
+    for (const edit of requestedFiles) {
       if (edits.has(edit.path)) throw new ApiError(400, "changeset_edit_duplicate", `Duplicate edit for '${edit.path}'`);
       if (new TextEncoder().encode(edit.after).byteLength > 2_000_000) throw new ApiError(413, "changeset_edit_too_large", `Edited proposal for '${edit.path}' exceeds 2 MB`);
       edits.set(edit.path, edit.after);
     }
     const targets = changeSet.changes.filter((change) => edits.has(change.path));
     if (targets.length !== edits.size) throw new ApiError(400, "changeset_edit_path_invalid", "Every edited path must belong to this ChangeSet");
+    if (targets.some((change) => change.hunks?.some((hunk) => hunk.status !== "pending"))) throw new ApiError(409, "changeset_edit_decided", "Only files whose hunks are still pending can be edited");
     for (const change of targets) {
       const after = edits.get(change.path)!;
       if (after === change.before) throw new ApiError(400, "changeset_edit_unchanged", `Edited proposal for '${change.path}' must differ from its original text`);
@@ -195,6 +247,12 @@ export class ReviseService {
     if (!new Set(["proposed", "partially-accepted"]).has(changeSet.status)) throw new ApiError(409, "changeset_not_proposed", "This change is no longer awaiting approval");
     if (!request.decisions.length) throw new ApiError(400, "changeset_decision_empty", "Choose at least one pending hunk");
     if (changeSet.changes.some((change) => !change.baseContent && change.operation !== "create" || !change.hunks?.length)) throw new ApiError(409, "changeset_hunks_unavailable", "This legacy ChangeSet can only be accepted or rejected as a whole");
+    const explicitFinish = changeSet.approvalMode === "explicit-finish";
+    const overwriteVersions = new Map<string, number | null>();
+    for (const resolution of request.overwriteConflicts ?? []) {
+      if (overwriteVersions.has(resolution.path)) throw new ApiError(400, "changeset_conflict_duplicate", `Duplicate overwrite confirmation for '${resolution.path}'`);
+      overwriteVersions.set(resolution.path, resolution.currentVersion);
+    }
 
     const nextHunks = new Map<string, TextHunk[]>();
     for (const change of changeSet.changes) nextHunks.set(change.path, structuredClone(change.hunks!));
@@ -208,35 +266,31 @@ export class ReviseService {
       if (ids.size !== decision.hunkIds.length) throw new ApiError(400, "changeset_hunk_invalid", "Duplicate hunk decision");
       for (const id of ids) {
         const hunk = hunks.find((candidate) => candidate.id === id);
-        if (!hunk || hunk.status !== "pending") throw new ApiError(409, "changeset_hunk_decided", `Hunk '${id}' is missing or already decided`);
+        if (!hunk) throw new ApiError(409, "changeset_hunk_decided", `Hunk '${id}' is missing`);
+        if (hunk.status === decision.status) throw new ApiError(409, "changeset_hunk_unchanged", `Hunk '${id}' is already ${decision.status}`);
+        if (!explicitFinish && hunk.status !== "pending") throw new ApiError(409, "changeset_hunk_decided", `Hunk '${id}' is already decided`);
         hunk.status = decision.status;
       }
     }
+    for (const path of overwriteVersions.keys()) if (!touched.has(path)) throw new ApiError(400, "changeset_conflict_path_invalid", `Overwrite confirmation for '${path}' does not match this decision`);
 
-    const prepared: Array<{ path: string; nextContent: string; currentVersion: number; operation: "replace" | "create"; changed: boolean }> = [];
+    const prepared: PreparedWorkspaceMutation[] = [];
+    const conflicts: ChangeSetConflictFile[] = [];
     for (const change of changeSet.changes.filter((candidate) => touched.has(candidate.path))) {
       const currentHunks = change.hunks!;
       const updatedHunks = nextHunks.get(change.path)!;
-      const currentContent = materializeChange(change, currentHunks);
-      const nextContent = materializeChange(change, updatedHunks);
-      if (change.operation === "create") {
-        if (await this.workspaces.fileExists(projectId, change.path)) return this.markConflict(changeSetId);
-        prepared.push({ path: change.path, nextContent, currentVersion: 0, operation: "create", changed: currentContent !== nextContent });
-        continue;
-      }
-      const opened = await this.workspaces.readTextFile(projectId, change.path);
-      if (opened.file.version !== (change.currentVersion ?? change.baseVersion) || opened.content !== currentContent) return this.markConflict(changeSetId);
-      prepared.push({ path: change.path, nextContent, currentVersion: opened.file.version, operation: "replace", changed: currentContent !== nextContent });
+      const result = await this.prepareWorkspaceMutation(projectId, change, currentHunks, updatedHunks, overwriteVersions);
+      if ("conflict" in result) conflicts.push(result.conflict);
+      else prepared.push(result.prepared);
     }
+    if (conflicts.length) throw new ApiError(409, "changeset_conflict_review_required", "The workspace changed during review. Compare the current files with the reviewed result before overwriting.", { changeSetId, conflicts });
 
-    const appliedVersions = new Map<string, number>();
-    for (const item of prepared.filter((candidate) => candidate.changed)) {
-      if (item.operation === "create") {
-        if (!item.nextContent) continue;
-        appliedVersions.set(item.path, (await this.workspaces.createFile(projectId, item.path, item.nextContent)).version);
-      } else {
-        appliedVersions.set(item.path, (await this.workspaces.saveTextFile(projectId, item.path, { content: item.nextContent, baseVersion: item.currentVersion })).file.version);
-      }
+    const appliedVersions = new Map<string, number | null>();
+    for (const item of prepared) {
+      if (item.action === "create") appliedVersions.set(item.path, (await this.workspaces.createFile(projectId, item.path, item.nextContent)).version);
+      else if (item.action === "save") appliedVersions.set(item.path, (await this.workspaces.saveTextFile(projectId, item.path, { content: item.nextContent, baseVersion: item.currentVersion })).file.version);
+      else if (item.action === "delete") { await this.workspaces.deletePath(projectId, item.path); appliedVersions.set(item.path, null); }
+      else if (item.resolvedVersion !== undefined) appliedVersions.set(item.path, item.resolvedVersion);
     }
     const projectVersion = this.workspaces.getProject(projectId).version;
     return this.database.mutate((state) => {
@@ -244,26 +298,92 @@ export class ReviseService {
       for (const change of stored.changes) {
         change.hunks = nextHunks.get(change.path)!;
         const version = appliedVersions.get(change.path);
-        if (version !== undefined) { change.currentVersion = version; change.appliedVersion = version; }
+        if (version === null) { delete change.currentVersion; delete change.appliedVersion; }
+        else if (version !== undefined) { change.currentVersion = version; if (change.hunks.some((hunk) => hunk.status === "accepted")) change.appliedVersion = version; }
+        if (!change.hunks.some((hunk) => hunk.status === "accepted")) delete change.appliedVersion;
       }
       const hunks = stored.changes.flatMap((change) => change.hunks ?? []);
       const pending = hunks.some((hunk) => hunk.status === "pending");
       const accepted = hunks.some((hunk) => hunk.status === "accepted");
-      stored.status = pending ? "partially-accepted" : accepted ? "accepted" : "rejected";
+      const hasDecision = hunks.some((hunk) => hunk.status !== "pending");
+      stored.status = explicitFinish ? hasDecision ? "partially-accepted" : "proposed" : pending ? "partially-accepted" : accepted ? "accepted" : "rejected";
       if (stored.changes.length === 1 && stored.changes[0]!.appliedVersion !== undefined) stored.appliedFileVersion = stored.changes[0]!.appliedVersion;
+      else delete stored.appliedFileVersion;
       stored.updatedAt = timestamp();
       const run = state.agentRuns.find((candidate) => candidate.id === stored.agentRunId);
-      if (run) { run.status = pending ? "waiting-approval" : "completed"; if (!pending) run.steps?.forEach((step) => { if (step.status === "running" || step.status === "pending") step.status = "completed"; }); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "hunk-decision", summary: `${request.decisions.reduce((total, decision) => total + decision.hunkIds.length, 0)} hunks decided; ${hunks.filter((hunk) => hunk.status === "pending").length} remain pending`, paths: [...touched], createdAt: timestamp() }); run.updatedAt = timestamp(); }
+      if (run) { run.status = pending || explicitFinish ? "waiting-approval" : "completed"; if (!pending && !explicitFinish) run.steps?.forEach((step) => { if (step.status === "running" || step.status === "pending") step.status = "completed"; }); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "hunk-decision", summary: `${request.decisions.reduce((total, decision) => total + decision.hunkIds.length, 0)} hunk choices updated; ${hunks.filter((hunk) => hunk.status === "pending").length} remain pending`, paths: [...touched], createdAt: timestamp() }); run.updatedAt = timestamp(); }
       const draft = state.draftPlans.find((candidate) => candidate.changeSetId === stored.id);
       if (draft) { draft.status = pending ? "waiting-approval" : accepted ? "accepted" : "cancelled"; draft.updatedAt = timestamp(); }
       const agentPlan = state.agentTaskPlans.find((candidate) => candidate.changeSetId === stored.id);
-      if (agentPlan) { agentPlan.status = pending ? "waiting-approval" : accepted ? "accepted" : "cancelled"; if (!pending && accepted) agentPlan.acceptedProjectVersion = projectVersion; agentPlan.updatedAt = timestamp(); }
+      if (agentPlan) { agentPlan.status = pending || explicitFinish ? "waiting-approval" : accepted ? "accepted" : "cancelled"; if (!pending && accepted && !explicitFinish) agentPlan.acceptedProjectVersion = projectVersion; agentPlan.updatedAt = timestamp(); }
       const resolution = state.issueResolutions.find((candidate) => candidate.changeSetId === stored.id);
       if (resolution) {
         resolution.status = accepted ? "in-revision" : pending ? "in-revision" : "reopened";
-        if (!pending && accepted) resolution.acceptedProjectVersion = projectVersion;
+        if (!pending && accepted && !explicitFinish) resolution.acceptedProjectVersion = projectVersion;
         resolution.updatedAt = timestamp();
-        if (!pending && !accepted) for (const report of state.reviewReports) for (const issue of report.issues) if (resolution.issueIds.includes(issue.id)) { issue.status = "open"; issue.updatedAt = timestamp(); }
+        if (!pending && !accepted && !explicitFinish) for (const report of state.reviewReports) for (const issue of report.issues) if (resolution.issueIds.includes(issue.id)) { issue.status = "open"; issue.updatedAt = timestamp(); }
+      }
+      return stored;
+    });
+  }
+
+  private async prepareWorkspaceMutation(
+    projectId: string,
+    change: TextChange,
+    currentHunks: TextHunk[],
+    nextHunks: TextHunk[],
+    overwriteVersions: Map<string, number | null>
+  ): Promise<{ prepared: PreparedWorkspaceMutation } | { conflict: ChangeSetConflictFile }> {
+    const currentContent = materializeChange(change, currentHunks);
+    const nextContent = materializeChange(change, nextHunks);
+    if (currentContent === nextContent) return { prepared: { path: change.path, nextContent, currentVersion: 0, action: "none" } };
+
+    const exists = await this.workspaces.fileExists(projectId, change.path);
+    const opened = exists ? await this.workspaces.readTextFile(projectId, change.path) : null;
+    const expectedExists = change.operation !== "create" || Boolean(currentContent);
+    const expectedVersion = change.currentVersion ?? change.baseVersion;
+    const matchesExpected = expectedExists
+      ? Boolean(opened && opened.file.version === expectedVersion && opened.content === currentContent)
+      : !opened;
+    const currentVersion = opened?.file.version ?? null;
+    if (!matchesExpected && (!overwriteVersions.has(change.path) || overwriteVersions.get(change.path) !== currentVersion)) {
+      return { conflict: { path: change.path, currentContent: opened?.content ?? null, reviewedContent: nextContent, currentVersion } };
+    }
+
+    if (opened) {
+      if (change.operation === "create" && !nextContent) return { prepared: { path: change.path, nextContent, currentVersion: opened.file.version, action: "delete" } };
+      if (opened.content === nextContent) return { prepared: { path: change.path, nextContent, currentVersion: opened.file.version, action: "none", resolvedVersion: opened.file.version } };
+      return { prepared: { path: change.path, nextContent, currentVersion: opened.file.version, action: "save" } };
+    }
+    if (change.operation === "create" && !nextContent) return { prepared: { path: change.path, nextContent, currentVersion: 0, action: "none", resolvedVersion: null } };
+    return { prepared: { path: change.path, nextContent, currentVersion: 0, action: "create" } };
+  }
+
+  async finishReview(projectId: string, changeSetId: string): Promise<ChangeSet> {
+    const changeSet = this.getChangeSet(projectId, changeSetId);
+    if (changeSet.approvalMode !== "explicit-finish") throw new ApiError(409, "changeset_finish_unavailable", "This ChangeSet does not use explicit review completion");
+    if (changeSet.status === "accepted" || changeSet.status === "rejected") return changeSet;
+    if (!new Set(["proposed", "partially-accepted"]).has(changeSet.status)) throw new ApiError(409, "changeset_not_proposed", "This change is no longer awaiting approval");
+    const hunks = changeSet.changes.flatMap((change) => change.hunks ?? []);
+    if (!hunks.length || hunks.some((hunk) => hunk.status === "pending")) throw new ApiError(409, "changeset_review_incomplete", "Accept or reject every hunk before finishing the review");
+    const accepted = hunks.some((hunk) => hunk.status === "accepted");
+    const projectVersion = this.workspaces.getProject(projectId).version;
+    const finishedAt = timestamp();
+    return this.database.mutate((state) => {
+      const stored = state.changeSets.find((candidate) => candidate.id === changeSetId)!;
+      stored.status = accepted ? "accepted" : "rejected";
+      stored.reviewFinishedAt = finishedAt;
+      stored.updatedAt = finishedAt;
+      const run = state.agentRuns.find((candidate) => candidate.id === stored.agentRunId);
+      if (run) { run.status = "completed"; run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "review-finished", summary: `Finished ChangeSet review with ${hunks.filter((hunk) => hunk.status === "accepted").length} accepted and ${hunks.filter((hunk) => hunk.status === "rejected").length} rejected hunks`, paths: stored.changes.map((change) => change.path), createdAt: finishedAt }); run.updatedAt = finishedAt; }
+      const agentPlan = state.agentTaskPlans.find((candidate) => candidate.changeSetId === stored.id);
+      if (agentPlan) { agentPlan.status = accepted ? "accepted" : "cancelled"; if (accepted) agentPlan.acceptedProjectVersion = projectVersion; agentPlan.updatedAt = finishedAt; }
+      const resolution = state.issueResolutions.find((candidate) => candidate.changeSetId === stored.id);
+      if (resolution) {
+        resolution.status = accepted ? "in-revision" : "reopened";
+        if (accepted) resolution.acceptedProjectVersion = projectVersion;
+        else { delete resolution.acceptedProjectVersion; for (const report of state.reviewReports) for (const issue of report.issues) if (resolution.issueIds.includes(issue.id)) { issue.status = "open"; issue.updatedAt = finishedAt; } }
+        resolution.updatedAt = finishedAt;
       }
       return stored;
     });
@@ -461,6 +581,10 @@ function materializeChange(change: TextChange, hunks: TextHunk[]): string {
   if (change.operation === "create") return segment;
   if (change.baseContent === undefined) throw new ApiError(409, "changeset_hunks_unavailable", "This ChangeSet does not contain a complete base snapshot");
   return change.baseContent.slice(0, change.from) + segment + change.baseContent.slice(change.to);
+}
+
+function materializeProposedText(before: string, hunks: TextHunk[]): string {
+  return materializeTextHunks(before, hunks.map((hunk) => ({ ...hunk, status: "accepted" })));
 }
 
 function commandLabel(command: ReviseCommandId): string {

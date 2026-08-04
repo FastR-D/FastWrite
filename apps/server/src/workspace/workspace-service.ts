@@ -9,6 +9,7 @@ import {
   stat,
   writeFile
 } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { basename, dirname, extname, join, relative } from "node:path";
 import type {
   DirectoryTreeNode,
@@ -331,11 +332,63 @@ export class WorkspaceService {
 
   async createHistoryCheckpoint(id: string): Promise<{ createdAt: string }> {
     this.getProject(id);
-    const timer = this.historyTimers.get(id);
-    if (timer) clearTimeout(timer);
-    this.historyTimers.delete(id);
+    this.clearHistoryTimer(id);
     await this.snapshotHistory(id, "Manual checkpoint");
     return { createdAt: now() };
+  }
+
+  async createSyncCheckpoint(id: string): Promise<void> {
+    this.getProject(id);
+    this.clearHistoryTimer(id);
+    await this.snapshotHistory(id, "Before GitHub sync");
+  }
+
+  async applyGithubSyncTree(id: string, sourceDirectory: string): Promise<PaperProject> {
+    const project = this.getProject(id);
+    const root = this.workspaceRoot(id);
+    const syncedMain = resolveWorkspacePath(sourceDirectory, project.mainDocument).absolutePath;
+    await this.safeFileStat(syncedMain).catch(() => {
+      throw new ApiError(409, "github_sync_main_document_deleted", `GitHub sync would remove the main document '${project.mainDocument}'`);
+    });
+
+    const beforeFiles = await this.listRelativeFiles(root);
+    const beforeHashes = await this.fileHashes(root, beforeFiles);
+    await this.removeManagedTree(root, root);
+    await this.copySafeTree(sourceDirectory, root);
+    const afterFiles = await this.listRelativeFiles(root);
+    const afterHashes = await this.fileHashes(root, afterFiles);
+    const changedPaths = new Set([...beforeFiles, ...afterFiles].filter((path) => beforeHashes.get(path) !== afterHashes.get(path)));
+    if (changedPaths.size === 0) return project;
+
+    const timestamp = now();
+    const updated = await this.database.mutate((state) => {
+      const versions = state.fileVersions[id] ?? {};
+      for (const path of Object.keys(versions)) if (!afterHashes.has(path)) delete versions[path];
+      for (const path of afterFiles) {
+        if (!versions[path]) versions[path] = { version: 1, updatedAt: timestamp };
+        else if (changedPaths.has(path)) versions[path] = { version: versions[path]!.version + 1, updatedAt: timestamp };
+      }
+      state.fileVersions[id] = versions;
+      const stored = state.projects.find((candidate) => candidate.id === id);
+      if (!stored) throw new ApiError(404, "project_not_found", "Project not found");
+      stored.version += 1;
+      stored.updatedAt = timestamp;
+      return stored;
+    });
+    await this.snapshotHistory(id, "Apply GitHub sync");
+    return updated;
+  }
+
+  async updateGithubSyncSource(id: string, branch: string, commit: string): Promise<PaperProject> {
+    return this.database.mutate((state) => {
+      const project = state.projects.find((candidate) => candidate.id === id);
+      if (!project) throw new ApiError(404, "project_not_found", "Project not found");
+      if (project.source.type !== "github") throw new ApiError(409, "github_sync_unavailable", "This paper is not linked to a GitHub repository");
+      project.source.ref = branch;
+      project.source.commit = commit;
+      project.updatedAt = now();
+      return project;
+    });
   }
 
   async updateProject(id: string, updates: { name?: string; mainDocument?: string; venue?: TargetVenue }): Promise<PaperProject> {
@@ -515,6 +568,24 @@ export class WorkspaceService {
     }
   }
 
+  private async removeManagedTree(root: string, directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolute = join(directory, entry.name);
+      const path = relative(root, absolute).replaceAll("\\", "/");
+      if (isIgnoredWorkspacePath(path)) continue;
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        await this.removeManagedTree(root, absolute);
+        if ((await readdir(absolute)).length === 0) await rm(absolute, { recursive: true, force: true });
+      } else {
+        await rm(absolute, { recursive: true, force: true });
+      }
+    }
+  }
+
+  private async fileHashes(root: string, paths: string[]): Promise<Map<string, string>> {
+    return new Map(await Promise.all(paths.map(async (path) => [path, createHash("sha256").update(await readFile(join(root, path))).digest("hex")] as const)));
+  }
+
   private async repairLegacyMainDocuments(): Promise<void> {
     for (const project of this.database.snapshot().projects) {
       const root = join(this.projectsDirectory, project.id, "workspace");
@@ -548,6 +619,12 @@ export class WorkspaceService {
     }, 2 * 60 * 1000);
     timer.unref?.();
     this.historyTimers.set(id, timer);
+  }
+
+  private clearHistoryTimer(id: string): void {
+    const timer = this.historyTimers.get(id);
+    if (timer) clearTimeout(timer);
+    this.historyTimers.delete(id);
   }
 }
 

@@ -12,6 +12,15 @@ describe("completionSuffix", () => {
       .toBe(" remains secure.");
   });
 
+  test("keeps adjacent English words separated", () => {
+    expect(completionSuffix("reduces manual recovery time.", "The workflow"))
+      .toBe(" reduces manual recovery time.");
+  });
+
+  test("does not split an echoed partial word", () => {
+    expect(completionSuffix("systematic", "The system")).toBe("atic");
+  });
+
   test("allows a fully duplicated suggestion to be ignored", () => {
     expect(completionSuffix("system", "The system")).toBe("");
   });

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type CompileRecord, type DraftPlan, type IssueResolution, type PaperMemory, type PaperProject, type ReviewReport, type ReviewSnapshot, type UploadSession } from "@fastwrite/shared";
+import { paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type CompileRecord, type DraftPlan, type GithubSyncRun, type IssueResolution, type PaperMemory, type PaperProject, type ReviewReport, type ReviewSnapshot, type UploadSession } from "@fastwrite/shared";
 
 export interface FileVersionRecord {
   version: number;
@@ -20,9 +20,10 @@ export interface DatabaseState {
   agentTaskPlans: AgentTaskPlan[];
   issueResolutions: IssueResolution[];
   compileRecords: CompileRecord[];
+  githubSyncRuns: GithubSyncRun[];
 }
 
-const EMPTY_DATABASE: DatabaseState = { projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [] };
+const EMPTY_DATABASE: DatabaseState = { projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
@@ -49,7 +50,8 @@ export class JsonDatabase {
         paperMemories: parsed.paperMemories ?? [],
         agentTaskPlans: parsed.agentTaskPlans ?? [],
         issueResolutions: parsed.issueResolutions ?? [],
-        compileRecords: parsed.compileRecords ?? []
+        compileRecords: parsed.compileRecords ?? [],
+        githubSyncRuns: parsed.githubSyncRuns ?? []
       };
       let migrated = false;
       const normalizeSkill = (record: { skill: PaperProject["skill"] }) => {

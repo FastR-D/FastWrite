@@ -4,6 +4,8 @@ set -eu
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 QA_DATA=$(mktemp -d "${TMPDIR:-/tmp}/fastwrite-e2e.XXXXXX")
 E2E_BROWSER=${FASTWRITE_E2E_BROWSER:-chrome}
+E2E_PORT=${FASTWRITE_E2E_PORT:-3213}
+E2E_SERVER_BIN=${FASTWRITE_E2E_SERVER_BIN:-}
 QA_SESSION="fastwrite-e2e-${E2E_BROWSER}-$$"
 SERVER_PID=""
 
@@ -44,11 +46,15 @@ trap cleanup EXIT INT TERM
 
 cd "$PROJECT_ROOT"
 if [ "${FASTWRITE_E2E_SKIP_BUILD:-0}" != "1" ]; then bun run build >/dev/null; fi
-FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT=3213 bun apps/server/src/server.ts >"$QA_DATA/server.log" 2>&1 &
+if [ -n "$E2E_SERVER_BIN" ]; then
+  FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" "$E2E_SERVER_BIN" >"$QA_DATA/server.log" 2>&1 &
+else
+  FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" bun apps/server/src/server.ts >"$QA_DATA/server.log" 2>&1 &
+fi
 SERVER_PID=$!
 
 attempt=0
-until curl --fail --silent http://127.0.0.1:3213/projects >/dev/null; do
+until curl --fail --silent "http://127.0.0.1:$E2E_PORT/projects" >/dev/null; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 60 ]; then
     echo "FastWrite E2E servers did not become ready" >&2
@@ -57,7 +63,7 @@ until curl --fail --silent http://127.0.0.1:3213/projects >/dev/null; do
   sleep 0.25
 done
 
-pw open http://127.0.0.1:3213/projects --browser "$E2E_BROWSER"
+pw open "http://127.0.0.1:$E2E_PORT/projects" --browser "$E2E_BROWSER"
 run_accessibility
 
 run_code '
@@ -67,7 +73,7 @@ async (page) => {
   await page.getByRole("button", { name: "Create paper" }).click();
   await page.waitForURL(/\/projects\/paper_/);
   const projectId = page.url().split("/").pop();
-  const apiRoot = "http://127.0.0.1:3213/api/projects/" + projectId;
+  const apiRoot = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId;
   const created = await page.request.post(apiRoot + "/files", {
     data: { path: "sections/method.tex", content: "\\section{Method}\nThis sentence is mapped from a secondary source file." }
   });
@@ -109,7 +115,7 @@ async (page) => {
   await methodEditor.focus();
   await methodEditor.press("ControlOrMeta+End");
   await page.waitForTimeout(100);
-  await page.getByRole("button", { name: "Locate source in PDF" }).click();
+  await page.getByRole("button", { name: "Locate editor selection in PDF" }).click();
   const highlight = page.locator(".synctex-highlight");
   await highlight.waitFor();
   const point = await highlight.boundingBox();
@@ -120,6 +126,67 @@ async (page) => {
   await page.getByRole("textbox", { name: "Source editor for sections/method.tex" }).waitFor();
 }'
 run_accessibility
+
+run_code '
+async (page) => {
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Paper Review" });
+  await dialog.getByRole("button", { name: "Compact review window" }).click();
+  const compact = await dialog.boundingBox();
+  await dialog.getByRole("button", { name: "Wide review window" }).click();
+  const wide = await dialog.boundingBox();
+  await dialog.getByRole("button", { name: "Fullscreen review window" }).click();
+  const fullscreen = await dialog.boundingBox();
+  if (!compact || !wide || !fullscreen || !(compact.width < wide.width && wide.width < fullscreen.width) || fullscreen.height <= wide.height) {
+    throw new Error("Paper Review size controls did not produce compact, wide, and fullscreen layouts");
+  }
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+}
+'
+
+run_code '
+async (page) => {
+  await page.locator("span[title=\"main.tex\"]").click();
+  const editor = page.getByRole("textbox", { name: "Source editor for main.tex" });
+  await editor.waitFor();
+  const projectId = page.url().split("/").pop();
+  const fileUrl = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId + "/file?path=main.tex";
+  const opened = await (await page.request.get(fileUrl)).json();
+  const marker = "% Saved immediately by the global FastWrite shortcut";
+  const content = opened.content.replace("\\end{document}", marker + "\n\\end{document}");
+  await page.evaluate(() => {
+    window.__fastwriteSavePrevented = false;
+    window.addEventListener("keydown", event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        window.__fastwriteSavePrevented = event.defaultPrevented;
+      }
+    }, { capture: true });
+  });
+  await editor.focus();
+  await editor.press("ControlOrMeta+A");
+  await page.keyboard.insertText(content);
+  const agentButton = page.getByRole("button", { name: "Agent", exact: true });
+  await agentButton.focus();
+  if (await page.evaluate(() => document.activeElement?.textContent?.trim()) !== "Agent") {
+    throw new Error("Could not move focus outside the editor before testing the global save shortcut");
+  }
+  await agentButton.press("ControlOrMeta+s");
+  const prevented = await page.evaluate(() => window.__fastwriteSavePrevented);
+  if (!prevented) throw new Error("Ctrl/Cmd-S did not prevent the browser Save Page action");
+  let saved;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    saved = await (await page.request.get(fileUrl)).json();
+    if (saved.content.includes(marker)) break;
+    await page.waitForTimeout(50);
+  }
+  if (!saved?.content.includes(marker) || saved.file.version <= opened.file.version) {
+    throw new Error("Global Ctrl/Cmd-S did not immediately save a new paper version through the Workspace API");
+  }
+  await page.getByText("Saved", { exact: true }).waitFor();
+  await page.locator("span[title=\"sections/method.tex\"]").click();
+  await page.getByRole("textbox", { name: "Source editor for sections/method.tex" }).waitFor();
+}
+'
 
 run_code '
 async (page) => {
@@ -203,7 +270,7 @@ async (page) => {
 run_code '
 async (page) => {
   const projectId = page.url().split("/").pop();
-  const apiRoot = "http://127.0.0.1:3213/api/projects/" + projectId;
+  const apiRoot = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId;
   const timestamp = new Date().toISOString();
   const outline = [
     { path: "main.tex", title: "Abstract", purpose: "Summarize the security problem and evidence." },
@@ -283,12 +350,275 @@ async (page) => {
     });
   });
 
+  const agentTimestamp = new Date().toISOString();
+  let agentPlan;
+  let agentChangeSet;
+  let agentRun = {
+    id: "run-agent-review-e2e",
+    projectId,
+    type: "agent",
+    status: "waiting-approval",
+    objective: "Refine the paper one file at a time",
+    skill: { id: "security-top4", name: "Security Top-4", version: "1.0.0", venue: "security-top4" },
+    steps: [],
+    auditTrail: [],
+    createdAt: agentTimestamp,
+    updatedAt: agentTimestamp
+  };
+  const materializeAgentChange = change => {
+    let content = change.baseContent;
+    for (const hunk of [...change.hunks].sort((left, right) => right.from - left.from)) {
+      if (hunk.status === "accepted") content = content.slice(0, hunk.from) + hunk.after + content.slice(hunk.to);
+    }
+    return content;
+  };
+  const completeAgentProposal = change => materializeAgentChange({ ...change, hunks: change.hunks.map(hunk => ({ ...hunk, status: "accepted" })) });
+  await page.route("**/api/projects/*/agent-tasks", async route => {
+    if (route.request().method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(agentPlan ? [agentPlan] : []) });
+    agentPlan = {
+      id: "agent-plan-review-e2e",
+      projectId,
+      agentRunId: agentRun.id,
+      status: "proposed",
+      request: { objective: "Refine the paper one file at a time", scope: { type: "project" }, intent: "revise" },
+      intent: "revise",
+      steps: ["Refine main.tex", "Refine sections/method.tex"],
+      affectedFiles: ["main.tex", "sections/method.tex"],
+      risks: [],
+      validation: ["Compile the paper"],
+      createdAt: agentTimestamp,
+      updatedAt: agentTimestamp
+    };
+    await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ run: agentRun, plan: agentPlan }) });
+  });
+  await page.route("**/api/projects/*/agent-tasks/agent-plan-review-e2e/confirm", async route => {
+    agentRun = { ...agentRun, status: "running", steps: [
+      { id: "agent-generate-1", label: "Generate main.tex", status: "completed" },
+      { id: "agent-generate-2", label: "Generate sections/method.tex", status: "running" }
+    ] };
+    await page.waitForTimeout(900);
+    const main = await (await page.request.get(apiRoot + "/file?path=main.tex")).json();
+    const method = await (await page.request.get(apiRoot + "/file?path=sections%2Fmethod.tex")).json();
+    const mainClaim = "\\documentclass{article}";
+    const mainContribution = "\\input{sections/method}";
+    const methodBoundary = "This sentence is mapped from a secondary source file.";
+    if (!main.content.includes(mainClaim) || !main.content.includes(mainContribution) || !method.content.includes(methodBoundary)) {
+      throw new Error("Agent hunk fixture no longer matches the current E2E paper");
+    }
+    agentChangeSet = {
+      id: "agent-change-review-e2e",
+      projectId,
+      agentRunId: agentRun.id,
+      status: "proposed",
+      approvalMode: "explicit-finish",
+      summary: "Refine the paper one file at a time",
+      rationale: "Bounded per-file generation fixture.",
+      changes: [
+        {
+          operation: "replace", path: "main.tex", from: 0, to: main.content.length, before: main.content,
+          after: main.content.replace(mainClaim, "\\documentclass[11pt]{article}").replace(mainContribution, "\\input{sections/method}\n% Reviewed structure"),
+          baseVersion: main.file.version, baseContent: main.content, currentVersion: main.file.version,
+          hunks: [
+            { id: "agent-main-hunk-1", from: main.content.indexOf(mainClaim), to: main.content.indexOf(mainClaim) + mainClaim.length, before: mainClaim, after: "\\documentclass[11pt]{article}", status: "pending" },
+            { id: "agent-main-hunk-2", from: main.content.indexOf(mainContribution), to: main.content.indexOf(mainContribution) + mainContribution.length, before: mainContribution, after: "\\input{sections/method}\n% Reviewed structure", status: "pending" }
+          ]
+        },
+        {
+          operation: "replace", path: "sections/method.tex", from: 0, to: method.content.length, before: method.content,
+          after: method.content.replace(methodBoundary, "This sentence is grounded in a bounded source file."),
+          baseVersion: method.file.version, baseContent: method.content, currentVersion: method.file.version,
+          hunks: [{ id: "agent-method-hunk-1", from: method.content.indexOf(methodBoundary), to: method.content.indexOf(methodBoundary) + methodBoundary.length, before: methodBoundary, after: "This sentence is grounded in a bounded source file.", status: "pending" }]
+        }
+      ],
+      createdAt: agentTimestamp,
+      updatedAt: agentTimestamp
+    };
+    agentPlan = { ...agentPlan, status: "waiting-approval", changeSetId: agentChangeSet.id };
+    agentRun = { ...agentRun, status: "waiting-approval", changeSetId: agentChangeSet.id, steps: agentRun.steps.map(step => ({ ...step, status: "completed" })) };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: agentRun, plan: agentPlan, changeSet: agentChangeSet }) });
+  });
+  await page.route("**/api/projects/*/change-sets/agent-change-review-e2e", async route => {
+    if (route.request().method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(agentChangeSet) });
+    if (route.request().method() !== "PATCH") return route.fallback();
+    const request = route.request().postDataJSON();
+    for (const edit of request.hunks || []) {
+      const change = agentChangeSet.changes.find(candidate => candidate.path === edit.path);
+      const hunk = change?.hunks.find(candidate => candidate.id === edit.hunkId);
+      if (!change || !hunk) throw new Error("Agent hunk edit targeted an unknown hunk");
+      if (hunk.status === "accepted") throw new Error("Agent hunk edit unexpectedly targeted an accepted hunk");
+      hunk.after = edit.after;
+      change.after = completeAgentProposal(change);
+    }
+    agentRun = { ...agentRun, auditTrail: [...agentRun.auditTrail, { id: "audit-agent-hunk-edit", action: "hunk-edited", summary: "Edited one proposed hunk during review", paths: request.hunks.map(edit => edit.path), createdAt: new Date().toISOString() }] };
+    agentChangeSet = { ...agentChangeSet, updatedAt: new Date().toISOString() };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(agentChangeSet) });
+  });
+  await page.route("**/api/projects/*/change-sets/agent-change-review-e2e/decide", async route => {
+    const request = route.request().postDataJSON();
+    const nextChanges = JSON.parse(JSON.stringify(agentChangeSet.changes));
+    for (const decision of request.decisions) {
+      const change = nextChanges.find(candidate => candidate.path === decision.path);
+      for (const hunkId of decision.hunkIds) change.hunks.find(hunk => hunk.id === hunkId).status = decision.status;
+    }
+    const touchedPaths = [...new Set(request.decisions.map(decision => decision.path))];
+    const openedFiles = new Map();
+    const conflicts = [];
+    for (const path of touchedPaths) {
+      const currentChange = agentChangeSet.changes.find(change => change.path === path);
+      const nextChange = nextChanges.find(change => change.path === path);
+      const opened = await (await page.request.get(apiRoot + "/file?path=" + encodeURIComponent(path))).json();
+      openedFiles.set(path, opened);
+      const matchesExpected = opened.file.version === currentChange.currentVersion && opened.content === materializeAgentChange(currentChange);
+      const overwrite = request.overwriteConflicts?.find(candidate => candidate.path === path);
+      if (!matchesExpected && overwrite?.currentVersion !== opened.file.version) {
+        conflicts.push({ path, currentVersion: opened.file.version, currentContent: opened.content, reviewedContent: materializeAgentChange(nextChange) });
+      }
+    }
+    if (conflicts.length) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "changeset_conflict_review_required", message: "The workspace changed during review.", details: { changeSetId: agentChangeSet.id, conflicts } } }) });
+    for (const path of touchedPaths) {
+      const nextChange = nextChanges.find(change => change.path === path);
+      const opened = openedFiles.get(path);
+      const reviewedContent = materializeAgentChange(nextChange);
+      if (reviewedContent !== opened.content) {
+        const saved = await page.request.put(apiRoot + "/file?path=" + encodeURIComponent(path), { data: { content: reviewedContent, baseVersion: opened.file.version } });
+        if (!saved.ok()) throw new Error("Could not apply an Agent hunk decision fixture");
+        const savedBody = await saved.json();
+        nextChange.currentVersion = savedBody.file.version;
+        if (nextChange.hunks.some(hunk => hunk.status === "accepted")) nextChange.appliedVersion = savedBody.file.version;
+      }
+    }
+    agentChangeSet = { ...agentChangeSet, changes: nextChanges, status: "partially-accepted", updatedAt: new Date().toISOString() };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(agentChangeSet) });
+  });
+  await page.route("**/api/projects/*/change-sets/agent-change-review-e2e/finish", async route => {
+    if (agentChangeSet.changes.some(change => change.hunks.some(hunk => hunk.status === "pending"))) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { message: "Pending hunks remain" } }) });
+    const accepted = agentChangeSet.changes.some(change => change.hunks.some(hunk => hunk.status === "accepted"));
+    agentChangeSet = { ...agentChangeSet, status: accepted ? "accepted" : "rejected", reviewFinishedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    agentPlan = { ...agentPlan, status: accepted ? "accepted" : "cancelled", updatedAt: new Date().toISOString() };
+    agentRun = { ...agentRun, status: "completed" };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(agentChangeSet) });
+  });
+  await page.route("**/api/projects/*/agent-runs", async route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([agentRun]) }));
+  await page.route("**/api/projects/*/issue-resolutions", async route => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
+
   await page.getByRole("button", { name: "Agent" }).click();
   const agentPanel = page.getByRole("region", { name: "Agent workspace" });
   await agentPanel.waitFor();
-  await agentPanel.getByLabel("What should Agent do?").fill("/draft Create an initial paper outline for a bounded endpoint defense.");
+  const objective = agentPanel.getByLabel("What should Agent do?");
+  const commandButtons = ["/draft", "/continue", "/revise"].map(label => agentPanel.getByRole("button", { name: label, exact: true }));
+  const commandBoxes = await Promise.all(commandButtons.map(button => button.boundingBox()));
+  const commandContainer = await agentPanel.locator(".agent-command-buttons").boundingBox();
+  const commandWidth = commandBoxes.reduce((total, box) => total + (box?.width || 0), 0);
+  if (!commandContainer || commandBoxes.some(box => !box || box.width > 115) || commandContainer.width - commandWidth < 40) throw new Error("Agent command buttons still stretch across the composer");
+  await agentPanel.getByRole("button", { name: "/draft", exact: true }).click();
+  await objective.fill("/draft Create an initial paper outline for a bounded endpoint defense.");
+  await agentPanel.getByRole("button", { name: "/continue", exact: true }).click();
+  if (!(await objective.inputValue()).startsWith("/continue Create an initial")) throw new Error("Continue command did not preserve the Agent objective");
+  await agentPanel.getByRole("button", { name: "/revise", exact: true }).click();
+  if (!(await objective.inputValue()).startsWith("/revise Create an initial")) throw new Error("Revise command did not preserve the Agent objective");
+  await agentPanel.getByRole("button", { name: "/draft", exact: true }).click();
+  await objective.fill("Refine the paper one file at a time");
+  await agentPanel.getByRole("button", { name: "Create plan", exact: true }).click();
+  const confirmingAgentPlan = agentPanel.getByRole("button", { name: "Confirm plan", exact: true }).click();
+  await agentPanel.getByText("Generate sections/method.tex", { exact: true }).waitFor();
+  await confirmingAgentPlan;
+  await agentPanel.getByRole("button", { name: "main.tex: 2 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
+  const overviewCounts = agentPanel.locator(".agent-review-overview .review-counts b");
+  const overviewLabels = await overviewCounts.allTextContents();
+  const overviewColors = await overviewCounts.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
+  if (overviewLabels.join("|") !== "Pending 3|Accepted 0|Rejected 0" || new Set(overviewColors).size !== 3) {
+    throw new Error("Agent review overview does not show three complete, distinctly colored status totals");
+  }
+  await agentPanel.getByRole("button", { name: "Reject pending & complete", exact: true }).click();
+  const nextAgentObjective = agentPanel.getByLabel("What should Agent do?");
+  await nextAgentObjective.waitFor();
+  if (await nextAgentObjective.inputValue()) throw new Error("Reject pending & complete carried the rejected objective into the next Agent task");
+  await nextAgentObjective.fill("Refine the paper one file at a time");
+  await agentPanel.getByRole("button", { name: "Create plan", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "Confirm plan", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "main.tex: 2 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
+  const fileCounts = agentPanel.locator(".draft-diff__file > header .review-counts b");
+  const fileLabels = await fileCounts.allTextContents();
+  const fileColors = await fileCounts.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
+  if (fileLabels.join("|") !== "Pending 2/2|Accepted 0/2|Rejected 0/2" || new Set(fileColors).size !== 3) {
+    throw new Error("Agent file review does not show three complete, distinctly colored status totals");
+  }
+  await agentPanel.getByRole("button", { name: "Reject", exact: true }).first().click();
+  await agentPanel.getByRole("button", { name: "main.tex: 1 pending, 0 accepted, 1 rejected", exact: true }).waitFor();
+  const acceptPendingFile = agentPanel.getByRole("button", { name: "Accept pending file hunks", exact: true });
+  if (await acceptPendingFile.count() !== 1) {
+    await page.screenshot({ path: "output/playwright/workspace-agent-review-after-reject.png", fullPage: true });
+    throw new Error("Accept pending file hunks is missing after rejecting one hunk: " + await agentPanel.locator(".hunk-review").innerText());
+  }
+  await acceptPendingFile.click();
+  await agentPanel.getByRole("button", { name: "main.tex: 0 pending, 1 accepted, 1 rejected", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "Change to reject", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "main.tex: 0 pending, 0 accepted, 2 rejected", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "Change to accept", exact: true }).first().click();
+  await agentPanel.getByRole("button", { name: "main.tex: 0 pending, 1 accepted, 1 rejected", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "sections/method.tex: 1 pending, 0 accepted, 0 rejected", exact: true }).click();
+  if (await agentPanel.getByRole("button", { name: "Edit proposal", exact: true }).count()) throw new Error("Agent review still exposes whole-file proposal editing");
+  await agentPanel.getByRole("button", { name: "Edit hunk", exact: true }).click();
+  const hunkEditor = agentPanel.getByLabel("Edit hunk 1 for sections/method.tex");
+  await hunkEditor.fill("This sentence is grounded in bounded and unmanaged evidence.");
+  await agentPanel.getByRole("button", { name: "Save hunk", exact: true }).click();
+  await agentPanel.getByText("unmanaged", { exact: false }).waitFor();
+  await agentPanel.getByRole("button", { name: "Leave review", exact: true }).click();
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "sections/method.tex: 1 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
+  for (const viewport of [{ width: 1440, height: 900, name: "1440x900" }, { width: 720, height: 800, name: "720x800" }]) {
+    await page.setViewportSize(viewport);
+    const reviewBox = await agentPanel.locator(".draft-diff").boundingBox();
+    const overviewBox = await agentPanel.locator(".agent-review-overview").boundingBox();
+    const fileHeaderBox = await agentPanel.locator(".draft-diff__file > header").boundingBox();
+    if (!reviewBox || !overviewBox || !fileHeaderBox || overviewBox.x < reviewBox.x || overviewBox.x + overviewBox.width > reviewBox.x + reviewBox.width + 1 || fileHeaderBox.x + fileHeaderBox.width > reviewBox.x + reviewBox.width + 1) {
+      throw new Error("Agent review statistics overflow at " + viewport.name);
+    }
+    await page.screenshot({ path: "output/playwright/workspace-agent-review-" + viewport.name + ".png", fullPage: true });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const methodBeforeConflict = await (await page.request.get(apiRoot + "/file?path=sections%2Fmethod.tex")).json();
+  const externalMarker = "% External edit while Agent review is open";
+  const externalSave = await page.request.put(apiRoot + "/file?path=sections%2Fmethod.tex", { data: { content: methodBeforeConflict.content + "\n" + externalMarker, baseVersion: methodBeforeConflict.file.version } });
+  if (!externalSave.ok()) throw new Error("Could not create the Agent conflict fixture");
+  await agentPanel.getByRole("button", { name: "Accept pending & complete", exact: true }).click();
+  const conflictDialog = page.getByRole("dialog", { name: "File changed during review" });
+  await conflictDialog.waitFor();
+  const overwriteDiff = conflictDialog.getByLabel("Overwrite diff for sections/method.tex");
+  const removedText = (await overwriteDiff.locator("del").allTextContents()).join("");
+  const insertedText = (await overwriteDiff.locator("ins").allTextContents()).join("");
+  const compactRemoved = removedText.replace(/\s/g, "");
+  const compactInserted = insertedText.replace(/\s/g, "");
+  if (!compactRemoved.includes("ExternaleditwhileAgentreviewisopen") || !compactInserted.includes("unmanagedevidence")) {
+    throw new Error("Agent conflict review does not compare the current file with the reviewed hunk result: " + JSON.stringify({ removedText, insertedText }));
+  }
+  for (const viewport of [{ width: 1440, height: 900, name: "1440x900" }, { width: 720, height: 800, name: "720x800" }]) {
+    await page.setViewportSize(viewport);
+    const dialogBox = await conflictDialog.boundingBox();
+    const diffBox = await overwriteDiff.boundingBox();
+    const confirmBox = await conflictDialog.getByRole("button", { name: "Overwrite with reviewed result", exact: true }).boundingBox();
+    if (!dialogBox || !diffBox || !confirmBox || diffBox.x < dialogBox.x || diffBox.x + diffBox.width > dialogBox.x + dialogBox.width + 1 || confirmBox.y + confirmBox.height > dialogBox.y + dialogBox.height + 1) {
+      throw new Error("Agent conflict dialog overlaps or overflows at " + viewport.name);
+    }
+    await page.screenshot({ path: "output/playwright/workspace-agent-conflict-" + viewport.name + ".png", fullPage: true });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await conflictDialog.getByRole("button", { name: "Overwrite with reviewed result", exact: true }).click();
+  await agentPanel.getByText("Changes applied", { exact: true }).waitFor();
+  const overwrittenMethod = await (await page.request.get(apiRoot + "/file?path=sections%2Fmethod.tex")).json();
+  if (!overwrittenMethod.content.includes("unmanaged evidence") || overwrittenMethod.content.includes(externalMarker)) {
+    throw new Error("Confirmed Agent overwrite did not apply the reviewed hunk result");
+  }
   await page.screenshot({ path: "output/playwright/workspace-agent-composer.png", fullPage: true });
-  await agentPanel.getByRole("button", { name: "Back to Revise" }).click();
+  await agentPanel.getByRole("button", { name: "New task", exact: true }).click();
+  await page.getByRole("button", { name: "Revise", exact: true }).click();
+  await page.unroute("**/api/projects/*/agent-tasks");
+  await page.unroute("**/api/projects/*/agent-tasks/agent-plan-review-e2e/confirm");
+  await page.unroute("**/api/projects/*/change-sets/agent-change-review-e2e");
+  await page.unroute("**/api/projects/*/change-sets/agent-change-review-e2e/decide");
+  await page.unroute("**/api/projects/*/change-sets/agent-change-review-e2e/finish");
+  await page.unroute("**/api/projects/*/agent-runs");
+  await page.unroute("**/api/projects/*/issue-resolutions");
   await page.unroute("**/api/projects/*/drafts");
   await page.unroute("**/api/projects/*/drafts/draft-plan-e2e/confirm");
   await page.unroute("**/api/projects/*/change-sets/draft-change-e2e/accept");
@@ -300,13 +630,13 @@ async (page) => {
   const agentPanel = page.getByRole("region", { name: "Agent workspace" });
   await agentPanel.waitFor();
   await agentPanel.getByLabel("What should Agent do?").fill("Inspect cancellation behavior without creating changes");
-  await agentPanel.getByRole("button", { name: "Back to Revise" }).click();
+  await page.getByRole("button", { name: "Revise", exact: true }).click();
 }'
 
 run_code '
 async (page) => {
   const projectId = page.url().split("/").pop();
-  const apiRoot = "http://127.0.0.1:3213/api/projects/" + projectId;
+  const apiRoot = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId;
   const project = await (await page.request.get(apiRoot)).json();
   const opened = await (await page.request.get(apiRoot + "/file?path=main.tex")).json();
   const timestamp = new Date().toISOString();
@@ -339,7 +669,7 @@ async (page) => {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(memory) });
       return;
     }
-    if (method === "PATCH" && url.includes("/memory/items/")) {
+    if (method === "POST" && url.endsWith("/memory/apply")) {
       memory = { ...memory, id: "memory-e2e-v2", version: 2, items: memory.items.map(item => ({ ...item, status: "confirmed", updatedAt: new Date().toISOString() })), updatedAt: new Date().toISOString() };
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(memory) });
       return;
@@ -350,14 +680,13 @@ async (page) => {
   await page.getByRole("button", { name: "Memory" }).click();
   const memoryDialog = page.getByRole("dialog", { name: "Paper Memory" });
   await memoryDialog.getByRole("button", { name: "Generate Memory" }).click();
-  await memoryDialog.getByLabel("Label for Trust boundary").waitFor();
-  await memoryDialog.getByRole("button", { name: "Confirm" }).click();
-  await memoryDialog.getByText("confirmed", { exact: true }).waitFor();
+  await memoryDialog.getByText("threat-model: Trust boundary", { exact: true }).waitFor();
+  await memoryDialog.getByRole("button", { name: "Apply reviewed memory" }).click();
+  await memoryDialog.getByText("Reviewed memory is current", { exact: true }).waitFor();
   const browserName = page.context().browser()?.browserType().name() || "browser";
   const browserSuffix = browserName === "chromium" ? "" : "-" + browserName;
   await page.screenshot({ path: "output/playwright/workspace-memory-1440x900" + browserSuffix + ".png", fullPage: true });
-  await memoryDialog.locator(".memory-sources button").click();
-  await page.getByRole("textbox", { name: "Source editor for sections/method.tex" }).waitFor();
+  await memoryDialog.getByRole("button", { name: "Close", exact: true }).click();
 
   await page.route("**/api/projects/*/reviews", async route => {
     if (route.request().method() === "GET") {
@@ -409,9 +738,9 @@ async (page) => {
   });
   await page.route("**/api/projects/*/agent-tasks/revision-plan-e2e/confirm", async route => {
     const before = (await (await page.request.get(apiRoot + "/file?path=main.tex")).json()).content;
-    const after = before.replace("We define the trust boundary.", "We exclude compromised endpoints from the trusted computing base and evaluate guarantees only within this boundary.");
+    const after = before.replace("\\end{document}", "We exclude compromised endpoints from the trusted computing base and evaluate guarantees only within this boundary.\n\\end{document}");
     revisionChangeSet = {
-      id: "revision-change-e2e", projectId, agentRunId: taskRun.id, status: "proposed",
+      id: "revision-change-e2e", projectId, agentRunId: taskRun.id, status: "proposed", approvalMode: "explicit-finish",
       summary: "Clarify the threat-model boundary", rationale: "Resolve the selected Security Top-4 Review Issue.",
       changes: [{ path: "main.tex", from: 0, to: before.length, before, after, baseVersion: (await (await page.request.get(apiRoot + "/file?path=main.tex")).json()).file.version,
         hunks: [{ id: "revision-hunk-e2e", from: 0, to: before.length, before, after, status: "pending", rationale: "Make the claim match the explicit attacker model.", evidence: [{ issueId: "issue-e2e", issueTitle: "Threat-model boundary needs explicit evidence", path: "main.tex", line: 4, excerpt: "We define the trust boundary.", inferred: false }] }]
@@ -432,13 +761,33 @@ async (page) => {
     resolution = { ...resolution, status: "needs-review", acceptedProjectVersion: savedBody.projectVersion, updatedAt: new Date().toISOString() };
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(revisionChangeSet) });
   });
+  await page.route("**/api/projects/*/change-sets/revision-change-e2e/decide", async route => {
+    const request = route.request().postDataJSON();
+    for (const decision of request.decisions) for (const hunkId of decision.hunkIds) revisionChangeSet.changes.find(change => change.path === decision.path).hunks.find(hunk => hunk.id === hunkId).status = decision.status;
+    revisionChangeSet = { ...revisionChangeSet, status: "partially-accepted", updatedAt: new Date().toISOString() };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(revisionChangeSet) });
+  });
+  await page.route("**/api/projects/*/change-sets/revision-change-e2e/finish", async route => {
+    const latest = await (await page.request.get(apiRoot + "/file?path=main.tex")).json();
+    const saved = await page.request.put(apiRoot + "/file?path=main.tex", { data: { content: revisionChangeSet.changes[0].after, baseVersion: latest.file.version } });
+    if (!saved.ok()) throw new Error("Could not apply the finished P1 Revision fixture");
+    const savedBody = await saved.json();
+    revisionChangeSet = { ...revisionChangeSet, status: "accepted", reviewFinishedAt: new Date().toISOString(), changes: revisionChangeSet.changes.map(change => ({ ...change, appliedVersion: savedBody.file.version, hunks: change.hunks.map(hunk => ({ ...hunk, status: hunk.status === "pending" ? "accepted" : hunk.status })) })), updatedAt: new Date().toISOString() };
+    taskPlan = { ...taskPlan, status: "accepted", acceptedProjectVersion: savedBody.projectVersion, updatedAt: new Date().toISOString() };
+    taskRun = { ...taskRun, status: "completed", updatedAt: new Date().toISOString() };
+    resolution = { ...resolution, status: "needs-review", acceptedProjectVersion: savedBody.projectVersion, updatedAt: new Date().toISOString() };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(revisionChangeSet) });
+  });
   await page.route("**/api/projects/*/change-sets/revision-change-e2e", async route => {
     if (route.request().method() !== "PATCH") return route.fallback();
-    const edited = route.request().postDataJSON().changes[0];
+    const edited = route.request().postDataJSON().hunks[0];
     const current = revisionChangeSet.changes.find(change => change.path === edited.path);
-    if (!current) throw new Error("Manual proposal edit targeted an unknown file");
-    revisionChangeSet = { ...revisionChangeSet, changes: revisionChangeSet.changes.map(change => change.path !== edited.path ? change : { ...change, after: edited.after, hunks: [{ id: "revision-hunk-edited-e2e", from: 0, to: change.before.length, before: change.before, after: edited.after, status: "pending" }] }), updatedAt: new Date().toISOString() };
-    taskRun = { ...taskRun, auditTrail: [...(taskRun.auditTrail || []), { id: "audit-edit-e2e", action: "proposal-edited", summary: "Edited 1 proposed file before approval", paths: [edited.path], createdAt: new Date().toISOString() }] };
+    const hunk = current?.hunks.find(candidate => candidate.id === edited.hunkId);
+    if (!current || !hunk) throw new Error("Manual hunk edit targeted an unknown hunk");
+    hunk.after = edited.after;
+    current.after = edited.after;
+    revisionChangeSet = { ...revisionChangeSet, updatedAt: new Date().toISOString() };
+    taskRun = { ...taskRun, auditTrail: [...(taskRun.auditTrail || []), { id: "audit-edit-e2e", action: "hunk-edited", summary: "Edited 1 proposed hunk during review", paths: [edited.path], createdAt: new Date().toISOString() }] };
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(revisionChangeSet) });
   });
   await page.route("**/api/projects/*/issue-resolutions/resolution-e2e/rereview", async route => {
@@ -471,13 +820,13 @@ async (page) => {
   await hunkEvidence.waitFor();
   if (!(await hunkEvidence.textContent()).includes("Make the claim match the explicit attacker model.")) throw new Error("Revision Diff omitted its Issue rationale");
   await page.screenshot({ path: "output/playwright/workspace-revision-evidence-1440x900" + browserSuffix + ".png", fullPage: true });
-  await revisionPanel.getByRole("button", { name: "Edit proposal" }).click();
-  const proposalEditor = revisionPanel.getByLabel("Editable proposal for main.tex");
+  await revisionPanel.getByRole("button", { name: "Edit hunk", exact: true }).click();
+  const proposalEditor = revisionPanel.getByLabel("Edit hunk 1 for main.tex");
   await proposalEditor.fill(revisionChangeSet.changes[0].after.replace("evaluate guarantees only within this boundary", "evaluate guarantees only within this explicitly stated boundary"));
   await page.screenshot({ path: "output/playwright/workspace-revision-manual-edit-1440x900" + browserSuffix + ".png", fullPage: true });
-  await revisionPanel.getByRole("button", { name: "Save proposal" }).click();
+  await revisionPanel.getByRole("button", { name: "Save hunk", exact: true }).click();
   await revisionPanel.locator(".hunk-card").waitFor();
-  await revisionPanel.getByRole("button", { name: "Accept changes" }).click();
+  await revisionPanel.getByRole("button", { name: "Accept pending & complete", exact: true }).click();
   await revisionPanel.getByText("needs review", { exact: true }).waitFor();
   await revisionPanel.getByRole("button", { name: "Compile current version" }).click();
   await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 30000 });
@@ -496,6 +845,8 @@ async (page) => {
   await page.unroute("**/api/projects/*/agent-tasks/revision-plan-e2e/confirm");
   await page.unroute("**/api/projects/*/change-sets/revision-change-e2e");
   await page.unroute("**/api/projects/*/change-sets/revision-change-e2e/accept");
+  await page.unroute("**/api/projects/*/change-sets/revision-change-e2e/decide");
+  await page.unroute("**/api/projects/*/change-sets/revision-change-e2e/finish");
   await page.unroute("**/api/projects/*/issue-resolutions/resolution-e2e/rereview");
 }'
 
@@ -503,7 +854,7 @@ run_code '
 async (page) => {
   let completionRequests = 0;
   const projectId = page.url().split("/").pop();
-  const fileUrl = "http://127.0.0.1:3213/api/projects/" + projectId + "/file?path=main.tex";
+  const fileUrl = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId + "/file?path=main.tex";
   await page.route("**/api/projects/*/completions", async route => {
     completionRequests += 1;
     const request = route.request().postDataJSON();
@@ -521,7 +872,7 @@ async (page) => {
   if (typingLatency > 500) throw new Error("Completion integration blocked normal editor input for " + typingLatency + "ms");
   await page.waitForTimeout(350);
   if (completionRequests !== 0) throw new Error("Completion request ignored the input debounce window");
-  const preview = page.getByRole("status", { name: "Writing completion preview" });
+  const preview = page.getByRole("status").filter({ hasText: "Writing suggestion available" });
   await preview.waitFor({ timeout: 5000 });
   const browserName = page.context().browser()?.browserType().name() || "browser";
   const browserSuffix = browserName === "chromium" ? "" : "-" + browserName;
@@ -598,6 +949,35 @@ async (page) => {
     const browserSuffix = browserName === "chromium" ? "" : "-" + browserName;
     await page.screenshot({ path: "output/playwright/workspace-pdf-error-" + viewport.name + browserSuffix + ".png", fullPage: true });
   }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const fixButton = page.getByRole("button", { name: "Fix with Agent" });
+  await fixButton.waitFor();
+  const fixBox = await fixButton.boundingBox();
+  const pdfBox = await page.locator(".pdf-pane").boundingBox();
+  if (!fixBox || !pdfBox || fixBox.x < pdfBox.x || fixBox.x + fixBox.width > pdfBox.x + pdfBox.width) throw new Error("Fix with Agent is clipped in the PDF failure state");
+  await fixButton.click();
+  await page.getByRole("region", { name: "Agent workspace" }).waitFor();
+  const agentObjective = page.getByRole("textbox", { name: "What should Agent do?" });
+  await agentObjective.waitFor();
+  const objective = await agentObjective.inputValue();
+  if (!objective.startsWith("/revise ")) throw new Error("Compile repair did not select the Agent revise intent");
+  if (!objective.includes("main.tex")) throw new Error("Compile repair did not include the main document");
+  if (!/Undefined control sequence|undefinedFastWriteCommand/i.test(objective)) throw new Error("Compile repair did not include the actionable compiler diagnostic");
+  await page.setViewportSize({ width: 720, height: 800 });
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  if (overflow) throw new Error("Compile repair Agent caused page-level overflow at 720x800");
+  const browserName = page.context().browser()?.browserType().name() || "browser";
+  const browserSuffix = browserName === "chromium" ? "" : "-" + browserName;
+  await page.screenshot({ path: "output/playwright/workspace-compile-repair-agent-720x800" + browserSuffix + ".png", fullPage: true });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("button", { name: "Revise", exact: true }).click();
+  await editor.focus();
+  await editor.press("ControlOrMeta+A");
+  await page.keyboard.insertText("\\documentclass{article}\n\\begin{document}\nCompilation repaired.\n\\end{document}");
+  await page.getByText("Saved", { exact: true }).waitFor();
+  await page.locator(".compile-strip--success").waitFor({ timeout: 30000 });
+  if (await page.locator(".react-pdf__Page__canvas").count() < 1) throw new Error("Automatic retry after a failed compile did not produce a PDF");
 }'
 run_accessibility
 
@@ -626,8 +1006,9 @@ async (page) => {
 run_code '
 async (page) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("http://127.0.0.1:3213/projects");
-  const projects = await (await page.request.get("http://127.0.0.1:3213/api/projects")).json();
+  const origin = page.url().replace(/\/projects(?:\/.*)?$/, "");
+  await page.goto(origin + "/projects");
+  const projects = await (await page.request.get(origin + "/api/projects")).json();
   const imported = {
     ...projects[0],
     name: "Imported Security Paper",

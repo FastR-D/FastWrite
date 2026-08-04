@@ -7,5 +7,10 @@ export function completionSuffix(suggestion: string, textBeforeCursor: string): 
   for (let size = maximum; size > 0; size -= 1) {
     if (textBeforeCursor.endsWith(suggestion.slice(0, size))) return suggestion.slice(size);
   }
-  return suggestion;
+  return separateEnglishWords(suggestion, textBeforeCursor);
+}
+
+function separateEnglishWords(suffix: string, textBeforeCursor: string): string {
+  if (/[A-Za-z0-9]$/.test(textBeforeCursor) && /^[A-Za-z0-9]/.test(suffix)) return ` ${suffix}`;
+  return suffix;
 }
