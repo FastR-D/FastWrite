@@ -31,7 +31,7 @@ export interface AgentProvider {
   summarizeMemory?(input: MemoryHierarchyInput, signal?: AbortSignal): Promise<MemoryHierarchyOutput>;
   polishMemory?(input: MemoryPolishInput, signal?: AbortSignal): Promise<{ content: string }>;
   planAgentTask?(input: AgentTaskInput, signal?: AbortSignal): Promise<AgentTaskPlanOutput>;
-  generateAgentTask?(input: AgentTaskInput & AgentTaskPlanOutput, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }>;
+  generateAgentTask?(input: AgentTaskExecutionInput, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }>;
   rereviewIssues?(input: AgentTaskInput & { issues: AgentTaskIssue[] }, signal?: AbortSignal): Promise<{ assessments: Array<{ issueId: string; resolved: boolean; assessment: string }>; regressions: string[] }>;
   complete?(input: CompletionAgentInput, signal?: AbortSignal): Promise<{ suggestion: string }>;
 }
@@ -49,6 +49,7 @@ export interface AgentTaskInput {
   venueInstructions: string;
 }
 export interface AgentTaskPlanOutput { steps: string[]; affectedFiles: string[]; risks: string[]; validation: string[] }
+export interface AgentTaskExecutionInput extends AgentTaskInput, AgentTaskPlanOutput { targetPath: string }
 
 export interface MemoryAgentInput {
   documents: Array<{ path: string; content: string; version: number }>;
@@ -309,15 +310,15 @@ export class OpenAIAgentProvider implements AgentProvider {
   }
 
   async planAgentTask(input: AgentTaskInput, signal?: AbortSignal): Promise<AgentTaskPlanOutput> {
-    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Plan a ${input.intent} paper task. Do not write files yet. For draft or continue tasks, you may propose new workspace-relative .tex or .bib files.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, availableFiles: input.documents.map((document) => document.path) }, "fastwrite_agent_plan", {
+    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Plan a ${input.intent} paper task. Do not write files yet. For draft, continue, or structural organization tasks such as splitting main.tex into chapter/section files, you may propose new workspace-relative .tex or .bib files.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, availableFiles: input.documents.map((document) => document.path) }, "fastwrite_agent_plan", {
       type: "object", additionalProperties: false, properties: {
         steps: { type: "array", minItems: 1, items: { type: "string" } }, affectedFiles: { type: "array", minItems: 1, items: { type: "string" } }, risks: { type: "array", items: { type: "string" } }, validation: { type: "array", minItems: 1, items: { type: "string" } }
       }, required: ["steps", "affectedFiles", "risks", "validation"]
     }, signal);
   }
 
-  async generateAgentTask(input: AgentTaskInput & AgentTaskPlanOutput, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }> {
-    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Execute the approved ${input.intent} paper plan for exactly the one target file in affectedFiles. Return that file's complete content and no other file. Preserve every existing LaTeX comment verbatim because comments contain user instructions. Preserve unsupported claims and LaTeX syntax.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, plan: { steps: input.steps, affectedFiles: input.affectedFiles, risks: input.risks, validation: input.validation }, documents: input.documents }, "fastwrite_agent_files", {
+  async generateAgentTask(input: AgentTaskExecutionInput, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }> {
+    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Execute the approved ${input.intent} paper plan for targetPath. Return targetPath's complete content. If targetPath is tightly coupled to companion files already listed in affectedFiles (for example while splitting main.tex into chapter files), you may include those additional planned files too. Do not return paths outside affectedFiles. LaTeX comments are intentionally omitted from Agent context and restored by FastWrite; do not invent or act on hidden comment lines. Preserve unsupported claims and LaTeX syntax.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, targetPath: input.targetPath, plan: { steps: input.steps, affectedFiles: input.affectedFiles, risks: input.risks, validation: input.validation }, documents: input.documents }, "fastwrite_agent_files", {
       type: "object", additionalProperties: false, properties: { files: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, properties: { path: { type: "string" }, content: { type: "string" }, rationale: { type: "string" } }, required: ["path", "content", "rationale"] } } }, required: ["files"]
     }, signal);
   }

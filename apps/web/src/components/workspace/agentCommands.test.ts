@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activeAgentIntentCommand, applyAgentIntentCommand, recoverableAgentPlan } from "./agentCommands";
+import { activeAgentIntentCommand, applyAgentIntentCommand, recoverableAgentPlan, restoredAgentReviewStage } from "./agentCommands";
 
 describe("Agent intent command buttons", () => {
   test("insert and replace an intent without discarding the objective", () => {
@@ -16,12 +16,12 @@ describe("Agent intent command buttons", () => {
     expect(activeAgentIntentCommand("Write it /draft")).toBeNull();
   });
 
-  test("does not reopen older accepted history after starting a new task", () => {
+  test("does not reopen completed Agent history when the composer is ready for a new task", () => {
     const plans = [
       { id: "latest", status: "accepted" as const, changeSetId: "change-latest" },
       { id: "older", status: "accepted" as const, changeSetId: "change-older" }
     ];
-    expect(recoverableAgentPlan(plans, null)?.id).toBe("latest");
+    expect(recoverableAgentPlan(plans, null)).toBeUndefined();
     expect(recoverableAgentPlan(plans, "latest")).toBeUndefined();
   });
 
@@ -31,5 +31,14 @@ describe("Agent intent command buttons", () => {
       { id: "pending", status: "waiting-approval" as const }
     ];
     expect(recoverableAgentPlan(plans, "accepted")?.id).toBe("pending");
+  });
+
+  test("does not show stale finished ChangeSets as pending Agent review", () => {
+    expect(restoredAgentReviewStage({ status: "proposed" })).toBe("diff");
+    expect(restoredAgentReviewStage({ status: "partially-accepted" })).toBe("diff");
+    expect(restoredAgentReviewStage({ status: "accepted" })).toBeNull();
+    expect(restoredAgentReviewStage({ status: "rejected" })).toBeNull();
+    expect(restoredAgentReviewStage({ status: "rolled-back" })).toBeNull();
+    expect(restoredAgentReviewStage({ status: "conflict" })).toBeNull();
   });
 });

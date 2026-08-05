@@ -33,6 +33,13 @@ export function preserveLatexComments(before: string, generated: string): string
   return generatedLines.join("\n");
 }
 
+export function stripLatexComments(source: string): string {
+  return source.split("\n").map((line) => {
+    const offset = commentOffset(line);
+    return offset < 0 ? line : line.slice(0, offset).trimEnd();
+  }).join("\n");
+}
+
 function commentOffset(line: string): number {
   for (let index = 0; index < line.length; index += 1) {
     if (line[index] !== "%") continue;

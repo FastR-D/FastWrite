@@ -524,12 +524,15 @@ describe("workspace API", () => {
   test("routes a unified Agent draft command through a reviewed plan that may create source files", async () => {
     let seenIntent = "";
     const generatedTargets: string[] = [];
+    const visiblePlanDocuments: string[] = [];
+    const visibleGenerationDocuments: string[] = [];
     const provider: AgentProvider = {
       async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
-      async planAgentTask(input) { seenIntent = input.intent; return { steps: ["Create the editable outline"], affectedFiles: ["main.tex", "sections/introduction.tex", "references.bib"], risks: [], validation: ["Compile"] }; },
+      async planAgentTask(input) { seenIntent = input.intent; visiblePlanDocuments.push(...input.documents.map((document) => document.content)); return { steps: ["Create the editable outline"], affectedFiles: ["main.tex", "sections/introduction.tex", "references.bib"], risks: [], validation: ["Compile"] }; },
       async generateAgentTask(input) {
-        const target = input.affectedFiles[0]!;
+        const target = input.targetPath;
         generatedTargets.push(target);
+        visibleGenerationDocuments.push(...input.documents.map((document) => document.content));
         const generated: Record<string, DraftGeneratedFile> = {
           "main.tex": { path: "main.tex", content: "\\documentclass{article}\\begin{document}\\input{sections/introduction}\\end{document}", rationale: "Sets up the paper." },
           "sections/introduction.tex": { path: "sections/introduction.tex", content: "\\section{Introduction}\nTODO: Add evidence.", rationale: "Creates an editable outline section." },
@@ -546,6 +549,7 @@ describe("workspace API", () => {
     expect(planned.status).toBe(201);
     const body = await planned.json() as { plan: { id: string; intent: string; affectedFiles: string[] } };
     expect(seenIntent).toBe("draft");
+    expect(visiblePlanDocuments.every((content) => !content.includes("Keep this user instruction"))).toBe(true);
     expect(body.plan).toMatchObject({ intent: "draft", affectedFiles: ["main.tex", "sections/introduction.tex", "references.bib"] });
     const generated = await request(`/api/projects/${project.id}/agent-tasks/${body.plan.id}/confirm`, { method: "POST" });
     expect(generated.status).toBe(201);
@@ -553,10 +557,11 @@ describe("workspace API", () => {
     const changeSet = await generated.json() as { changeSet: ChangeSet; run: { steps: Array<{ id: string; label: string; status: string }>; auditTrail: Array<{ action: string }> } };
     expect(changeSet.changeSet).toMatchObject({ approvalMode: "explicit-finish", status: "proposed" });
     expect(changeSet.run.steps).toEqual([
-      { id: "generate-file-1", label: "Generate main.tex", status: "completed" },
-      { id: "generate-file-2", label: "Generate sections/introduction.tex", status: "completed" },
-      { id: "generate-file-3", label: "Generate references.bib", status: "completed" }
+      { id: "generate-file-1", label: "Process main.tex", status: "completed" },
+      { id: "generate-file-2", label: "Process sections/introduction.tex", status: "completed" },
+      { id: "generate-file-3", label: "Process references.bib", status: "completed" }
     ]);
+    expect(visibleGenerationDocuments.every((content) => !content.includes("Keep this user instruction"))).toBe(true);
     expect(changeSet.run.auditTrail.filter((event) => event.action === "generation-progress")).toHaveLength(3);
     expect(changeSet.changeSet.changes.find((change) => change.path === "main.tex")?.after).toContain("% Keep this user instruction.");
     expect((await request(`/api/projects/${project.id}/file?path=sections%2Fintroduction.tex`)).status).toBe(404);
@@ -575,6 +580,55 @@ describe("workspace API", () => {
     expect(accepted.status).toBe(200);
     expect(await accepted.json()).toMatchObject({ status: "accepted", reviewFinishedAt: expect.any(String), changes: expect.arrayContaining([expect.objectContaining({ path: "sections/introduction.tex", hunks: expect.arrayContaining([expect.objectContaining({ status: "rejected" })]) })]) });
     expect((await request(`/api/projects/${project.id}/file?path=sections%2Fintroduction.tex`)).status).toBe(404);
+  });
+
+  test("splits a main document into planned chapter files without rejecting bundled Agent output", async () => {
+    const generatedTargets: string[] = [];
+    let activeGenerations = 0;
+    let maxConcurrentGenerations = 0;
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async planAgentTask(input) {
+        expect(input.intent).toBe("revise");
+        return {
+          steps: ["Split main.tex into included chapter files"],
+          affectedFiles: ["main.tex", "sections/introduction.tex", "sections/method.tex"],
+          risks: ["Preserve section order"],
+          validation: ["Compile"]
+        };
+      },
+      async generateAgentTask(input) {
+        generatedTargets.push(input.targetPath);
+        activeGenerations += 1;
+        maxConcurrentGenerations = Math.max(maxConcurrentGenerations, activeGenerations);
+        await Bun.sleep(30);
+        activeGenerations -= 1;
+        const generated: Record<string, DraftGeneratedFile> = {
+          "main.tex": { path: "main.tex", content: "\\documentclass{article}\n\\begin{document}\n\\input{sections/introduction}\n\\input{sections/method}\n\\end{document}", rationale: "Keeps main as the root document." },
+          "sections/introduction.tex": { path: "sections/introduction.tex", content: "\\section{Introduction}\nThe system has a bounded goal.", rationale: "Moves the introduction out of main.tex." },
+          "sections/method.tex": { path: "sections/method.tex", content: "\\section{Method}\nThe method remains unchanged.", rationale: "Moves the method out of main.tex." }
+        };
+        return input.targetPath === "main.tex"
+          ? { files: [generated["main.tex"]!, generated["sections/introduction.tex"]!, generated["sections/method.tex"]!] }
+          : { files: [generated[input.targetPath]!] };
+      }
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Split Main" }) })).json() as PaperProject;
+    const original = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const monolith = "\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nThe system has a bounded goal.\n\\section{Method}\nThe method remains unchanged.\n\\end{document}";
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: monolith, baseVersion: original.file.version }) });
+    const planned = await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "/revise 将main.tex拆分章节", scope: { type: "project" } }) });
+    expect(planned.status).toBe(201);
+    const body = await planned.json() as { plan: { id: string; affectedFiles: string[] } };
+    expect(body.plan.affectedFiles).toEqual(["main.tex", "sections/introduction.tex", "sections/method.tex"]);
+    const generated = await request(`/api/projects/${project.id}/agent-tasks/${body.plan.id}/confirm`, { method: "POST" });
+    expect(generated.status).toBe(201);
+    expect(new Set(generatedTargets)).toEqual(new Set(["main.tex", "sections/introduction.tex", "sections/method.tex"]));
+    expect(maxConcurrentGenerations).toBeGreaterThan(1);
+    const response = await generated.json() as { changeSet: ChangeSet; run: { auditTrail: Array<{ action: string; summary: string }> } };
+    expect(response.changeSet.changes.map((change) => change.path).sort()).toEqual(["main.tex", "sections/introduction.tex", "sections/method.tex"]);
+    expect(response.run.auditTrail.find((event) => event.action === "execution-started")?.summary).toContain("in parallel");
   });
 
   test("routes every explicit Agent command and repairs an incomplete compatible-model plan", async () => {

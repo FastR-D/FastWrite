@@ -7,7 +7,7 @@ import type { AgentProvider, AgentTaskInput, AgentTaskIssue, AgentTaskPlanOutput
 import type { MemoryService } from "./memory-service";
 import type { SkillRegistry } from "./skill-registry";
 import { createFileChange, replaceFileChange } from "./change-set";
-import { preserveLatexComments } from "./latex-comments";
+import { preserveLatexComments, stripLatexComments } from "./latex-comments";
 import { isAgentCancellation, runAgentOperation } from "./agent-operation";
 
 function now() { return new Date().toISOString(); }
@@ -23,26 +23,27 @@ export class AgentTaskService {
     const project = this.workspaces.getProject(projectId);
     if (request.scope.path && !await this.workspaces.fileExists(projectId, request.scope.path)) throw new ApiError(404, "agent_scope_not_found", "The scoped file does not exist");
     const documents = await this.documents(projectId);
+    const visibleDocuments = agentVisibleDocuments(documents);
     const commandIntent = parseIntentCommand(request.objective);
     const objective = stripIntentCommand(request.objective);
     if (!objective) throw new ApiError(400, "agent_objective_missing", "Describe the drafting or revision objective after the command");
-    const intent = request.intent ?? commandIntent ?? classifyAgentIntent(objective, documents);
+    const intent = request.intent ?? commandIntent ?? classifyAgentIntent(objective, visibleDocuments);
     const normalizedRequest: AgentTaskRequest = { ...request, objective, intent };
     const issues = this.issues(projectId, request.issueIds ?? []);
     const skill = await this.skills.load(project.skill);
     const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };
-    const input = this.input(normalizedRequest, documents, issues, project.skill, withMemory(skill.instructions, memory.content), skill.venueInstructions);
+    const input = this.input(normalizedRequest, visibleDocuments, issues, project.skill, withMemory(skill.instructions, memory.content), skill.venueInstructions);
     const createdAt = now();
-    const searchMatches = searchDocumentPaths(documents, objective);
+    const searchMatches = searchDocumentPaths(visibleDocuments, objective);
     const run: AgentRun = { id: `run_${crypto.randomUUID()}`, projectId, type: "agent", status: "running", objective, skill: structuredClone(project.skill), createdAt, updatedAt: createdAt, auditTrail: [
-      { id: `audit_${crypto.randomUUID()}`, action: "context-read", summary: `Read ${documents.length} project source files within the context budget`, paths: documents.map((document) => document.path), createdAt },
+      { id: `audit_${crypto.randomUUID()}`, action: "context-read", summary: `Read ${documents.length} project source files within the context budget; LaTeX comments were omitted from Agent context`, paths: documents.map((document) => document.path), createdAt },
       { id: `audit_${crypto.randomUUID()}`, action: "context-search", summary: `Searched indexed source context; ${searchMatches.length} files matched objective terms`, ...(searchMatches.length ? { paths: searchMatches } : {}), createdAt }
     ], ...(memory.version ? { memoryVersion: memory.version } : {}) };
     await this.database.mutate((state) => state.agentRuns.push(run));
     try {
       const rawOutput: unknown = await runAgentOperation((signal) => this.provider!.planAgentTask!(input, signal), { signal: requestSignal, label: "Agent planning" });
       const available = new Set(documents.map((document) => document.path));
-      const permitsNewFiles = intent === "draft" || intent === "continue";
+      const permitsNewFiles = intent === "draft" || intent === "continue" || isStructuralFileOrganizationObjective(objective);
       const allowedPath = (path: string) => available.has(path) || (permitsNewFiles && request.scope.type === "project" && isNewDraftPath(path));
       const output = normalizeAgentPlanOutput(rawOutput, request.scope.path ?? project.mainDocument, allowedPath, intent);
       const affectedFiles = output.affectedFiles;
@@ -87,26 +88,26 @@ export class AgentTaskService {
     const issues = this.issues(projectId, plan.request.issueIds ?? []);
     const skill = await this.skills.load(project.skill);
     const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };
-    const input = this.input(plan.request, documents, issues, project.skill, withMemory(skill.instructions, memory.content), skill.venueInstructions);
-    await this.database.mutate((state) => { const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "generating"; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "running"; delete run.error; run.steps = plan.affectedFiles.map((path, index) => ({ id: `generate-file-${index + 1}`, label: `Generate ${path}`, status: index === 0 ? "running" : "pending" })); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "execution-started", summary: `Started ${plan.affectedFiles.length} bounded file-generation calls`, paths: plan.affectedFiles, createdAt: now() }); for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "in_revision"); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.status = "in-revision"; resolution.updatedAt = now(); } });
+    const visibleDocuments = agentVisibleDocuments(documents);
+    const input = this.input(plan.request, visibleDocuments, issues, project.skill, withMemory(skill.instructions, memory.content), skill.venueInstructions);
+    await this.database.mutate((state) => { const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "generating"; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "running"; delete run.error; run.steps = plan.affectedFiles.map((path, index) => ({ id: `generate-file-${index + 1}`, label: executionStepLabel(path), status: "running" })); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "execution-started", summary: `Started checking scoped context and updating ${plan.affectedFiles.length} planned files in parallel`, paths: plan.affectedFiles, createdAt: now() }); for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "in_revision"); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.status = "in-revision"; resolution.updatedAt = now(); } });
     try {
-      const files: DraftGeneratedFile[] = [];
-      for (let index = 0; index < plan.affectedFiles.length; index += 1) {
-        const path = plan.affectedFiles[index]!;
-        const scopedDocuments = generationDocuments(documents, path, project.mainDocument, issues, plan.request.objective);
-        const output = await runAgentOperation<{ files?: DraftGeneratedFile[] }>((signal) => this.provider!.generateAgentTask!({ ...input, documents: scopedDocuments, steps: plan.steps, affectedFiles: [path], risks: plan.risks, validation: plan.validation }, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: `Agent execution for ${path}` });
-        files.push(this.validateTargetFile(Array.isArray(output?.files) ? output.files : [], path));
+      const allowedOutputPaths = new Set(plan.affectedFiles);
+      const generated = await Promise.all(plan.affectedFiles.map(async (path, index) => {
+        const scopedDocuments = generationDocuments(visibleDocuments, path, project.mainDocument, issues, plan.request.objective);
+        const output = await runAgentOperation<{ files?: DraftGeneratedFile[] }>((signal) => this.provider!.generateAgentTask!({ ...input, documents: scopedDocuments, steps: plan.steps, affectedFiles: plan.affectedFiles, targetPath: path, risks: plan.risks, validation: plan.validation }, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: `Agent execution for ${path}` });
+        const files = this.validateGeneratedFiles(Array.isArray(output?.files) ? output.files : [], path, allowedOutputPaths);
         await this.database.mutate((state) => {
           const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!;
           const current = run.steps?.[index];
           if (current) current.status = "completed";
-          const next = run.steps?.[index + 1];
-          if (next) next.status = "running";
           run.auditTrail ??= [];
-          run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "generation-progress", summary: `Generated file ${index + 1} of ${plan.affectedFiles.length}: ${path}`, paths: [path], createdAt: now() });
+          run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "generation-progress", summary: `Checked scoped context and updated file ${index + 1} of ${plan.affectedFiles.length}: ${path}`, paths: [path], createdAt: now() });
           run.updatedAt = now();
         });
-      }
+        return { targetPath: path, files };
+      }));
+      const files = mergeGeneratedFiles(generated, plan.affectedFiles);
       const changes: TextChange[] = [];
       for (const file of files) {
         const snapshot = documents.find((document) => document.path === file.path);
@@ -211,7 +212,18 @@ export class AgentTaskService {
   private issues(projectId: string, ids: string[]): ReviewIssue[] { const all = this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).flatMap((report) => report.issues); const issues = ids.map((id) => all.find((issue) => issue.id === id)).filter((issue): issue is ReviewIssue => Boolean(issue)); if (issues.length !== new Set(ids).size) throw new ApiError(404, "review_issue_not_found", "One or more review issues were not found"); return issues; }
   private input(request: AgentTaskRequest, documents: Array<{ path: string; content: string; version: number }>, issues: ReviewIssue[], skill: AgentTaskInput["skill"], skillInstructions: string, venueInstructions: string): AgentTaskInput { return { objective: request.objective.trim(), intent: request.intent ?? "revise", scope: request.scope, issues: issues.map(toAgentIssue), documents, skill, skillInstructions, venueInstructions }; }
   private getPlan(projectId: string, id: string) { const plan = this.database.snapshot().agentTaskPlans.find((item) => item.id === id && item.projectId === projectId); if (!plan) throw new ApiError(404, "agent_plan_not_found", "Agent plan not found"); return plan; }
-  private validateTargetFile(files: DraftGeneratedFile[], targetPath: string) { const normalized = files.map((file) => ({ ...file, path: normalizeWorkspacePath(file.path) })); if (normalized.length !== 1 || normalized[0]?.path !== targetPath || !isTextFile(targetPath) || !normalized[0].content.trim()) throw new ApiError(502, "agent_files_invalid", `Agent must return exactly one non-empty file for '${targetPath}'`); return normalized[0]; }
+  private validateGeneratedFiles(files: DraftGeneratedFile[], targetPath: string, allowedPaths: Set<string>) {
+    const normalized = files.flatMap((file) => {
+      try {
+        const path = normalizeWorkspacePath(file.path);
+        return allowedPaths.has(path) && isTextFile(path) && file.content.trim() ? [{ ...file, path }] : [];
+      } catch {
+        return [];
+      }
+    });
+    if (!normalized.some((file) => file.path === targetPath)) throw new ApiError(502, "agent_files_invalid", `Agent must return exactly one non-empty file for '${targetPath}'`);
+    return normalized;
+  }
   private mutateIssue(issues: ReviewIssue[], id: string, status: ReviewIssue["status"]) { const issue = issues.find((item) => item.id === id); if (issue) { issue.status = status; issue.updatedAt = now(); } }
   private fail(runId: string, error: unknown) { return this.database.mutate((state) => {
     const run = state.agentRuns.find((item) => item.id === runId);
@@ -233,6 +245,20 @@ export class AgentTaskService {
 
 function toAgentIssue(issue: ReviewIssue): AgentTaskIssue { return { id: issue.id, title: issue.title, rationale: issue.rationale, suggestion: issue.suggestion, evidence: issue.evidence.map((evidence) => ({ path: evidence.path, excerpt: evidence.excerpt })) }; }
 function withMemory(skill: string, memory: string) { return memory ? `${skill}\n\nConfirmed Paper Memory (treat as project facts):\n${memory}` : skill; }
+
+function agentVisibleDocuments<T extends { path: string; content: string }>(documents: T[]): T[] {
+  return documents.map((document) => /\.(?:tex|bib|sty|cls)$/i.test(document.path) ? { ...document, content: stripLatexComments(document.content) } : document);
+}
+
+function executionStepLabel(path: string): string {
+  return `Process ${path}`;
+}
+
+function mergeGeneratedFiles(generated: Array<{ targetPath: string; files: DraftGeneratedFile[] }>, affectedFiles: string[]): DraftGeneratedFile[] {
+  const byTarget = new Map(generated.map((result) => [result.targetPath, result.files]));
+  const allFiles = generated.flatMap((result) => result.files);
+  return affectedFiles.map((path) => byTarget.get(path)?.find((file) => file.path === path) ?? allFiles.find((file) => file.path === path)).filter((file): file is DraftGeneratedFile => Boolean(file));
+}
 
 function generationDocuments(
   documents: Array<{ path: string; content: string; version: number }>,
@@ -288,7 +314,7 @@ function parseIntentCommand(objective: string): AgentTaskIntent | undefined {
 
 function classifyAgentIntent(objective: string, documents: Array<{ path: string; content: string }>): AgentTaskIntent {
   const source = documents.map((document) => document.content).join("\n");
-  const prose = source.replace(/%.*$/gm, "").replace(/\\(?:documentclass|usepackage|begin|end|input|include)\b[^\n]*/g, "").replace(/\s+/g, " ").trim();
+  const prose = source.replace(/\\(?:documentclass|usepackage|begin|end|input|include)\b[^\n]*/g, "").replace(/\s+/g, " ").trim();
   if (prose.length < 500) return "draft";
   if (/\b(?:TODO|TBD|FIXME|placeholder|to be completed)\b/i.test(source)) return "continue";
   return "revise";
@@ -296,6 +322,11 @@ function classifyAgentIntent(objective: string, documents: Array<{ path: string;
 
 function isNewDraftPath(path: string): boolean {
   return /^(?!\.)(?!.*(?:^|\/)\.\.\/)[a-zA-Z0-9_./-]+\.(?:tex|bib)$/.test(path);
+}
+
+function isStructuralFileOrganizationObjective(objective: string): boolean {
+  const normalized = objective.toLowerCase();
+  return /拆分|分章节|分文件|拆成|章节|split|chapter|section files?|modulari[sz]e|extract.*(?:section|chapter|file)|move.*(?:section|chapter).*file/.test(normalized);
 }
 
 function normalizeAgentPlanOutput(raw: unknown, fallbackPath: string, allowedPath: (path: string) => boolean, intent: AgentTaskIntent): AgentTaskPlanOutput {

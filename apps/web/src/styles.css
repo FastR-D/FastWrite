@@ -480,9 +480,11 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .review-counts .is-accepted { color: var(--green-600); }
 .review-counts .is-rejected { color: var(--red-600); }
 .draft-diff__file { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.draft-diff__file > header { min-height: 31px; flex: 0 0 31px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--border); color: var(--slate-700); font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; }
+.draft-diff__file > header { min-height: 35px; flex: 0 0 35px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 7px 0 10px; border-bottom: 1px solid var(--border); color: var(--slate-700); font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; }
 .draft-diff__file > header > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .draft-diff__file > header > small { color: var(--text-muted); font-size: 8px; white-space: nowrap; }
+.agent-file-review-header__controls { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.agent-file-review-header__controls > small { color: var(--text-muted); font-size: 8px; white-space: nowrap; }
 .draft-diff__file .revision-diff { flex: 1; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; }
 .hunk-review { min-height: 0; flex: 1; display: flex; flex-direction: column; background: var(--slate-50); }
 .hunk-review__toolbar { min-height: 35px; display: flex; align-items: center; justify-content: flex-end; gap: 5px; padding: 4px 7px 4px 10px; border-bottom: 1px solid var(--border); background: var(--slate-25); }

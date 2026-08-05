@@ -53,6 +53,7 @@ describe("OpenAIAgentProvider compatible endpoints", () => {
       venueInstructions: "Preserve evidence boundaries.",
       steps: ["Complete main.tex"],
       affectedFiles: ["main.tex"],
+      targetPath: "main.tex",
       risks: [],
       validation: ["Compile LaTeX"]
     });

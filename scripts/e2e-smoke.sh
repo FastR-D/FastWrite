@@ -375,6 +375,7 @@ async (page) => {
   const completeAgentProposal = change => materializeAgentChange({ ...change, hunks: change.hunks.map(hunk => ({ ...hunk, status: "accepted" })) });
   await page.route("**/api/projects/*/agent-tasks", async route => {
     if (route.request().method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(agentPlan ? [agentPlan] : []) });
+    await page.waitForTimeout(500);
     agentPlan = {
       id: "agent-plan-review-e2e",
       projectId,
@@ -393,8 +394,8 @@ async (page) => {
   });
   await page.route("**/api/projects/*/agent-tasks/agent-plan-review-e2e/confirm", async route => {
     agentRun = { ...agentRun, status: "running", steps: [
-      { id: "agent-generate-1", label: "Generate main.tex", status: "completed" },
-      { id: "agent-generate-2", label: "Generate sections/method.tex", status: "running" }
+      { id: "agent-generate-1", label: "Process main.tex", status: "completed" },
+      { id: "agent-generate-2", label: "Process sections/method.tex", status: "running" }
     ] };
     await page.waitForTimeout(900);
     const main = await (await page.request.get(apiRoot + "/file?path=main.tex")).json();
@@ -518,9 +519,11 @@ async (page) => {
   if (!(await objective.inputValue()).startsWith("/revise Create an initial")) throw new Error("Revise command did not preserve the Agent objective");
   await agentPanel.getByRole("button", { name: "/draft", exact: true }).click();
   await objective.fill("Refine the paper one file at a time");
-  await agentPanel.getByRole("button", { name: "Create plan", exact: true }).click();
+  const creatingAgentPlan = agentPanel.getByRole("button", { name: "Create plan", exact: true }).click();
+  await agentPanel.getByText("Planning Agent task", { exact: true }).waitFor();
+  await creatingAgentPlan;
   const confirmingAgentPlan = agentPanel.getByRole("button", { name: "Confirm plan", exact: true }).click();
-  await agentPanel.getByText("Generate sections/method.tex", { exact: true }).waitFor();
+  await agentPanel.getByText("Process sections/method.tex", { exact: true }).waitFor();
   await confirmingAgentPlan;
   await agentPanel.getByRole("button", { name: "main.tex: 2 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
   const overviewCounts = agentPanel.locator(".agent-review-overview .review-counts b");
@@ -534,6 +537,23 @@ async (page) => {
   await nextAgentObjective.waitFor();
   if (await nextAgentObjective.inputValue()) throw new Error("Reject pending & complete carried the rejected objective into the next Agent task");
   await nextAgentObjective.fill("Refine the paper one file at a time");
+  await agentPanel.getByRole("button", { name: "Create plan", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "Confirm plan", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "main.tex: 2 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
+  if (await agentPanel.locator(".draft-diff__file .review-counts").count() !== 1) {
+    throw new Error("Agent file review repeats the same Pending, Accepted, and Rejected header");
+  }
+  await agentPanel.getByRole("button", { name: "Reject pending file hunks", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "sections/method.tex: 1 pending, 0 accepted, 0 rejected", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "Reject pending file hunks", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "Complete review", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "Leave review", exact: true }).click();
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "Complete review", exact: true }).click();
+  const composerAfterRestoredComplete = agentPanel.getByLabel("What should Agent do?");
+  await composerAfterRestoredComplete.waitFor();
+  if (await composerAfterRestoredComplete.inputValue()) throw new Error("Completing a restored Agent review did not open an empty next-task composer");
+  await composerAfterRestoredComplete.fill("Refine the paper one file at a time");
   await agentPanel.getByRole("button", { name: "Create plan", exact: true }).click();
   await agentPanel.getByRole("button", { name: "Confirm plan", exact: true }).click();
   await agentPanel.getByRole("button", { name: "main.tex: 2 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
@@ -604,13 +624,14 @@ async (page) => {
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   await conflictDialog.getByRole("button", { name: "Overwrite with reviewed result", exact: true }).click();
-  await agentPanel.getByText("Changes applied", { exact: true }).waitFor();
+  const composerAfterAcceptedFinish = agentPanel.getByLabel("What should Agent do?");
+  await composerAfterAcceptedFinish.waitFor();
+  if (await composerAfterAcceptedFinish.inputValue()) throw new Error("Finishing an accepted Agent review did not open an empty next-task composer");
   const overwrittenMethod = await (await page.request.get(apiRoot + "/file?path=sections%2Fmethod.tex")).json();
   if (!overwrittenMethod.content.includes("unmanaged evidence") || overwrittenMethod.content.includes(externalMarker)) {
     throw new Error("Confirmed Agent overwrite did not apply the reviewed hunk result");
   }
   await page.screenshot({ path: "output/playwright/workspace-agent-composer.png", fullPage: true });
-  await agentPanel.getByRole("button", { name: "New task", exact: true }).click();
   await page.getByRole("button", { name: "Revise", exact: true }).click();
   await page.unroute("**/api/projects/*/agent-tasks");
   await page.unroute("**/api/projects/*/agent-tasks/agent-plan-review-e2e/confirm");
@@ -835,7 +856,8 @@ async (page) => {
   await rereview.click();
   await revisionPanel.getByText("resolved", { exact: true }).waitFor();
   await page.screenshot({ path: "output/playwright/workspace-revision-resolved-1440x900" + browserSuffix + ".png", fullPage: true });
-  await revisionPanel.getByRole("button", { name: "Done" }).click();
+  if (await revisionPanel.getByRole("button", { name: "Done", exact: true }).count()) throw new Error("Completed Agent review still exposes a Done action that conflicts with New task");
+  await revisionPanel.getByRole("button", { name: "New task", exact: true }).click();
 
   await page.unroute("**/api/projects/*/memory**");
   await page.unroute("**/api/projects/*/reviews");
@@ -959,8 +981,11 @@ async (page) => {
   await page.getByRole("region", { name: "Agent workspace" }).waitFor();
   const agentObjective = page.getByRole("textbox", { name: "What should Agent do?" });
   await agentObjective.waitFor();
+  await page.waitForFunction(() =>
+    (document.querySelector(".agent-task-form textarea")?.value || "").startsWith("/revise ")
+  );
   const objective = await agentObjective.inputValue();
-  if (!objective.startsWith("/revise ")) throw new Error("Compile repair did not select the Agent revise intent");
+  if (!objective.startsWith("/revise ")) throw new Error("Compile repair did not select the Agent revise intent: " + JSON.stringify(objective));
   if (!objective.includes("main.tex")) throw new Error("Compile repair did not include the main document");
   if (!/Undefined control sequence|undefinedFastWriteCommand/i.test(objective)) throw new Error("Compile repair did not include the actionable compiler diagnostic");
   await page.setViewportSize({ width: 720, height: 800 });

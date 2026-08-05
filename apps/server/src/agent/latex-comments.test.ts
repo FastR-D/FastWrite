@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { preserveLatexComments } from "./latex-comments";
+import { preserveLatexComments, stripLatexComments } from "./latex-comments";
+
+describe("stripLatexComments", () => {
+  test("hides full-line and inline comments while preserving escaped percent signs and line positions", () => {
+    const source = "\\section{Method}\n% TODO: rewrite with an unsupported claim\nAccuracy is 95\\%. % private note\nFinal claim.\n";
+    expect(stripLatexComments(source)).toBe("\\section{Method}\n\nAccuracy is 95\\%.\nFinal claim.\n");
+  });
+});
 
 describe("preserveLatexComments", () => {
   test("restores full-line and inline user comments without treating escaped percent signs as comments", () => {

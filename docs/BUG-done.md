@@ -1,6 +1,76 @@
 # 已经解决的Bug和完成的开发任务  
 
-> **状态：全部已解决，并于 2026-08-04 完成回归验证。**
+> **状态：全部已解决，并于 2026-08-05 完成最新回归验证。**
+
+## 2026-08-05 Agent 残留 ChangeSet 恢复
+
+1. Agent 模式显示残留修改，批量 Reject/Accept 后报 `This change is no longer awaiting approval`。
+
+   **已解决（2026-08-05）**：Agent 面板恢复历史任务时会先读取关联 ChangeSet，并且只有 `proposed` / `partially-accepted` 的 ChangeSet 才进入可审核 diff；`accepted`、`rejected`、`rolled-back` 和 `conflict` 等已结束记录不会再作为待审核修改显示。已结束记录在重新打开 Agent 面板或点击残留批量按钮遇到 stale 409 时，会刷新真实状态并清空残留审核界面，避免继续向已结束 ChangeSet 发送 Accept/Reject。
+
+### 回归验证
+
+- 新增 TDD 回归覆盖：已结束 ChangeSet 不会恢复成 pending Agent review。
+- Agent 定向测试通过：`agentCommands.test.ts`、`agentReview.test.ts`、`app.test.ts` 共 34 pass。
+- 全量验证通过：`bun test` 109 pass；`bun run typecheck`、`bun run build` 通过。
+- 新 release binary Chrome smoke 通过；新 `app-bin/fastwrite` SHA-256：`c47329cd177e9a4aebeefa2a09df546367708f27e5f639d825b59076e66e976f`。
+
+## 2026-08-05 Agent Process 文案与真实项目拆分
+
+1. Agent 执行 plan 时步骤名称显示 `Generate main.tex`，但 `main.tex` 已存在，提示不准确。
+
+   **已解决（2026-08-05）**：逐文件执行 step 统一改为 `Process <path>`，因此主文件显示为 `Process main.tex`；相关 fake Agent run、API 测试和 Chrome smoke 断言同步更新。
+
+2. `Real Agent Comment/Commands` 项目中处理速度慢，仍无法把 `main.tex` 拆分为独立章节。
+
+   **已解决（2026-08-05）**：结构性 `/revise` 允许在项目级计划中创建新的 `.tex` / `.bib` 章节文件；每次生成调用携带 `targetPath` 与完整 `affectedFiles`，服务端只接受计划内文件并按目标去重合并，多文件结果分别进入 ChangeSet 审核。计划文件的模型调用改为并行执行，AgentRun steps 与审计事件会独立更新，避免旧实现逐文件串行造成的长时间等待。
+
+   真实项目中仍显示 `Generate main.tex` 的卡住记录属于旧 binary 创建的历史 running run；重启使用新 binary 并创建新 plan 后即可看到 `Process ...` 文案及并行执行行为，原历史记录和用户数据未改写。
+
+### 回归验证
+
+- `bun test`：108 pass；`bun run typecheck`、`bun run build` 通过。
+- 源码服务器完整 Chrome smoke 与新 release binary 完整 Chrome smoke 均通过，覆盖 Agent 计划提示、结构性拆分、多文件输出及并行执行。
+- 新 `app-bin/fastwrite` SHA-256：`b361157894bd0f8fcb19bed7ea0399b453eb05d7f6761d20a98e9b49c2d8826f`。
+- 打包前后 `paperdata/` 聚合 SHA-256 均为 `e7e3d102f10047558322d79286f96cc3257b4a579058a91d11371eb8f88f4860`，文件数均为 149。
+
+## 2026-08-05 Agent 结构性拆分、多文件生成与执行进度
+
+1. Agent 执行 `将 main.tex 拆分章节` 时失败，并报 `Agent must return exactly one non-empty file for 'main.tex'`。
+
+   **已解决（2026-08-05）**：结构性 `/revise` 任务在项目级 scope 下可以规划新的 `.tex` / `.bib` 文件。生成调用明确携带 `targetPath` 和完整 `affectedFiles`，模型可以返回当前目标以及已经列入计划的紧耦合 companion files；服务端只接受计划内的有效文件、按目标去重合并，不再因一次返回多个计划文件而失败。拆分后的主文件和章节文件仍以独立 ChangeSet hunks 供用户审核。
+
+2. Agent Planning 阶段没有明确提示，用户容易误以为卡住；executing plan 逐文件串行执行太慢。
+
+   **已解决（2026-08-05）**：Planning 阶段显示 `Planning Agent task`，说明正在读取 source context、请求 reviewed file plan 且尚未修改文件；执行阶段显示 `Executing approved plan in parallel`，并说明每个文件仍需审核。所有计划文件现在并行发起 bounded model call，AgentRun steps 同时进入 running，完成时分别更新进度和审计事件。
+
+### 回归验证
+
+- `bun test`：108 pass；`bun run typecheck`、`bun run build` 通过。
+- 源码服务器完整 Chrome smoke 通过，新增断言覆盖 Planning 可见提示；既有 Agent 审核、冲突、编译修复、Memory、Completion、Import 和无障碍流程均通过。
+- 同一套完整 smoke 以 `FASTWRITE_E2E_SERVER_BIN=./app-bin/fastwrite` 直接运行在 release binary 上并通过。
+- 新 `app-bin/fastwrite` SHA-256 为 `e4be381e606b7eae13506be561e56bf2e47fbfbfcbe8351260788f08f005ce0f`；打包前后 `paperdata/` 聚合 SHA-256 均为 `66c90348cc70b9284e1822713d348abf95e89a53e22284dbbcdee2a323f213ac`，文件数均为 149。
+
+## 2026-08-04 Agent Leave/Complete、审核 Header、注释隐藏与 Finish 流程
+
+1. Agent 工作流在 `Leave review` 后重新进入，全部 hunk 已决定时无法顺利 `Complete review`；普通 Finish 后还会和 `Done` / `New task` 产生语义冲突。
+
+   **已解决（2026-08-04）**：Agent 只恢复 `proposed` / `waiting-approval` 的未完成任务，不再恢复 accepted 历史。全部 hunk 决定后离开再进入仍可 `Complete review`，完成后进入空白 Agent composer；普通 accepted/rejected Finish 直接回到新任务输入。Issue-linked 修复仍保留编译、targeted re-review 和 rollback 所需的结果态，但移除 `Done`，只保留 `New task`。
+
+2. 右侧文件审核区有两层 header，`Pending / Accepted / Rejected` 重复显示。
+
+   **已解决（2026-08-04）**：文件路径、当前文件统计和文件级批量操作合并为唯一的 `agent-file-review-header`；内部 hunk toolbar 支持关闭，Agent 文件审核默认隐藏重复统计。源码与 release smoke 均验证 1440x900、1280x800、720x800 无页面横向溢出，Agent 统计 header 在 1440x900 和 720x800 未越界。
+
+3. Agent 执行进度硬编码为 `Generate main.tex`，且 Agent 会读取 LaTeX 注释行。
+
+   **已解决（2026-08-04）**：逐文件执行 step 改为 `Check and draft/continue/revise <path>`，审计文案同步改为检查 scoped context 并更新文件。Agent 规划、搜索、意图分类和生成上下文统一使用去注释后的 LaTeX / BibTeX / style/class 文档，保留换行位置与转义百分号；原始文件仍用于版本校验，生成后通过注释恢复逻辑保留用户注释。Provider prompt 明确说明隐藏注释由 FastWrite 恢复，模型不得基于隐藏注释行动。
+
+### 回归验证
+
+- `bun run typecheck`、`bun test`（107 pass）、`bun run build` 和 `git diff --check -- . ':(exclude)docs/BUG-new.md'` 通过。
+- 源码服务器完整 Chrome smoke 通过，覆盖 Agent 全量 Reject 后下一轮、全部决定后 Leave→重新进入→Complete、单层文件审核 header、普通 accepted Finish→空白 composer、移除 `Done`、linked Issue targeted re-review，以及编译错误 `Fix with Agent` 自动 seed `/revise`。
+- 同一套完整 smoke 以 `FASTWRITE_E2E_SERVER_BIN=./app-bin/fastwrite` 直接运行在新 release 二进制上并通过。
+- 新 `app-bin/fastwrite` SHA-256 为 `d28a35a65e67e391252419a668de5e25c6fc493cce04a40780f8ee5fb84dd840`；打包前后 `paperdata/` 聚合 SHA-256 均为 `66c90348cc70b9284e1822713d348abf95e89a53e22284dbbcdee2a323f213ac`，文件数均为 149。
 
 ## 2026-08-04 Agent 全量 Reject 后进入下一轮
 

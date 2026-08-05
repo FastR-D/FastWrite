@@ -5,7 +5,7 @@ import { diffWords } from "../../lib/wordDiff";
 import { Button } from "../ui/Button";
 import { hunkCounts } from "./agentReview";
 
-export function ChangeHunkReview({ change, busy, readOnly = false, onDecide, onEditHunk }: { change: TextChange; busy: boolean; readOnly?: boolean; onDecide: (hunkIds: string[], status: "accepted" | "rejected") => void; onEditHunk?: (hunkId: string, after: string) => Promise<void> }) {
+export function ChangeHunkReview({ change, busy, readOnly = false, showToolbar = true, onDecide, onEditHunk }: { change: TextChange; busy: boolean; readOnly?: boolean; showToolbar?: boolean; onDecide: (hunkIds: string[], status: "accepted" | "rejected") => void; onEditHunk?: (hunkId: string, after: string) => Promise<void> }) {
   const hunks = change.hunks ?? [];
   const pending = hunks.filter((hunk) => hunk.status === "pending");
   const counts = hunkCounts(change);
@@ -23,7 +23,7 @@ export function ChangeHunkReview({ change, busy, readOnly = false, onDecide, onE
   };
   if (!hunks.length) return <div className="revision-diff">{diffWords(change.before, change.after).map((part, index) => part.type === "delete" ? <del key={index}>{part.value}</del> : part.type === "insert" ? <ins key={index}>{part.value}</ins> : <span key={index}>{part.value}</span>)}</div>;
   return <div className="hunk-review">
-    <div className="hunk-review__toolbar"><span className="review-counts"><b className="is-pending">Pending {counts.pending}/{counts.total}</b><b className="is-accepted">Accepted {counts.accepted}/{counts.total}</b><b className="is-rejected">Rejected {counts.rejected}/{counts.total}</b></span>{!readOnly ? <><Button size="small" variant="ghost" disabled={busy || !pending.length} onClick={() => onDecide(pending.map((hunk) => hunk.id), "rejected")}>Reject pending file hunks</Button><Button size="small" variant="secondary" disabled={busy || !pending.length} onClick={() => onDecide(pending.map((hunk) => hunk.id), "accepted")}>Accept pending file hunks</Button></> : null}</div>
+    {showToolbar ? <div className="hunk-review__toolbar"><span className="review-counts"><b className="is-pending">Pending {counts.pending}/{counts.total}</b><b className="is-accepted">Accepted {counts.accepted}/{counts.total}</b><b className="is-rejected">Rejected {counts.rejected}/{counts.total}</b></span>{!readOnly ? <><Button size="small" variant="ghost" disabled={busy || !pending.length} onClick={() => onDecide(pending.map((hunk) => hunk.id), "rejected")}>Reject pending file hunks</Button><Button size="small" variant="secondary" disabled={busy || !pending.length} onClick={() => onDecide(pending.map((hunk) => hunk.id), "accepted")}>Accept pending file hunks</Button></> : null}</div> : null}
     <div className="hunk-review__list">{hunks.map((hunk, index) => {
       const parts = diffWords(hunk.before, hunk.after);
       const editing = editingHunk === hunk.id;

@@ -1,4 +1,4 @@
-import type { AgentTaskIntent, AgentTaskPlan } from "@fastwrite/shared";
+import type { AgentTaskIntent, AgentTaskPlan, ChangeSet } from "@fastwrite/shared";
 
 export const AGENT_INTENT_COMMANDS: ReadonlyArray<{ intent: AgentTaskIntent; label: string }> = [
   { intent: "draft", label: "/draft" },
@@ -17,8 +17,14 @@ export function activeAgentIntentCommand(objective: string): AgentTaskIntent | n
 }
 
 export function recoverableAgentPlan<T extends Pick<AgentTaskPlan, "id" | "status" | "changeSetId">>(plans: T[], dismissedPlanId: string | null): T | undefined {
-  const active = plans.find((plan) => plan.id !== dismissedPlanId && (plan.status === "proposed" || plan.status === "waiting-approval"));
-  if (active) return active;
-  const latest = plans[0];
-  return latest?.id !== dismissedPlanId && latest?.status === "accepted" && latest.changeSetId ? latest : undefined;
+  return plans.find((plan) => plan.id !== dismissedPlanId && (plan.status === "proposed" || plan.status === "waiting-approval"));
+}
+
+export function restoredAgentReviewStage(changeSet: Pick<ChangeSet, "status">): "diff" | null {
+  return changeSet.status === "proposed" || changeSet.status === "partially-accepted" ? "diff" : null;
+}
+
+export function activeAgentChangeSetStage(changeSet: Pick<ChangeSet, "status">): "diff" | "accepted" | null {
+  if (changeSet.status === "accepted") return "accepted";
+  return restoredAgentReviewStage(changeSet);
 }
