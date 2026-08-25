@@ -50,7 +50,8 @@ export class GithubService {
         sourceDirectory: cloneDirectory,
         name: request.name?.trim() || location.repository,
         ...(request.mainDocument ? { mainDocument: request.mainDocument } : {}),
-        venue: request.venue ?? "security-top4",
+        venue: request.venue ?? "network-information-security",
+        ...(request.publicationTarget ? { publicationTarget: request.publicationTarget } : {}),
         source: {
           type: "github",
           repository: `https://github.com/${location.owner}/${location.repository}`,

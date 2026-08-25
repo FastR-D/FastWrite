@@ -1,0 +1,3 @@
+# Shared writing profile: Computer Architecture, Parallel/Distributed Computing, and Storage
+
+Build an evidence-backed systems argument. Identify the bottleneck and target workload, then state the baseline, experimental controls, platform details, and cost/performance or scalability trade-off. Explain why a mechanism causes the observed result rather than merely reporting a speedup. Use fair baselines, sensitivity studies, ablations, error/variance reporting, and realistic workloads. State threats to validity, portability boundaries, resource cost, and artifact availability. Citations must support the exact historical, technical, or comparative claim; never fabricate a reference or infer a paper's result from its title.

@@ -1,13 +1,100 @@
-export type WritingProfile = "security-top4" | "ai-top-tier";
+export type ResearchDomainId =
+  | "computer-architecture-systems"
+  | "computer-networks"
+  | "network-information-security"
+  | "software-engineering-systems-languages"
+  | "database-data-mining-retrieval"
+  | "theoretical-computer-science"
+  | "graphics-multimedia"
+  | "artificial-intelligence"
+  | "human-computer-interaction"
+  | "interdisciplinary-emerging";
 
-/** @deprecated API compatibility name. Values now identify a shared writing profile, not one venue. */
-export type TargetVenue = WritingProfile;
+/** @deprecated Compatibility name. Values identify research domains. */
+export type WritingProfile = ResearchDomainId;
+export type PublicationVenueId = string;
+
+export type ManuscriptStage = "draft" | "submission" | "camera-ready";
+
+export interface PublicationTarget {
+  domain: ResearchDomainId;
+  venueId: PublicationVenueId;
+  track?: string;
+  stage: ManuscriptStage;
+}
+
+export interface PublicationVenueOption {
+  value: PublicationVenueId;
+  label: string;
+  kind: "conference" | "journal";
+  domain: ResearchDomainId;
+  edition: string;
+  verifiedAt: string;
+  sourceUrl: string;
+  tracks?: ReadonlyArray<{ value: string; label: string }>;
+  template?: LatexTemplateOption;
+  constraints?: {
+    pageLimit?: number;
+    totalPageLimit?: number;
+    cameraReadyPageLimit?: number;
+    cameraReadyTotalPageLimit?: number;
+    anonymous?: boolean;
+    requiredSections?: string[];
+    requiredLatex?: string[];
+  };
+}
+
+export interface LatexTemplateOption {
+  id: string;
+  label: string;
+  trust: "official" | "publisher" | "community-mirror";
+  sourceUrl: string;
+  verifiedAt: string;
+  venueSpecific: boolean;
+}
+
+export type ComplianceFindingStatus = "pass" | "error" | "warning" | "unresolved";
+export interface ComplianceFinding {
+  id: string;
+  category: "pages" | "template" | "anonymity" | "comments" | "citations" | "references" | "required-section";
+  status: ComplianceFindingStatus;
+  message: string;
+  path?: string;
+  line?: number;
+  evidence?: string;
+  sourceUrl?: string;
+}
+
+export interface CitationVerification {
+  key: string;
+  status: "verified" | "mismatch" | "unresolved" | "missing";
+  title?: string;
+  doi?: string;
+  url?: string;
+  message: string;
+}
+
+export interface ComplianceReport {
+  projectId: string;
+  projectVersion: number;
+  publicationTarget?: PublicationTarget;
+  checkedAt: string;
+  renderedPages?: number;
+  mainBodyPages?: number;
+  summary: { errors: number; warnings: number; unresolved: number; passed: number };
+  submissionBlocked: boolean;
+  findings: ComplianceFinding[];
+  citations: CitationVerification[];
+}
+
+/** @deprecated API compatibility name. Values identify a research domain, not one venue. */
+export type TargetVenue = ResearchDomainId;
 
 export interface PaperSkillRef {
   id: WritingProfile;
-  name: "Security Top-4" | "AI Top-Tier";
+  name: string;
   version: string;
-  /** @deprecated Stored as `venue` for database/API compatibility; semantically this is the writing profile. */
+  /** @deprecated Stored as `venue` for database/API compatibility; semantically this is the research domain. */
   venue: TargetVenue;
 }
 
@@ -20,6 +107,7 @@ export interface PaperProject {
   name: string;
   mainDocument: string;
   skill: PaperSkillRef;
+  publicationTarget?: PublicationTarget;
   source: ImportSource;
   createdAt: string;
   updatedAt: string;
@@ -73,6 +161,7 @@ export interface UploadSession {
   projectName: string;
   mainDocument: string;
   venue: TargetVenue;
+  publicationTarget?: PublicationTarget;
   sourceName: string;
   entries: UploadManifestEntry[];
   receivedPaths: string[];
@@ -134,6 +223,8 @@ export interface CreateProjectRequest {
   name: string;
   mainDocument?: string;
   venue?: TargetVenue;
+  publicationTarget?: PublicationTarget;
+  initializeFromTemplate?: boolean;
 }
 
 export interface GithubImportRequest {
@@ -142,6 +233,7 @@ export interface GithubImportRequest {
   name?: string;
   mainDocument?: string;
   venue?: TargetVenue;
+  publicationTarget?: PublicationTarget;
 }
 
 export type GithubSyncStatus = "conflicts" | "ready-to-compile" | "completed" | "remote-changed" | "failed";
@@ -212,6 +304,7 @@ export interface AgentRun {
   status: AgentRunStatus;
   objective: string;
   skill: PaperSkillRef;
+  publicationTarget?: PublicationTarget;
   changeSetId?: string;
   error?: string;
   createdAt: string;
@@ -364,6 +457,7 @@ export interface ReviewSnapshot {
   projectVersion: number;
   mainDocument: string;
   skill: PaperSkillRef;
+  publicationTarget?: PublicationTarget;
   files: ReviewSnapshotFile[];
   memoryVersion?: number;
   compileRecordId?: string;
@@ -524,6 +618,13 @@ export interface AgentTaskPlan {
   affectedFiles: string[];
   risks: string[];
   validation: string[];
+  sectionBudget?: Array<{ section: string; targetPages?: number; purpose: string }>;
+  venueChecks?: Array<{
+    requirement: string;
+    status: "satisfied" | "missing" | "uncertain" | "not-applicable";
+    evidencePaths: string[];
+    action: string;
+  }>;
   changeSetId?: string;
   acceptedProjectVersion?: number;
   compileRecordId?: string;
@@ -547,6 +648,7 @@ export interface IssueResolution {
   baseProjectVersion: number;
   memoryVersion?: number;
   skill: PaperSkillRef;
+  publicationTarget?: PublicationTarget;
   changeSetId?: string;
   acceptedProjectVersion?: number;
   compileRecordId?: string;
@@ -572,23 +674,51 @@ export interface CompletionRequest { path: string; cursor: number; fileVersion: 
 export interface CompletionResponse { suggestion: string; path: string; cursor: number; fileVersion: number; kind: CompletionKind }
 
 export const WRITING_PROFILES: ReadonlyArray<{ value: WritingProfile; label: string }> = [
-  { value: "security-top4", label: "Security Top-4" },
-  { value: "ai-top-tier", label: "AI Top-Tier" }
+  { value: "computer-architecture-systems", label: "计算机体系结构、并行与分布计算、存储系统" },
+  { value: "computer-networks", label: "计算机网络" },
+  { value: "network-information-security", label: "网络与信息安全" },
+  { value: "software-engineering-systems-languages", label: "软件工程、系统软件与程序设计语言" },
+  { value: "database-data-mining-retrieval", label: "数据库、数据挖掘与内容检索" },
+  { value: "theoretical-computer-science", label: "计算机科学理论" },
+  { value: "graphics-multimedia", label: "计算机图形学与多媒体" },
+  { value: "artificial-intelligence", label: "人工智能" },
+  { value: "human-computer-interaction", label: "人机交互与普适计算" },
+  { value: "interdisciplinary-emerging", label: "交叉、综合与新兴" }
 ];
+
+export function normalizePublicationTarget(value: unknown, profile: WritingProfile): PublicationTarget | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Partial<PublicationTarget>;
+  if (typeof raw.venueId !== "string" || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(raw.venueId)) return undefined;
+  const legacyDomain = legacyVenueDomain(raw.venueId);
+  const domain = normalizeWritingProfile(raw.domain ?? legacyDomain ?? profile);
+  if (domain !== profile) return undefined;
+  const stage: ManuscriptStage = raw.stage === "draft" || raw.stage === "camera-ready" ? raw.stage : "submission";
+  const track = typeof raw.track === "string" && /^[a-z0-9][a-z0-9-]{0,79}$/i.test(raw.track) ? raw.track : undefined;
+  return { domain, venueId: raw.venueId, stage, ...(track ? { track } : {}) };
+}
 
 /** @deprecated Prefer WRITING_PROFILES. */
 export const TARGET_VENUES = WRITING_PROFILES;
 
 export function normalizeWritingProfile(value: unknown): WritingProfile {
-  return value === "ai-top-tier" ? "ai-top-tier" : "security-top4";
+  if (value === "ai-top-tier") return "artificial-intelligence";
+  if (value === "security-top4" || value === "sp") return "network-information-security";
+  return WRITING_PROFILES.some((profile) => profile.value === value) ? value as WritingProfile : "network-information-security";
 }
 
 export function paperSkillForProfile(value: unknown): PaperSkillRef {
   const profile = normalizeWritingProfile(value);
   return {
     id: profile,
-    name: profile === "ai-top-tier" ? "AI Top-Tier" : "Security Top-4",
-    version: "1.0.0",
+    name: WRITING_PROFILES.find((item) => item.value === profile)?.label ?? profile,
+    version: "2.0.0",
     venue: profile
   };
+}
+
+function legacyVenueDomain(venueId: string): ResearchDomainId | undefined {
+  if (["aaai", "neurips", "acl", "cvpr", "iccv", "icml", "ijcai", "artificial-intelligence", "tpami", "ijcv", "jmlr"].includes(venueId)) return "artificial-intelligence";
+  if (["ccs", "eurocrypt", "sp", "crypto", "usenix-security", "ndss", "tdsc", "tifs", "journal-of-cryptology"].includes(venueId)) return "network-information-security";
+  return undefined;
 }

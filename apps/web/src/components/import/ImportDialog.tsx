@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState } from "react";
 import { FileArchive, FolderOpen, Github, UploadCloud } from "lucide-react";
-import type { PaperProject, TargetVenue, UploadManifestEntry } from "@fastwrite/shared";
+import type { PaperProject, PublicationTarget, TargetVenue, UploadManifestEntry } from "@fastwrite/shared";
 import { isIgnoredWorkspacePath, WRITING_PROFILES } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
+import { PublicationTargetFields } from "../ui/PublicationTargetFields";
 
 interface SelectedEntry extends UploadManifestEntry {
   file?: File;
@@ -34,7 +35,8 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
   const [selection, setSelection] = useState<DirectorySelection | null>(null);
   const [projectName, setProjectName] = useState("");
   const [mainDocument, setMainDocument] = useState("");
-  const [venue, setVenue] = useState<TargetVenue>("security-top4");
+  const [venue, setVenue] = useState<TargetVenue>("network-information-security");
+  const [publicationTarget, setPublicationTarget] = useState<PublicationTarget | undefined>();
   const [repository, setRepository] = useState("");
   const [reference, setReference] = useState("");
   const [progress, setProgress] = useState(0);
@@ -56,7 +58,8 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     setSelection(null);
     setProjectName("");
     setMainDocument("");
-    setVenue("security-top4");
+    setVenue("network-information-security");
+    setPublicationTarget(undefined);
     setRepository("");
     setReference("");
     setProgress(0);
@@ -118,7 +121,8 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
           ...(reference.trim() ? { ref: reference.trim() } : {}),
           ...(projectName.trim() ? { name: projectName.trim() } : {}),
           ...(mainDocument.trim() ? { mainDocument: mainDocument.trim() } : {}),
-          venue
+          venue,
+          ...(publicationTarget ? { publicationTarget } : {})
         }, controller.signal);
         setProgress(100);
         onImported(project);
@@ -133,6 +137,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
           projectName: projectName.trim(),
           mainDocument,
           venue,
+          ...(publicationTarget ? { publicationTarget } : {}),
           sourceName: selection.name,
           entries: selection.entries.map(({ file: _file, ...entry }) => entry)
         }, controller.signal);
@@ -244,9 +249,11 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
               mainDocument={mainDocument}
               mainCandidates={mainCandidates}
               venue={venue}
+              publicationTarget={publicationTarget}
               onName={setProjectName}
               onMain={setMainDocument}
-              onVenue={setVenue}
+              onVenue={(value) => { setVenue(value); setPublicationTarget(undefined); }}
+              onPublicationTarget={setPublicationTarget}
               onChooseAgain={pickDirectory}
             />
           )}
@@ -273,8 +280,9 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
               <span>Main document <small>auto-detect if empty</small></span>
               <input value={mainDocument} onChange={(event) => setMainDocument(event.target.value)} placeholder="main.tex" />
             </label>
-            <VenueField value={venue} onChange={setVenue} />
+            <VenueField value={venue} onChange={(value) => { setVenue(value); setPublicationTarget(undefined); }} />
           </div>
+          <PublicationTargetFields profile={venue} value={publicationTarget} onChange={setPublicationTarget} />
           <div className="import-note"><FileArchive /> The resolved commit is recorded with the imported project.</div>
         </div>
       )}
@@ -291,9 +299,11 @@ function ImportPreview(props: {
   mainDocument: string;
   mainCandidates: string[];
   venue: TargetVenue;
+  publicationTarget: PublicationTarget | undefined;
   onName: (value: string) => void;
   onMain: (value: string) => void;
   onVenue: (value: TargetVenue) => void;
+  onPublicationTarget: (value: PublicationTarget | undefined) => void;
   onChooseAgain: () => void;
 }) {
   return (
@@ -315,6 +325,7 @@ function ImportPreview(props: {
         </label>
       </div>
       <VenueField value={props.venue} onChange={props.onVenue} />
+      <PublicationTargetFields profile={props.venue} value={props.publicationTarget} onChange={props.onPublicationTarget} />
       <div className="file-preview" aria-label="Files to import">
         {props.selection.entries.slice(0, 100).map((entry) => (
           <div key={`${entry.kind}:${entry.path}`} className="file-preview__row">
@@ -332,11 +343,11 @@ function ImportPreview(props: {
 function VenueField({ value, onChange }: { value: TargetVenue; onChange: (value: TargetVenue) => void }) {
   return (
     <label className="field">
-      <span>Writing profile</span>
+      <span>Research domain</span>
       <select value={value} onChange={(event) => onChange(event.target.value as TargetVenue)}>
         {WRITING_PROFILES.map((profile) => <option key={profile.value} value={profile.value}>{profile.label}</option>)}
       </select>
-      <small>The selected Skill guides structure, language, revision, and review from start to finish.</small>
+      <small>The selected domain and publication target guide structure, language, revision, and review.</small>
     </label>
   );
 }

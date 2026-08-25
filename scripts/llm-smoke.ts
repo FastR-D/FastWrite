@@ -44,7 +44,7 @@ async function stage<T>(name: string, operation: () => Promise<T>): Promise<T> {
 
 try {
   console.log(`LLM endpoint configured; model=${config.agentModel ?? "auto-discovered"}`);
-  const project = await api<PaperProject>("/api/projects", "POST", { name: "Real LLM Smoke", venue: "security-top4" });
+  const project = await api<PaperProject>("/api/projects", "POST", { name: "Real LLM Smoke", venue: "network-information-security" });
   const initial = await api<FileContentResponse>(`/api/projects/${project.id}/file?path=main.tex`);
   const source = String.raw`\documentclass{article}
 \begin{document}

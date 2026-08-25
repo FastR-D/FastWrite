@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Save } from "lucide-react";
-import { isIgnoredWorkspacePath, WRITING_PROFILES, type PaperProject, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
+import { isIgnoredWorkspacePath, WRITING_PROFILES, type PaperProject, type PublicationTarget, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
+import { PublicationTargetFields } from "../ui/PublicationTargetFields";
 
 interface ProjectSettingsDialogProps {
   open: boolean;
@@ -17,6 +18,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
   const [name, setName] = useState(project.name);
   const [mainDocument, setMainDocument] = useState(project.mainDocument);
   const [profile, setProfile] = useState<WritingProfile>(project.skill.venue);
+  const [publicationTarget, setPublicationTarget] = useState<PublicationTarget | undefined>(project.publicationTarget);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const texFiles = useMemo(() => flattenFiles(tree).filter((path) => path.toLowerCase().endsWith(".tex") && !isIgnoredWorkspacePath(path)), [tree]);
@@ -26,6 +28,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     setName(project.name);
     setMainDocument(texFiles.includes(project.mainDocument) ? project.mainDocument : preferredMainDocument(texFiles));
     setProfile(project.skill.venue);
+    setPublicationTarget(project.publicationTarget);
     setError("");
   }, [open, project, texFiles]);
 
@@ -33,7 +36,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     setLoading(true);
     setError("");
     try {
-      const updated = await api.projects.update(project.id, { name: name.trim(), mainDocument, venue: profile });
+      const updated = await api.projects.update(project.id, { name: name.trim(), mainDocument, venue: profile, publicationTarget: publicationTarget ?? null });
       await onSaved(updated);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Could not update project");
@@ -54,7 +57,8 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
       <div className="settings-fields">
         <label className="field"><span>Project name</span><input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label>
         <label className="field"><span>Main document</span><select value={mainDocument} onChange={(event) => setMainDocument(event.target.value)}>{texFiles.map((path) => <option key={path} value={path}>{path}</option>)}</select></label>
-        <label className="field"><span>Writing profile</span><select value={profile} onChange={(event) => setProfile(event.target.value as WritingProfile)}>{WRITING_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+        <label className="field"><span>Research domain</span><select value={profile} onChange={(event) => { const next = event.target.value as WritingProfile; setProfile(next); if (publicationTarget?.domain !== next) setPublicationTarget(undefined); }}>{WRITING_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+        <PublicationTargetFields profile={profile} value={publicationTarget} onChange={setPublicationTarget} />
         <div className="settings-export"><div><strong>Automatic Git history</strong><span>Accepted saves create local Git checkpoints in the FastWrite project history.</span></div></div>
         <div className="settings-export"><div><strong>Workspace snapshot</strong><span>Download all source files as a portable tar.gz archive.</span></div><a className="button button--secondary button--medium" href={api.projects.exportUrl(project.id)} download><Download />Export</a></div>
       </div>

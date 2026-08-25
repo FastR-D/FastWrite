@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection } from "@fastwrite/shared";
+import type { ComplianceFinding, DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection } from "@fastwrite/shared";
 
 export interface ReviseAgentInput {
   instruction: string;
@@ -47,8 +47,16 @@ export interface AgentTaskInput {
   skill: PaperSkillRef;
   skillInstructions: string;
   venueInstructions: string;
+  complianceFindings?: ComplianceFinding[];
 }
-export interface AgentTaskPlanOutput { steps: string[]; affectedFiles: string[]; risks: string[]; validation: string[] }
+export interface AgentTaskPlanOutput {
+  steps: string[];
+  affectedFiles: string[];
+  risks: string[];
+  validation: string[];
+  sectionBudget?: Array<{ section: string; targetPages?: number; purpose: string }>;
+  venueChecks?: Array<{ requirement: string; status: "satisfied" | "missing" | "uncertain" | "not-applicable"; evidencePaths: string[]; action: string }>;
+}
 export interface AgentTaskExecutionInput extends AgentTaskInput, AgentTaskPlanOutput { targetPath: string }
 
 export interface MemoryAgentInput {
@@ -136,7 +144,7 @@ export class OpenAIAgentProvider implements AgentProvider {
 
   async revise(input: ReviseAgentInput, signal?: AbortSignal): Promise<ReviseAgentOutput> {
     return this.structured<ReviseAgentOutput>(
-      `${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`,
+      `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
       {
         task: "Revise only the selected span and return its complete replacement. When selectionIsSectionScaffold is true, preserve the LaTeX section heading and draft concrete section prose from Reviewed Local Paper Context and adjacent manuscript context. Prefer supplied terminology, contributions, findings, and limitations over generic bracketed placeholders. Use an explicit placeholder only when neither source contains enough evidence; never invent evidence, citations, or results.",
         instruction: input.instruction,
@@ -163,8 +171,8 @@ export class OpenAIAgentProvider implements AgentProvider {
 
   async planDraft(input: DraftAgentInput, signal?: AbortSignal): Promise<{ outline: DraftOutlineSection[] }> {
     return this.structured(
-      `${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`,
-      { task: "Plan a compact, evidence-honest security paper outline. Do not draft prose yet. Return at least five unique section files under sections/. The titles must include the exact words Abstract, Introduction, Method or Design, Evaluation, and Conclusion. Never use main.tex as a section path.", ...input.request },
+      `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
+      { task: "Plan a compact, evidence-honest research paper outline for the selected research domain and publication target. Do not draft prose yet. Return at least five unique section files under sections/. Include Abstract, Introduction, an appropriate method or design section, Evaluation, and Conclusion unless the venue guidance requires a different article structure. Never use main.tex as a section path.", ...input.request },
       "fastwrite_draft_outline",
       {
         type: "object",
@@ -189,8 +197,8 @@ export class OpenAIAgentProvider implements AgentProvider {
 
   async generateDraft(input: DraftAgentInput & { outline: DraftOutlineSection[]; mainDocument: string }, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }> {
     return this.structured(
-      `${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`,
-      { task: "Generate a minimal compilable LaTeX security-paper draft. Use explicit TODO markers for missing evidence and never invent citations or results.", ...input.request, outline: input.outline, mainDocument: input.mainDocument },
+      `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
+      { task: "Generate a minimal compilable LaTeX research-paper draft for the selected publication target. Use explicit TODO markers for missing evidence and never invent citations or results.", ...input.request, outline: input.outline, mainDocument: input.mainDocument },
       "fastwrite_draft_files",
       {
         type: "object",
@@ -226,9 +234,9 @@ export class OpenAIAgentProvider implements AgentProvider {
       required: ["category", "severity", "title", "rationale", "impact", "suggestion", "evidence"]
     };
     return this.structured(
-      `${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`,
-      { task: "Review this security paper evidence-first. Every issue must cite supplied source evidence or be marked inferred. Do not propose file edits.", outline: input.outline, documents: input.documents },
-      "fastwrite_security_review",
+      `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
+      { task: "Review this research paper evidence-first against the selected research domain and publication-target requirements. Every issue must cite supplied source evidence or be marked inferred. Do not propose file edits.", outline: input.outline, documents: input.documents },
+      "fastwrite_paper_review",
       {
         type: "object", additionalProperties: false,
         properties: {
@@ -245,7 +253,7 @@ export class OpenAIAgentProvider implements AgentProvider {
 
   async extractMemory(input: MemoryAgentInput, signal?: AbortSignal): Promise<MemoryAgentOutput> {
     return this.structured(
-      `${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`,
+      `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
       { task: "Extract only explicit, reusable paper facts into a proposed Paper Memory. Cite exact supplied source excerpts. Do not infer missing facts.", documents: input.documents },
       "fastwrite_paper_memory",
       {
@@ -263,7 +271,7 @@ export class OpenAIAgentProvider implements AgentProvider {
 
   async summarizeMemory(input: MemoryHierarchyInput, signal?: AbortSignal): Promise<MemoryHierarchyOutput> {
     return this.structured(
-      `${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`,
+      `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
       {
         task: "Create a concise hierarchical Paper Memory from the supplied evidence-backed facts. Do not invent facts. Write one paper overview and one compact summary for each supplied outline section. Preserve uncertainty and TODOs.",
         outline: input.outline,
@@ -291,7 +299,7 @@ export class OpenAIAgentProvider implements AgentProvider {
 
   async polishMemory(input: MemoryPolishInput, signal?: AbortSignal): Promise<{ content: string }> {
     return this.structured(
-      `${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`,
+      `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
       {
         task: "Polish this user-edited Paper Memory entry into concise, consistent academic English. The input may mix Chinese and English. Preserve every technical term, number, citation, uncertainty marker, TODO, and evidence boundary. Do not add, remove, infer, or strengthen facts.",
         kind: input.kind,
@@ -310,21 +318,23 @@ export class OpenAIAgentProvider implements AgentProvider {
   }
 
   async planAgentTask(input: AgentTaskInput, signal?: AbortSignal): Promise<AgentTaskPlanOutput> {
-    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Plan a ${input.intent} paper task. Do not write files yet. For draft, continue, or structural organization tasks such as splitting main.tex into chapter/section files, you may propose new workspace-relative .tex or .bib files.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, availableFiles: input.documents.map((document) => document.path) }, "fastwrite_agent_plan", {
+    return this.structured(`${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`, { task: `Plan a ${input.intent} paper task. Do not write files yet. Make the plan satisfy the selected publication target and address deterministic compliance findings. Report a section page budget when the target has a page limit, and audit each relevant venue requirement without claiming source-only evidence proves rendered-PDF compliance. For draft, continue, or structural organization tasks such as splitting main.tex into chapter/section files, you may propose new workspace-relative .tex or .bib files.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, complianceFindings: input.complianceFindings ?? [], availableFiles: input.documents.map((document) => document.path), documents: input.documents }, "fastwrite_agent_plan", {
       type: "object", additionalProperties: false, properties: {
-        steps: { type: "array", minItems: 1, items: { type: "string" } }, affectedFiles: { type: "array", minItems: 1, items: { type: "string" } }, risks: { type: "array", items: { type: "string" } }, validation: { type: "array", minItems: 1, items: { type: "string" } }
-      }, required: ["steps", "affectedFiles", "risks", "validation"]
+        steps: { type: "array", minItems: 1, items: { type: "string" } }, affectedFiles: { type: "array", minItems: 1, items: { type: "string" } }, risks: { type: "array", items: { type: "string" } }, validation: { type: "array", minItems: 1, items: { type: "string" } },
+        sectionBudget: { type: "array", items: { type: "object", additionalProperties: false, properties: { section: { type: "string" }, targetPages: { type: "number" }, purpose: { type: "string" } }, required: ["section", "purpose"] } },
+        venueChecks: { type: "array", items: { type: "object", additionalProperties: false, properties: { requirement: { type: "string" }, status: { type: "string", enum: ["satisfied", "missing", "uncertain", "not-applicable"] }, evidencePaths: { type: "array", items: { type: "string" } }, action: { type: "string" } }, required: ["requirement", "status", "evidencePaths", "action"] } }
+      }, required: ["steps", "affectedFiles", "risks", "validation", "sectionBudget", "venueChecks"]
     }, signal);
   }
 
   async generateAgentTask(input: AgentTaskExecutionInput, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }> {
-    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Execute the approved ${input.intent} paper plan for targetPath. Return targetPath's complete content. If targetPath is tightly coupled to companion files already listed in affectedFiles (for example while splitting main.tex into chapter files), you may include those additional planned files too. Do not return paths outside affectedFiles. LaTeX comments are intentionally omitted from Agent context and restored by FastWrite; do not invent or act on hidden comment lines. Preserve unsupported claims and LaTeX syntax.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, targetPath: input.targetPath, plan: { steps: input.steps, affectedFiles: input.affectedFiles, risks: input.risks, validation: input.validation }, documents: input.documents }, "fastwrite_agent_files", {
+    return this.structured(`${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`, { task: `Execute the approved ${input.intent} paper plan for targetPath. Return targetPath's complete content. Satisfy the approved venue checks that apply to this file without inventing compliance evidence. If targetPath is tightly coupled to companion files already listed in affectedFiles (for example while splitting main.tex into chapter files), you may include those additional planned files too. Do not return paths outside affectedFiles. LaTeX comments are intentionally omitted from Agent context and restored by FastWrite; do not invent or act on hidden comment lines. Preserve unsupported claims and LaTeX syntax.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, targetPath: input.targetPath, plan: { steps: input.steps, affectedFiles: input.affectedFiles, risks: input.risks, validation: input.validation, sectionBudget: input.sectionBudget ?? [], venueChecks: input.venueChecks ?? [] }, documents: input.documents }, "fastwrite_agent_files", {
       type: "object", additionalProperties: false, properties: { files: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, properties: { path: { type: "string" }, content: { type: "string" }, rationale: { type: "string" } }, required: ["path", "content", "rationale"] } } }, required: ["files"]
     }, signal);
   }
 
   async rereviewIssues(input: AgentTaskInput & { issues: AgentTaskIssue[] }, signal?: AbortSignal): Promise<{ assessments: Array<{ issueId: string; resolved: boolean; assessment: string }>; regressions: string[] }> {
-    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: "Targeted re-review: decide only whether the supplied issues are resolved in the current documents and identify obvious regressions.", issues: input.issues, documents: input.documents }, "fastwrite_issue_rereview", {
+    return this.structured(`${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`, { task: "Targeted re-review: decide only whether the supplied issues are resolved in the current documents and identify obvious regressions.", issues: input.issues, documents: input.documents }, "fastwrite_issue_rereview", {
       type: "object", additionalProperties: false, properties: {
         assessments: { type: "array", items: { type: "object", additionalProperties: false, properties: { issueId: { type: "string" }, resolved: { type: "boolean" }, assessment: { type: "string" } }, required: ["issueId", "resolved", "assessment"] } },
         regressions: { type: "array", items: { type: "string" } }
@@ -333,7 +343,7 @@ export class OpenAIAgentProvider implements AgentProvider {
   }
 
   async complete(input: CompletionAgentInput, signal?: AbortSignal): Promise<{ suggestion: string }> {
-    return this.structured(`${input.skillInstructions}\n\nWriting profile guidance:\n${input.venueInstructions}`, { task: `Continue the current file at the cursor using the inferred ${input.intent} intent. For TeX prose, write only the natural next sentence; for .bib, complete a BibTeX entry; inside math or an unfinished LaTeX command, complete only that syntax. Use Local Paper Context when it supplies concrete information instead of emitting generic placeholders. Return an empty suggestion only when both nearby text and Local Paper Context lack sufficient evidence. Never invent citations, results, or claims.`, path: input.path, contextBefore: input.contextBefore, contextAfter: input.contextAfter, localPaperContext: input.paperContext ?? "", outline: input.outline, bibliography: input.bibliography }, "fastwrite_completion", { type: "object", additionalProperties: false, properties: { suggestion: { type: "string" } }, required: ["suggestion"] }, signal);
+    return this.structured(`${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`, { task: `Continue the current file at the cursor using the inferred ${input.intent} intent. For TeX prose, write only the natural next sentence; for .bib, complete a BibTeX entry; inside math or an unfinished LaTeX command, complete only that syntax. Use Local Paper Context when it supplies concrete information instead of emitting generic placeholders. Return an empty suggestion only when both nearby text and Local Paper Context lack sufficient evidence. Never invent citations, results, or claims.`, path: input.path, contextBefore: input.contextBefore, contextAfter: input.contextAfter, localPaperContext: input.paperContext ?? "", outline: input.outline, bibliography: input.bibliography }, "fastwrite_completion", { type: "object", additionalProperties: false, properties: { suggestion: { type: "string" } }, required: ["suggestion"] }, signal);
   }
 
   private async structured<T>(instructions: string, input: unknown, name: string, schema: Record<string, unknown>, signal?: AbortSignal): Promise<T> {

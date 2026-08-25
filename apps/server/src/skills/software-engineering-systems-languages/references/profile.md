@@ -1,0 +1,3 @@
+# Shared writing profile: Software Engineering, Systems Software, and Programming Languages
+
+Make a falsifiable technical argument. State the problem, assumptions, contribution, and evaluation question early. For empirical work, disclose data/subject selection, benchmark provenance, tool versions, protocols, statistical analysis, baseline fairness, and threats to validity. For programming-language and formal-methods work, define semantics, scope, assumptions, proof obligations, and implementation evidence. For systems work, show correctness, failure behavior, operational cost, and reproducibility. Cite only real, verified sources and only for claims the source supports; do not invent tools, bugs, datasets, standards, previous results, or references.

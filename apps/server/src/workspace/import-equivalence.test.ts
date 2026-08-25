@@ -37,14 +37,14 @@ describe("managed import equivalence", () => {
       sourceDirectory,
       name: "Local paper",
       mainDocument: "main.tex",
-      venue: "security-top4",
+      venue: "network-information-security",
       source: { type: "local", displayName: "paper" }
     });
     const github = await workspaces.copyExternalDirectory({
       sourceDirectory,
       name: "GitHub paper",
       mainDocument: "main.tex",
-      venue: "security-top4",
+      venue: "network-information-security",
       source: {
         type: "github",
         repository: "https://github.com/example/paper",

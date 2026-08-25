@@ -77,7 +77,7 @@ Review 必须以当前项目版本成功编译出的 **PDF** 为审稿正文，�
 
 ### Writing Skill
 
-项目选择 `security-top4` 或 `ai-top-tier`。Skill 同时约束 Completion、Agent、Revise 和 Review；每次 Agent Run 记录 Skill 与版本。
+项目先选择 CCF 研究领域，再选择具体会议或期刊及投稿阶段。领域 Skill 与 venue 规则共同约束 Completion、Agent、Revise 和 Review；每次 Agent Run 记录 Skill、版本及 publication target。
 
 ### Paper Memory
 

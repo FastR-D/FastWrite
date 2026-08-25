@@ -23,7 +23,7 @@ export class DraftService {
     this.validateRequest(request);
     const normalizedRequest = this.normalizeRequest(request);
     const project = this.workspaces.getProject(projectId);
-    const loaded = await this.skills.load(project.skill);
+    const loaded = await this.skills.load(project.skill, project.publicationTarget);
     const createdAt = now();
     const run: AgentRun = {
       id: `run_${crypto.randomUUID()}`,
@@ -32,6 +32,7 @@ export class DraftService {
       status: "running",
       objective: `Plan a paper draft for: ${(normalizedRequest.brief ?? normalizedRequest.topic ?? "research brief").slice(0, 240)}`,
       skill: structuredClone(project.skill),
+      ...(project.publicationTarget ? { publicationTarget: structuredClone(project.publicationTarget) } : {}),
       createdAt,
       updatedAt: createdAt,
       steps: [
@@ -76,7 +77,9 @@ export class DraftService {
     if (plan.status !== "proposed") throw new ApiError(409, "draft_not_proposed", "This draft outline is no longer awaiting confirmation");
     const project = this.workspaces.getProject(projectId);
     const checkedOutline = this.validateOutline(outline, project.mainDocument);
-    const loaded = await this.skills.load(project.skill);
+    const plannedRun = this.database.snapshot().agentRuns.find((run) => run.id === plan.agentRunId);
+    const plannedSkill = plannedRun?.skill ?? project.skill;
+    const loaded = await this.skills.load(plannedSkill, plannedRun?.publicationTarget);
     await this.database.mutate((state) => {
       const storedPlan = state.draftPlans.find((item) => item.id === planId)!;
       storedPlan.status = "generating";
@@ -92,7 +95,7 @@ export class DraftService {
         request: plan.request,
         outline: checkedOutline,
         mainDocument: project.mainDocument,
-        skill: project.skill,
+        skill: plannedSkill,
         skillInstructions: loaded.instructions,
         venueInstructions: loaded.venueInstructions
       };
@@ -117,7 +120,7 @@ export class DraftService {
         projectId,
         agentRunId: plan.agentRunId,
         status: "proposed",
-        summary: "Create security paper draft",
+        summary: "Create research paper draft",
         rationale: "Creates the confirmed outline as a minimal, evidence-honest LaTeX draft.",
         changes: effectiveChanges,
         createdAt: now(),

@@ -13,6 +13,7 @@ import {
   PanelRightOpen,
   Pencil,
   RefreshCw,
+  ShieldCheck,
   Trash2,
   Upload
 } from "lucide-react";
@@ -29,6 +30,7 @@ import { RenameFileDialog } from "../components/workspace/RenameFileDialog";
 import { SourceEditor, type SourceEditorHandle } from "../components/workspace/SourceEditor";
 import { AiWorkspace } from "../components/workspace/AiWorkspace";
 import { GithubSyncDialog } from "../components/workspace/GithubSyncDialog";
+import { ComplianceDialog } from "../components/workspace/ComplianceDialog";
 import type { CompileFailureContext, CompileRepairRequest } from "../components/workspace/compileRepair";
 import { navigate } from "../lib/navigation";
 import { currentSectionSelection } from "../lib/sectionSelection";
@@ -68,6 +70,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
+  const [complianceOpen, setComplianceOpen] = useState(false);
   const [settingsTree, setSettingsTree] = useState<WorkspaceTreeNode[]>([]);
   const [deleteError, setDeleteError] = useState("");
   const [compileRequest, setCompileRequest] = useState(0);
@@ -286,6 +289,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         </div>
         <div className="workspace-topbar__right">
           <span className="skill-badge">{project.skill.name}</span>
+          <Button size="small" variant="secondary" icon={<ShieldCheck />} onClick={() => setComplianceOpen(true)}>Compliance</Button>
           {project.source.type === "github" ? <Button className="workspace-sync-button" size="small" variant="secondary" icon={<RefreshCw />} onClick={() => setSyncOpen(true)}>Sync</Button> : null}
           <IconButton label="Project settings" icon={<MoreHorizontal />} onClick={() => void openSettings()} />
         </div>
@@ -365,6 +369,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       <RenameFileDialog open={renameOpen} projectId={projectId} path={selectedPath ?? ""} onClose={() => setRenameOpen(false)} onRenamed={async (path) => { setRenameOpen(false); await refreshWorkspace(undefined, path); setSelectedPath(path); }} />
       <ProjectSettingsDialog open={settingsOpen} project={project} tree={settingsTree} onClose={() => setSettingsOpen(false)} onSaved={async (updated) => { setProject(updated); setSettingsOpen(false); await refreshWorkspace(undefined, updated.mainDocument); setSelectedPath(updated.mainDocument); }} />
       {project.source.type === "github" ? <GithubSyncDialog open={syncOpen} project={project} compileState={compileState} onClose={() => setSyncOpen(false)} onFlushEditor={() => editorRef.current?.flush() ?? Promise.resolve()} onWorkspaceApplied={refreshAfterSync} onRequestCompile={() => setCompileRequest((value) => value + 1)} /> : null}
+      <ComplianceDialog open={complianceOpen} project={project} {...(compileState.renderedPages ? { renderedPages: compileState.renderedPages } : {})} onClose={() => setComplianceOpen(false)} />
       <Dialog open={deleteOpen} title="Move file to trash?" description={selectedPath ?? ""} onClose={() => setDeleteOpen(false)} footer={<><Button variant="ghost" onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="danger" icon={<Trash2 />} onClick={async () => { if (!selectedPath) return; setDeleteError(""); try { await editorRef.current?.flush(); await api.projects.deleteFile(projectId, selectedPath); setDeleteOpen(false); setSelectedPath(project.mainDocument); await refreshWorkspace(); } catch (deleteFailure) { setDeleteError(deleteFailure instanceof Error ? deleteFailure.message : "Could not delete file"); } }}>Move to trash</Button></>}><p className="dialog-copy">The file is moved to the project trash and can be recovered from workspace storage.</p>{deleteError ? <div className="form-error" role="alert">{deleteError}</div> : null}</Dialog>
     </div>
   );

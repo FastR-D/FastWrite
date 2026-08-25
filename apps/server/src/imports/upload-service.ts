@@ -1,6 +1,6 @@
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { TargetVenue, UploadManifestEntry, UploadSession } from "@fastwrite/shared";
+import type { PublicationTarget, TargetVenue, UploadManifestEntry, UploadSession } from "@fastwrite/shared";
 import { isIgnoredWorkspacePath, normalizeWorkspacePath } from "@fastwrite/shared";
 import { config } from "../config";
 import { ApiError } from "../http";
@@ -12,6 +12,7 @@ interface CreateUploadInput {
   projectName: string;
   mainDocument: string;
   venue: TargetVenue;
+  publicationTarget?: PublicationTarget;
   sourceName: string;
   entries: UploadManifestEntry[];
 }
@@ -60,6 +61,7 @@ export class UploadService {
       projectName: input.projectName.trim(),
       mainDocument,
       venue: input.venue,
+      ...(input.publicationTarget ? { publicationTarget: input.publicationTarget } : {}),
       sourceName: input.sourceName,
       entries: normalizedEntries,
       receivedPaths: [],
@@ -130,6 +132,7 @@ export class UploadService {
         name: session.projectName,
         mainDocument: session.mainDocument,
         venue: session.venue,
+        ...(session.publicationTarget ? { publicationTarget: session.publicationTarget } : {}),
         source: { type: "local", displayName: session.sourceName }
       });
       await this.database.mutate((state) => {

@@ -19,12 +19,13 @@ import type {
   OutlineItem,
   PaperFile,
   PaperProject,
+  PublicationTarget,
   SaveFileRequest,
   SaveFileResponse,
   TargetVenue,
   WorkspaceTreeNode
 } from "@fastwrite/shared";
-import { isIgnoredWorkspacePath, isImageFile, isTextFile, normalizeWorkspacePath, paperSkillForProfile, sortWorkspaceNames } from "@fastwrite/shared";
+import { isIgnoredWorkspacePath, isImageFile, isTextFile, normalizePublicationTarget, normalizeWorkspacePath, paperSkillForProfile, sortWorkspaceNames } from "@fastwrite/shared";
 import { ApiError } from "../http";
 import { logServerError } from "../safe-log";
 import type { JsonDatabase } from "../storage/database";
@@ -70,14 +71,14 @@ export class WorkspaceService {
     return join(this.projectsDirectory, id, "workspace");
   }
 
-  async createEmpty(name: string, mainDocument = "main.tex", venue: TargetVenue = "security-top4"): Promise<PaperProject> {
+  async createEmpty(name: string, mainDocument = "main.tex", venue: TargetVenue = "network-information-security", publicationTarget?: PublicationTarget): Promise<PaperProject> {
     const normalizedMain = normalizeWorkspacePath(mainDocument);
     const id = projectId();
     const root = join(this.projectsDirectory, id, "workspace");
     await mkdir(dirname(join(root, normalizedMain)), { recursive: true });
     const template = `\\documentclass{article}\n\\title{${name.replace(/[{}\\]/g, "")} }\n\\author{}\n\\begin{document}\n\\maketitle\n\n\\section{Introduction}\n\n\\end{document}\n`;
     await writeFile(join(root, normalizedMain), template, "utf8");
-    return this.registerProject(id, name, normalizedMain, venue, { type: "local", displayName: "New paper" }, [normalizedMain]);
+    return this.registerProject(id, name, normalizedMain, venue, { type: "local", displayName: "New paper" }, [normalizedMain], publicationTarget);
   }
 
   async importStagingDirectory(input: {
@@ -85,6 +86,7 @@ export class WorkspaceService {
     name: string;
     mainDocument: string;
     venue: TargetVenue;
+    publicationTarget?: PublicationTarget;
     source: ImportSource;
   }): Promise<PaperProject> {
     const id = projectId();
@@ -101,7 +103,7 @@ export class WorkspaceService {
       await rm(projectDirectory, { recursive: true, force: true });
       throw new ApiError(400, "main_document_missing", `Main document '${normalizedMain}' was not uploaded`);
     }
-    return this.registerProject(id, input.name, normalizedMain, input.venue, input.source, files);
+    return this.registerProject(id, input.name, normalizedMain, input.venue, input.source, files, input.publicationTarget);
   }
 
   async copyExternalDirectory(input: {
@@ -109,6 +111,7 @@ export class WorkspaceService {
     name: string;
     mainDocument?: string;
     venue: TargetVenue;
+    publicationTarget?: PublicationTarget;
     source: ImportSource;
   }): Promise<PaperProject> {
     const temporary = join(this.dataDirectory, "imports", crypto.randomUUID());
@@ -123,6 +126,7 @@ export class WorkspaceService {
       name: input.name,
       mainDocument,
       venue: input.venue,
+      ...(input.publicationTarget ? { publicationTarget: input.publicationTarget } : {}),
       source: input.source
     });
   }
@@ -391,7 +395,7 @@ export class WorkspaceService {
     });
   }
 
-  async updateProject(id: string, updates: { name?: string; mainDocument?: string; venue?: TargetVenue }): Promise<PaperProject> {
+  async updateProject(id: string, updates: { name?: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget | null }): Promise<PaperProject> {
     if (updates.mainDocument) {
       const normalizedMain = normalizeWorkspacePath(updates.mainDocument);
       if (!normalizedMain.toLowerCase().endsWith(".tex") || isIgnoredWorkspacePath(normalizedMain)) {
@@ -405,6 +409,12 @@ export class WorkspaceService {
       if (updates.name?.trim()) project.name = updates.name.trim();
       if (updates.mainDocument) project.mainDocument = normalizeWorkspacePath(updates.mainDocument);
       if (updates.venue) project.skill = paperSkillForProfile(updates.venue);
+      if (updates.publicationTarget === null) delete project.publicationTarget;
+      else if (updates.publicationTarget) {
+        const normalized = normalizePublicationTarget(updates.publicationTarget, project.skill.id);
+        if (normalized) project.publicationTarget = normalized;
+        else delete project.publicationTarget;
+      } else if (updates.venue && project.publicationTarget && !normalizePublicationTarget(project.publicationTarget, project.skill.id)) delete project.publicationTarget;
       project.updatedAt = now();
       project.version += 1;
       return project;
@@ -440,14 +450,18 @@ export class WorkspaceService {
     mainDocument: string,
     venue: TargetVenue,
     source: ImportSource,
-    files: string[]
+    files: string[],
+    publicationTarget?: PublicationTarget
   ): Promise<PaperProject> {
     const timestamp = now();
+    const skill = paperSkillForProfile(venue);
+    const target = normalizePublicationTarget(publicationTarget, skill.id);
     const project: PaperProject = {
       id,
       name: name.trim() || basename(mainDocument, extname(mainDocument)),
       mainDocument,
-      skill: paperSkillForProfile(venue),
+      skill,
+      ...(target ? { publicationTarget: target } : {}),
       source,
       createdAt: timestamp,
       updatedAt: timestamp,

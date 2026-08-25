@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { ArrowRight, BookOpenText, Clock3, FilePlus2, FolderGit2, Plus } from "lucide-react";
-import type { PaperProject, WritingProfile } from "@fastwrite/shared";
+import type { PaperProject, PublicationTarget, PublicationVenueOption, WritingProfile } from "@fastwrite/shared";
 import { WRITING_PROFILES } from "@fastwrite/shared";
 import { api } from "../api/client";
 import { ImportDialog } from "../components/import/ImportDialog";
 import { Button } from "../components/ui/Button";
 import { Dialog } from "../components/ui/Dialog";
+import { PublicationTargetFields } from "../components/ui/PublicationTargetFields";
 import { navigate, projectPath } from "../lib/navigation";
 
 export function ProjectsPage() {
@@ -82,7 +83,7 @@ export function ProjectsPage() {
                   <code>{project.mainDocument}</code>
                   <div className="project-card__meta">
                     <span><Clock3 /> {relativeTime(project.updatedAt)}</span>
-                    <span>{project.skill.name}</span>
+                    <span>{project.publicationTarget?.venueId.toUpperCase() ?? project.skill.name}</span>
                   </div>
                 </button>
               ))}
@@ -98,14 +99,17 @@ export function ProjectsPage() {
 
 function NewPaperDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (project: PaperProject) => void }) {
   const [name, setName] = useState("");
-  const [profile, setProfile] = useState<WritingProfile>("security-top4");
+  const [profile, setProfile] = useState<WritingProfile>("network-information-security");
+  const [publicationTarget, setPublicationTarget] = useState<PublicationTarget | undefined>();
+  const [selectedVenue, setSelectedVenue] = useState<PublicationVenueOption | undefined>();
+  const [initializeFromTemplate, setInitializeFromTemplate] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const create = async () => {
     setLoading(true);
     setError("");
     try {
-      onCreated(await api.projects.create({ name: name.trim(), mainDocument: "main.tex", venue: profile }));
+      onCreated(await api.projects.create({ name: name.trim(), mainDocument: "main.tex", venue: profile, ...(publicationTarget ? { publicationTarget } : {}), ...(initializeFromTemplate && selectedVenue?.template ? { initializeFromTemplate: true } : {}) }));
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Could not create project");
     } finally {
@@ -113,10 +117,12 @@ function NewPaperDialog({ open, onClose, onCreated }: { open: boolean; onClose: 
     }
   };
   return (
-    <Dialog open={open} title="Create a new paper" description="Start with a minimal, compilable LaTeX document." onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" loading={loading} disabled={!name.trim()} onClick={() => void create()}>Create paper</Button></>}>
+    <Dialog open={open} title="Create a new paper" description={selectedVenue?.template && initializeFromTemplate ? "Start from the selected venue's complete LaTeX template." : "Start with a minimal, compilable LaTeX document."} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" loading={loading} disabled={!name.trim()} onClick={() => void create()}>Create paper</Button></>}>
       <div className="form-stack">
         <label className="field"><span>Project name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="My security paper" autoFocus /></label>
-        <label className="field"><span>Writing profile</span><select value={profile} onChange={(event) => setProfile(event.target.value as WritingProfile)}>{WRITING_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><small>One Skill guides Agent, Revise, and Review throughout the paper.</small></label>
+        <label className="field"><span>Research domain</span><select value={profile} onChange={(event) => { setProfile(event.target.value as WritingProfile); setPublicationTarget(undefined); setSelectedVenue(undefined); }}>{WRITING_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><small>The research domain and selected venue jointly guide all writing workflows.</small></label>
+        <PublicationTargetFields profile={profile} value={publicationTarget} onChange={setPublicationTarget} onSelectedVenueChange={setSelectedVenue} />
+        {selectedVenue?.template ? <label className="field field--checkbox"><span><input type="checkbox" checked={initializeFromTemplate} onChange={(event) => setInitializeFromTemplate(event.target.checked)} /> Initialize from LaTeX template</span><small>{selectedVenue.template.label}. <a href={selectedVenue.template.sourceUrl} target="_blank" rel="noreferrer">Inspect source</a>. {selectedVenue.template.trust === "official" ? "Fetched from the venue's official repository." : selectedVenue.template.trust === "publisher" ? "Publisher-family starting point; confirm the venue-specific options." : "Pinned community mirror; compare it with the current official author guide before submission."}</small></label> : null}
         {error ? <div className="form-error" role="alert">{error}</div> : null}
       </div>
     </Dialog>

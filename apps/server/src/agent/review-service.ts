@@ -38,6 +38,7 @@ export class ReviewService {
       projectVersion: project.version,
       mainDocument: project.mainDocument,
       skill: structuredClone(project.skill),
+      ...(project.publicationTarget ? { publicationTarget: structuredClone(project.publicationTarget) } : {}),
       files: documents.map((document) => ({ path: document.path, version: document.version, digest: new Bun.CryptoHasher("sha256").update(document.content).digest("hex") })),
       sourceOnly: !compileRecord,
       createdAt,
@@ -48,8 +49,9 @@ export class ReviewService {
       projectId,
       type: "review",
       status: "running",
-      objective: `Review project version ${project.version} with the ${project.skill.name} writing profile`,
+      objective: `Review project version ${project.version} for the ${project.skill.name} research domain and selected publication target`,
       skill: structuredClone(project.skill),
+      ...(project.publicationTarget ? { publicationTarget: structuredClone(project.publicationTarget) } : {}),
       createdAt,
       updatedAt: createdAt,
       steps: [
@@ -60,7 +62,7 @@ export class ReviewService {
     };
     await this.database.mutate((state) => { state.reviewSnapshots.push(snapshot); state.agentRuns.push(run); });
     try {
-      const [outline, skill] = await Promise.all([this.workspaces.outline(projectId), this.skills.load(project.skill)]);
+      const [outline, skill] = await Promise.all([this.workspaces.outline(projectId), this.skills.load(project.skill, project.publicationTarget)]);
       const result = await runAgentOperation<ReviewAgentOutput>(
         (signal) => this.provider!.review!({ documents: documents.map(({ path, content }) => ({ path, content })), outline: flattenOutline(outline).map(({ path, title, line }) => ({ path, title, line })), skill: project.skill, skillInstructions: skill.instructions, venueInstructions: skill.venueInstructions }, signal),
         { signal: requestSignal, timeoutEnv: "FASTWRITE_REVIEW_TIMEOUT_MS", label: "Review", codePrefix: "review", cancelledMessage: "Review cancelled; no report was created", timeoutMessage: "Review timed out before a report was created" }

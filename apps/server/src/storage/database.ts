@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type CompileRecord, type DraftPlan, type GithubSyncRun, type IssueResolution, type PaperMemory, type PaperProject, type ReviewReport, type ReviewSnapshot, type UploadSession } from "@fastwrite/shared";
+import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type CompileRecord, type DraftPlan, type GithubSyncRun, type IssueResolution, type PaperMemory, type PaperProject, type ReviewReport, type ReviewSnapshot, type UploadSession } from "@fastwrite/shared";
 
 export interface FileVersionRecord {
   version: number;
@@ -54,11 +54,16 @@ export class JsonDatabase {
         githubSyncRuns: parsed.githubSyncRuns ?? []
       };
       let migrated = false;
-      const normalizeSkill = (record: { skill: PaperProject["skill"] }) => {
+      const normalizeSkill = (record: { skill: PaperProject["skill"]; publicationTarget?: PaperProject["publicationTarget"] }) => {
         const normalized = paperSkillForProfile(record.skill?.venue ?? record.skill?.id);
         if (record.skill?.id !== normalized.id || record.skill?.name !== normalized.name || record.skill?.venue !== normalized.venue) {
           record.skill = normalized;
           migrated = true;
+        }
+        if (record.publicationTarget) {
+          const target = normalizePublicationTarget(record.publicationTarget, normalized.id);
+          if (target && JSON.stringify(target) !== JSON.stringify(record.publicationTarget)) { record.publicationTarget = target; migrated = true; }
+          else if (!target) { delete record.publicationTarget; migrated = true; }
         }
       };
       for (const project of this.state.projects) normalizeSkill(project);

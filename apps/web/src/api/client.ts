@@ -33,6 +33,9 @@ import type {
   CompletionResponse,
   UploadManifestEntry,
   UploadSession,
+  PublicationTarget,
+  PublicationVenueOption,
+  ComplianceReport,
   TargetVenue,
   WorkspaceTreeNode
 } from "@fastwrite/shared";
@@ -68,11 +71,14 @@ function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestI
 }
 
 export const api = {
+  venues: {
+    list: (signal?: AbortSignal) => request<PublicationVenueOption[]>("/api/venues", signal ? { signal } : undefined)
+  },
   projects: {
     list: (signal?: AbortSignal) => request<PaperProject[]>("/api/projects", signal ? { signal } : undefined),
     get: (id: string, signal?: AbortSignal) => request<PaperProject>(`/api/projects/${id}`, signal ? { signal } : undefined),
-    create: (body: { name: string; mainDocument?: string; venue?: TargetVenue }) => request<PaperProject>("/api/projects", jsonInit("POST", body)),
-    update: (id: string, body: Partial<Pick<PaperProject, "name" | "mainDocument">> & { venue?: TargetVenue }) => request<PaperProject>(`/api/projects/${id}`, jsonInit("PATCH", body)),
+    create: (body: { name: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget; initializeFromTemplate?: boolean }) => request<PaperProject>("/api/projects", jsonInit("POST", body)),
+    update: (id: string, body: Partial<Pick<PaperProject, "name" | "mainDocument">> & { venue?: TargetVenue; publicationTarget?: PublicationTarget | null }) => request<PaperProject>(`/api/projects/${id}`, jsonInit("PATCH", body)),
     exportUrl: (id: string) => `/api/projects/${id}/export`,
     checkpoint: (id: string) => request<{ createdAt: string }>(`/api/projects/${id}/history/checkpoint`, { method: "POST" }),
     tree: (id: string, signal?: AbortSignal) => request<WorkspaceTreeNode[]>(`/api/projects/${id}/files`, signal ? { signal } : undefined),
@@ -86,7 +92,7 @@ export const api = {
     deleteFile: (id: string, path: string) => request<void>(`/api/projects/${id}/files?path=${encodeURIComponent(path)}`, { method: "DELETE" })
   },
   uploads: {
-    create: (body: { projectName: string; mainDocument: string; venue: string; sourceName: string; entries: UploadManifestEntry[] }, signal?: AbortSignal) => request<UploadSession>("/api/upload-sessions", jsonInit("POST", body, signal)),
+    create: (body: { projectName: string; mainDocument: string; venue: string; publicationTarget?: PublicationTarget; sourceName: string; entries: UploadManifestEntry[] }, signal?: AbortSignal) => request<UploadSession>("/api/upload-sessions", jsonInit("POST", body, signal)),
     file: (id: string, path: string, file: File, signal?: AbortSignal) => request<UploadSession>(`/api/upload-sessions/${id}/files?path=${encodeURIComponent(path)}`, {
       method: "PUT",
       headers: { "content-type": "application/octet-stream" },
@@ -156,5 +162,8 @@ export const api = {
   },
   completions: {
     suggest: (projectId: string, body: CompletionRequest, signal?: AbortSignal) => request<CompletionResponse>(`/api/projects/${projectId}/completions`, jsonInit("POST", body, signal))
+  },
+  compliance: {
+    check: (projectId: string, body: { renderedPages?: number; mainBodyPages?: number; verifyCitationsOnline?: boolean }, signal?: AbortSignal) => request<ComplianceReport>(`/api/projects/${projectId}/compliance-checks`, jsonInit("POST", body, signal))
   }
 };

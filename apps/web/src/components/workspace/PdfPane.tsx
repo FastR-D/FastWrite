@@ -15,7 +15,7 @@ import "react-pdf/dist/Page/TextLayer.css";
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export type CompileState = "idle" | "loading" | "compiling" | "success" | "error";
-export interface CompileStateReport { state: CompileState; compiledVersion: number | null; failure?: CompileFailureContext }
+export interface CompileStateReport { state: CompileState; compiledVersion: number | null; renderedPages?: number; failure?: CompileFailureContext }
 
 export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceLocation, compileRequest, onCompileState, onFixWithAgent, onSyncToSource }: { projectId: string; projectVersion: number; mainDocument: string; tree: WorkspaceTreeNode[]; sourceLocation: SourceLocation | null; compileRequest: number; onCompileState: (report: CompileStateReport) => void; onFixWithAgent: (failure: CompileFailureContext) => void; onSyncToSource: (location: SourceLocation) => void }) {
   const paneRef = useRef<HTMLElement>(null);
@@ -158,7 +158,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
     };
   }, [compile, lastAttemptedVersion, projectVersion]);
 
-  useEffect(() => { onCompileState({ state, compiledVersion, ...(failure ? { failure } : {}) }); }, [compiledVersion, failure, onCompileState, state]);
+  useEffect(() => { onCompileState({ state, compiledVersion, ...(pageCount > 0 ? { renderedPages: pageCount } : {}), ...(failure ? { failure } : {}) }); }, [compiledVersion, failure, onCompileState, pageCount, state]);
 
   useEffect(() => {
     if (compileRequest === compileRequestRef.current) return;

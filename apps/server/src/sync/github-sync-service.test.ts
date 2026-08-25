@@ -140,7 +140,7 @@ async function syncFixture() {
     sourceDirectory: seed,
     name: "Synced paper",
     mainDocument: "main.tex",
-    venue: "security-top4",
+    venue: "network-information-security",
     source: { type: "github", repository: "https://github.com/example/paper", ref: "main", commit }
   });
   const sync = new GithubSyncService(data, database, workspaces, () => remote);

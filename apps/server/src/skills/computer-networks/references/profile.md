@@ -1,0 +1,3 @@
+# Shared writing profile: Computer Networks
+
+Write an evidence-backed networking argument. Define the network setting, protocol assumptions, topology, traffic/workload source, failure or adversary model, metrics, and baseline fairness before claiming improvement. Explain trade-offs among latency, throughput, loss, fairness, scalability, overhead, reliability, and deployability. Report methodology, confidence/variance, edge cases, trace privacy, limitations, and reproducibility. Cite only verified sources and use a citation only for the claim it actually establishes; never synthesize a reference, dataset, standard, or result.

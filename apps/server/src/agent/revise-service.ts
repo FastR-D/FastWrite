@@ -88,6 +88,7 @@ export class ReviseService {
       status: "running",
       objective: instruction,
       skill: structuredClone(project.skill),
+      ...(project.publicationTarget ? { publicationTarget: structuredClone(project.publicationTarget) } : {}),
       createdAt,
       updatedAt: createdAt,
       ...(memory.version ? { memoryVersion: memory.version } : {})
@@ -95,7 +96,7 @@ export class ReviseService {
     await this.database.mutate((state) => state.agentRuns.push(run));
 
     try {
-      const loadedSkill = await this.skills.load(project.skill);
+      const loadedSkill = await this.skills.load(project.skill, project.publicationTarget);
       const output = await this.provider.revise({
         instruction,
         selection: request.selection,

@@ -48,7 +48,7 @@ describe("OpenAIAgentProvider compatible endpoints", () => {
       scope: { type: "project" },
       issues: [],
       documents: [{ path: "main.tex", content: "TODO", version: 1 }],
-      skill: { id: "security-top4", name: "Security Top-4", version: "1.0.0", venue: "security-top4" },
+      skill: { id: "network-information-security", name: "网络与信息安全", version: "2.0.0", venue: "network-information-security" },
       skillInstructions: "Follow the writing profile.",
       venueInstructions: "Preserve evidence boundaries.",
       steps: ["Complete main.tex"],

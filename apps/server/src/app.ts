@@ -15,6 +15,7 @@ import type {
   ChangeSetDecisionRequest,
   ReviseRequest,
   SaveFileRequest,
+  PublicationTarget,
   TargetVenue,
   UploadManifestEntry
 } from "@fastwrite/shared";
@@ -29,6 +30,7 @@ import { CompletionService } from "./agent/completion-service";
 import { SkillRegistry } from "./agent/skill-registry";
 import { TexPackageService, type TexPackageProvider } from "./compiler/tex-package-service";
 import { LatexCompileService } from "./compiler/latex-compile-service";
+import { ComplianceService } from "./compliance/compliance-service";
 import { embeddedWebFile } from "./embedded-web";
 import { config, type AgentProviderConfiguration } from "./config";
 import { GithubService } from "./imports/github-service";
@@ -37,6 +39,7 @@ import { GithubSyncService } from "./sync/github-sync-service";
 import { ApiError, errorResponse, json, readJson, withRuntimeHeaders } from "./http";
 import { JsonDatabase } from "./storage/database";
 import { WorkspaceService } from "./workspace/workspace-service";
+import { LatexTemplateService } from "./templates/latex-template-service";
 
 interface Services {
   database: JsonDatabase;
@@ -52,6 +55,9 @@ interface Services {
   completions: CompletionService;
   texPackages: TexPackageProvider;
   latexCompiler: LatexCompileService;
+  skillRegistry: SkillRegistry;
+  compliance: ComplianceService;
+  latexTemplates: LatexTemplateService;
 }
 
 type Handler = (request: Request, params: Record<string, string>, url: URL) => Promise<Response> | Response;
@@ -89,13 +95,16 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
     review: defaultProvider ?? providerFor(config.agentProviders.review),
     memory: defaultProvider ?? providerFor(config.agentProviders.memory)
   };
-  const memories = new MemoryService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.memory);
-  const revisions = new ReviseService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.revise, memories);
-  const drafts = new DraftService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.agent);
-  const reviews = new ReviewService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.review);
-  const agentTasks = new AgentTaskService(database, workspaces, new SkillRegistry(config.skillsDirectory), providers.agent, memories, providers.review);
-  const completions = new CompletionService(workspaces, new SkillRegistry(config.skillsDirectory), providers.completion, memories);
-  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler: new LatexCompileService(dataDirectory, workspaces) };
+  const skillRegistry = new SkillRegistry(config.skillsDirectory);
+  const latexTemplates = new LatexTemplateService(dataDirectory);
+  const memories = new MemoryService(database, workspaces, skillRegistry, providers.memory);
+  const revisions = new ReviseService(database, workspaces, skillRegistry, providers.revise, memories);
+  const drafts = new DraftService(database, workspaces, skillRegistry, providers.agent);
+  const reviews = new ReviewService(database, workspaces, skillRegistry, providers.review);
+  const compliance = new ComplianceService(workspaces, skillRegistry);
+  const agentTasks = new AgentTaskService(database, workspaces, skillRegistry, providers.agent, memories, providers.review, compliance);
+  const completions = new CompletionService(workspaces, skillRegistry, providers.completion, memories);
+  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler: new LatexCompileService(dataDirectory, workspaces), skillRegistry, compliance, latexTemplates };
   const routes = buildRoutes(services);
 
   return async function fetch(request: Request): Promise<Response> {
@@ -115,20 +124,31 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
 }
 
-function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler }: Services): Route[] {
+function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates }: Services): Route[] {
   return [
     route("GET", "/api/health", async () => json({ status: "ok" })),
+    route("GET", "/api/venues", async () => json(await skillRegistry.catalog())),
+    route("POST", "/api/projects/:projectId/compliance-checks", async (request, params) => {
+      const body = await readJson<{ pdfBase64?: string; renderedPages?: number; mainBodyPages?: number; verifyCitationsOnline?: boolean }>(request);
+      return json(await compliance.check(required(params, "projectId"), body), 201);
+    }),
     route("GET", "/api/texlive/:packageName", async (_request, params, url) => texPackages.texLiveArchive(required(params, "packageName"), url.searchParams.get("tlYear"))),
     route("GET", "/api/fetch/:packageName", async (_request, params, url) => texPackages.ctanPackage(required(params, "packageName"), url.searchParams.get("tlYear"))),
     route("GET", "/api/ctan-pkg/:packageName", async (_request, params) => texPackages.ctanPackageInfo(required(params, "packageName"))),
     route("GET", "/api/projects", async () => json(workspaces.listProjects())),
     route("POST", "/api/projects", async (request) => {
       const body = await readJson<CreateProjectRequest>(request);
-      return json(await workspaces.createEmpty(body.name, body.mainDocument, body.venue), 201);
+      if (body.initializeFromTemplate) {
+        if (!body.publicationTarget) throw new ApiError(400, "template_target_required", "Select a conference or journal before using its template");
+        const venue = body.venue ?? body.publicationTarget.domain;
+        const template = await latexTemplates.materialize(body.name, venue, body.publicationTarget);
+        return json(await workspaces.importStagingDirectory({ stagingDirectory: template.stagingDirectory, name: body.name, mainDocument: template.mainDocument, venue, publicationTarget: body.publicationTarget, source: { type: "local", displayName: template.displayName } }), 201);
+      }
+      return json(await workspaces.createEmpty(body.name, body.mainDocument, body.venue, body.publicationTarget), 201);
     }),
     route("GET", "/api/projects/:projectId", async (_request, params) => json(workspaces.getProject(required(params, "projectId")))),
     route("PATCH", "/api/projects/:projectId", async (request, params) => {
-      const body = await readJson<{ name?: string; mainDocument?: string; venue?: TargetVenue }>(request);
+      const body = await readJson<{ name?: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget | null }>(request);
       return json(await workspaces.updateProject(required(params, "projectId"), body));
     }),
     route("GET", "/api/projects/:projectId/export", async (_request, params) => {
@@ -298,6 +318,7 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
         projectName: string;
         mainDocument: string;
         venue: TargetVenue;
+        publicationTarget?: PublicationTarget;
         sourceName: string;
         entries: UploadManifestEntry[];
       }>(request);

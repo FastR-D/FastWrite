@@ -53,7 +53,7 @@ export class CompletionService {
     if (request.cursor > opened.content.length) throw new ApiError(400, "completion_cursor_invalid", "Completion cursor is outside the file");
 
     const [skill, outline, paths] = await Promise.all([
-      this.skills.load(project.skill),
+      this.skills.load(project.skill, project.publicationTarget),
       this.workspaces.outline(projectId),
       this.workspaces.tree(projectId).then(textPaths)
     ]);

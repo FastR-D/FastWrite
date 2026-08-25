@@ -25,13 +25,13 @@ export function UiGalleryPage() {
     </GallerySection>
 
     <GallerySection title="Inputs and validation" description="Inputs use the same focus ring, density and error language across import and Agent flows.">
-      <div className="gallery-form"><label className="field"><span>Project name</span><input defaultValue="A secure systems paper" /></label><label className="field"><span>Writing profile</span><select defaultValue="security-top4"><option value="security-top4">Security Top-4</option><option value="ai-top-tier">AI Top-Tier</option></select></label><label className="field field--error"><span>Workspace path</span><input defaultValue="../escape.tex" aria-invalid="true" /><small>Use a path inside the managed Workspace.</small></label><label className="field"><span>Disabled</span><input disabled defaultValue="main.tex" /></label></div>
+      <div className="gallery-form"><label className="field"><span>Project name</span><input defaultValue="A secure systems paper" /></label><label className="field"><span>Research domain</span><select defaultValue="network-information-security"><option value="network-information-security">网络与信息安全</option><option value="artificial-intelligence">人工智能</option></select></label><label className="field field--error"><span>Workspace path</span><input defaultValue="../escape.tex" aria-invalid="true" /><small>Use a path inside the managed Workspace.</small></label><label className="field"><span>Disabled</span><input disabled defaultValue="main.tex" /></label></div>
     </GallerySection>
 
     <GallerySection title="Tabs, progress and feedback" description="Status is always expressed with text or an icon, never color alone.">
       <div className="gallery-tabs" role="tablist" aria-label="Gallery tabs">{["Files", "Outline", "Issues"].map((item) => <button role="tab" aria-selected={tab === item} className={tab === item ? "is-active" : ""} key={item} onClick={() => setTab(item)}>{item}</button>)}</div>
       <div className="gallery-progress"><div><strong>Loading TeX bundles</strong><span>68% · 34.4 MB / 50.6 MB · core.data.gz</span></div><div className="progress-track"><span style={{ width: "68%" }} /></div></div>
-      <div className="gallery-feedback"><span className="gallery-toast gallery-toast--success"><Check /> Compiled successfully</span><span className="gallery-toast gallery-toast--error"><AlertTriangle /> File version changed</span><span className="gallery-toast"><LoaderCircle className="spin" /> Applying Security Top-4 Skill</span></div>
+      <div className="gallery-feedback"><span className="gallery-toast gallery-toast--success"><Check /> Compiled successfully</span><span className="gallery-toast gallery-toast--error"><AlertTriangle /> File version changed</span><span className="gallery-toast"><LoaderCircle className="spin" /> Applying venue rules</span></div>
     </GallerySection>
 
     <GallerySection title="Tree, empty state and split handle" description="Navigation remains readable at the workspace's dense operating size.">

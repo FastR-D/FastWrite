@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { ChangeSet, ChangeSetConflictDetails, CompletionResponse, FileContentResponse, PaperMemory, PaperProject, ReviseResponse, SaveFileResponse, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, CompletionResponse, ComplianceReport, FileContentResponse, PaperMemory, PaperProject, ReviseResponse, SaveFileResponse, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
 import type { AgentProvider, AgentTaskPlanOutput, CompletionAgentInput, DraftGeneratedFile, ReviseAgentInput } from "./agent/provider";
 import { createApplication, mimeType } from "./app";
 
@@ -30,12 +30,13 @@ describe("workspace API", () => {
     const createdResponse = await request("/api/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      // Legacy conference values are intentionally normalized to the shared Security Top-4 profile.
-      body: JSON.stringify({ name: "Test Paper", mainDocument: "main.tex", venue: "sp" })
+      // Legacy conference values are intentionally normalized to the matching research domain.
+      body: JSON.stringify({ name: "Test Paper", mainDocument: "main.tex", venue: "sp", publicationTarget: { venueId: "sp", stage: "submission" } })
     });
     expect(createdResponse.status).toBe(201);
     const project = (await createdResponse.json()) as PaperProject;
-    expect(project.skill).toMatchObject({ id: "security-top4", name: "Security Top-4", venue: "security-top4" });
+    expect(project.skill).toMatchObject({ id: "network-information-security", venue: "network-information-security" });
+    expect(project.publicationTarget).toEqual({ domain: "network-information-security", venueId: "sp", stage: "submission" });
 
     const tree = (await (await request(`/api/projects/${project.id}/files`)).json()) as WorkspaceTreeNode[];
     expect(tree[0]?.path).toBe("main.tex");
@@ -68,7 +69,7 @@ describe("workspace API", () => {
       body: JSON.stringify({
         projectName: "Uploaded Paper",
         mainDocument: "main.tex",
-        venue: "security-top4",
+        venue: "network-information-security",
         sourceName: "paper-folder",
         entries: [
           { path: "main.tex", kind: "file", size: main.byteLength },
@@ -102,7 +103,7 @@ describe("workspace API", () => {
     const created = await request("/api/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "Lifecycle Paper", mainDocument: "main.tex", venue: "security-top4" })
+      body: JSON.stringify({ name: "Lifecycle Paper", mainDocument: "main.tex", venue: "network-information-security" })
     });
     const project = (await created.json()) as PaperProject;
 
@@ -135,11 +136,11 @@ describe("workspace API", () => {
     const updatedResponse = await request(`/api/projects/${project.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "Updated Paper", mainDocument: "sections/results.tex", venue: "ai-top-tier" })
+      body: JSON.stringify({ name: "Updated Paper", mainDocument: "sections/results.tex", venue: "artificial-intelligence" })
     });
     const updated = (await updatedResponse.json()) as PaperProject;
     expect(updated).toMatchObject({ name: "Updated Paper", mainDocument: "sections/results.tex" });
-    expect(updated.skill).toMatchObject({ id: "ai-top-tier", name: "AI Top-Tier", venue: "ai-top-tier" });
+    expect(updated.skill).toMatchObject({ id: "artificial-intelligence", venue: "artificial-intelligence" });
 
     const protectedDelete = await request(`/api/projects/${project.id}/files?path=${encodeURIComponent("sections/results.tex")}`, { method: "DELETE" });
     expect(protectedDelete.status).toBe(409);
@@ -200,7 +201,7 @@ describe("workspace API", () => {
     const project = (await (await request("/api/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "Revision Paper", venue: "security-top4" })
+      body: JSON.stringify({ name: "Revision Paper", venue: "network-information-security" })
     })).json()) as PaperProject;
     const initial = (await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json()) as FileContentResponse;
     const selectedText = "We build a system that improve security.";
@@ -221,11 +222,11 @@ describe("workspace API", () => {
     });
     expect(proposedResponse.status).toBe(201);
     const proposed = (await proposedResponse.json()) as ReviseResponse;
-    expect(proposed.run).toMatchObject({ status: "waiting-approval", skill: { id: "security-top4", venue: "security-top4" } });
+    expect(proposed.run).toMatchObject({ status: "waiting-approval", skill: { id: "network-information-security", venue: "network-information-security" } });
     expect(proposed.changeSet).toMatchObject({ status: "proposed", summary: "Grammar" });
     expect(received?.sectionTitle).toBe("Introduction");
-    expect(received?.skillInstructions).toContain("# Security Top-4");
-    expect(received?.venueInstructions).toContain("# Security Top-4");
+    expect(received?.skillInstructions).toContain("# Network and information security");
+    expect(received?.venueInstructions).toContain("# Network and information security");
     expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toContain(selectedText);
 
     const accepted = (await (await request(`/api/projects/${project.id}/change-sets/${proposed.changeSet.id}/accept`, { method: "POST" })).json()) as ChangeSet;
@@ -255,7 +256,7 @@ describe("workspace API", () => {
     const request = await testApplication({
       async revise() { return { replacement: "The generated revision.", rationale: "Generated wording." }; }
     });
-    const project = (await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Editable Proposal", venue: "security-top4" }) })).json()) as PaperProject;
+    const project = (await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Editable Proposal", venue: "network-information-security" }) })).json()) as PaperProject;
     const initial = (await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json()) as FileContentResponse;
     const selectedText = "Original sentence.";
     const content = `${initial.content}\n${selectedText}`;
@@ -320,8 +321,8 @@ describe("workspace API", () => {
     const provider: AgentProvider = {
       async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
       async planDraft(input) {
-        expect(input.skill.venue).toBe("security-top4");
-        expect(input.skillInstructions).toContain("## Plan and draft");
+        expect(input.skill.venue).toBe("network-information-security");
+        expect(input.skillInstructions).toContain("## Workflow");
         return { outline };
       },
       async generateDraft(input) {
@@ -339,7 +340,7 @@ describe("workspace API", () => {
     const project = (await (await request("/api/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "Draft Paper", venue: "security-top4" })
+      body: JSON.stringify({ name: "Draft Paper", venue: "network-information-security" })
     })).json()) as PaperProject;
     const original = (await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json()) as FileContentResponse;
     const plannedResponse = await request(`/api/projects/${project.id}/drafts`, {
@@ -378,8 +379,8 @@ describe("workspace API", () => {
     const provider: AgentProvider = {
       async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
       async review(input) {
-        expect(input.skill.venue).toBe("security-top4");
-        expect(input.venueInstructions).toContain("# Security Top-4");
+        expect(input.skill.venue).toBe("network-information-security");
+        expect(input.venueInstructions).toContain("# Network and information security");
         expect(input.documents[0]?.content).toContain("honest endpoints");
         return {
           overallAssessment: "The mechanism is promising, but its attacker model is incomplete.",
@@ -403,7 +404,7 @@ describe("workspace API", () => {
       }
     };
     const request = await testApplication(provider);
-    const project = (await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Review Paper", venue: "security-top4" }) })).json()) as PaperProject;
+    const project = (await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Review Paper", venue: "network-information-security" }) })).json()) as PaperProject;
     const opened = (await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json()) as FileContentResponse;
     const content = "\\section{Threat Model}\nWe assume honest endpoints.\n";
     await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, baseVersion: opened.file.version }) });
@@ -412,7 +413,7 @@ describe("workspace API", () => {
     const response = await request(`/api/projects/${project.id}/reviews`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourceOnly: true }) });
     expect(response.status).toBe(201);
     const reviewed = await response.json() as { snapshot: { projectVersion: number; files: unknown[] }; report: { issues: Array<{ id: string; status: string; evidence: Array<{ path: string; line?: number; inferred: boolean }> }> }; run: { status: string; skill: { venue: string } } };
-    expect(reviewed.run).toMatchObject({ status: "completed", skill: { venue: "security-top4" } });
+    expect(reviewed.run).toMatchObject({ status: "completed", skill: { venue: "network-information-security" } });
     expect(reviewed.snapshot.files).toHaveLength(1);
     expect(reviewed.report.issues[0]?.evidence[0]).toMatchObject({ path: "main.tex", line: 2, inferred: false });
     expect(reviewed.report.issues[0]?.evidence[1]).toMatchObject({ path: "main.tex", inferred: true });
@@ -471,6 +472,71 @@ describe("workspace API", () => {
     expect(reviewedPaths).toContain("appendix/a.tex");
     expect(reviewedPaths).not.toContain("appendix/b.tex");
     expect(reviewedBytes).toBeLessThanOrEqual(500_000);
+  });
+
+  test("plans against a selected venue and returns its page budget and compliance checks", async () => {
+    let venueGuidance = "";
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async planAgentTask(input) {
+        venueGuidance = input.venueInstructions;
+        return {
+          steps: ["Fit the argument to the main-track budget"], affectedFiles: ["main.tex"], risks: ["Rendered page count is not yet verified"], validation: ["Compile and count content pages"],
+          sectionBudget: [{ section: "Introduction", targetPages: 1, purpose: "Motivate the contribution" }],
+          venueChecks: [{ requirement: "Use the NeurIPS 2026 template", status: "uncertain", evidencePaths: ["main.tex"], action: "Verify the rendered PDF" }]
+        };
+      }
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Venue Plan", venue: "artificial-intelligence", publicationTarget: { domain: "artificial-intelligence", venueId: "neurips", stage: "submission" } }) })).json() as PaperProject;
+    const response = await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "Prepare this manuscript for submission", scope: { type: "project" } }) });
+    expect(response.status).toBe(201);
+    const result = await response.json() as { run: AgentRun; plan: AgentTaskPlan };
+    expect(result.run.publicationTarget).toEqual({ domain: "artificial-intelligence", venueId: "neurips", stage: "submission" });
+    expect(result.plan.sectionBudget?.[0]?.targetPages).toBe(1);
+    expect(result.plan.venueChecks?.[0]?.status).toBe("uncertain");
+    expect(venueGuidance).toContain("# NeurIPS 2026 Main Track");
+  });
+
+  test("enforces page, template, anonymity, comment, reference, and citation-authenticity checks", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Compliance Paper", venue: "network-information-security", publicationTarget: { domain: "network-information-security", venueId: "sp", stage: "submission" } })
+    })).json() as PaperProject;
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const content = String.raw`\documentclass{article}
+\author{Alice Example}
+\begin{document}
+% TODO verify the reviewer-facing claim
+\section{Introduction}\cite{real,fake,missing}
+\section{Ethics considerations}
+\bibliography{references}
+\end{document}`;
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, baseVersion: opened.file.version }) });
+    await request(`/api/projects/${project.id}/files`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "references.bib", content: "@article{real,\n author={A},\n title={Verified Work},\n year={2024},\n doi={10.1000/real}\n}\n@article{fake,\n author={B},\n title={Invented Work},\n year={2025},\n doi={10.1000/fake}\n}" }) });
+
+    const nativeFetch = globalThis.fetch;
+    globalThis.fetch = Object.assign(async (input: string | URL | Request) => String(input).includes("10.1000%2Freal")
+      ? new Response(JSON.stringify({ message: { title: ["Verified Work"] } }), { status: 200, headers: { "content-type": "application/json" } })
+      : new Response("not found", { status: 404 }), { preconnect: nativeFetch.preconnect });
+    try {
+      const response = await request(`/api/projects/${project.id}/compliance-checks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ renderedPages: 19, verifyCitationsOnline: true }) });
+      expect(response.status).toBe(201);
+      const report = await response.json() as ComplianceReport;
+      expect(report.submissionBlocked).toBe(true);
+      expect(report.findings.some((finding) => finding.category === "pages" && finding.status === "error")).toBe(true);
+      expect(report.findings.some((finding) => finding.category === "template" && finding.status === "error")).toBe(true);
+      expect(report.findings.some((finding) => finding.category === "anonymity" && finding.status === "error")).toBe(true);
+      expect(report.findings.some((finding) => finding.category === "comments" && finding.status === "error")).toBe(true);
+      expect(report.findings.some((finding) => finding.id === "reference:missing:missing")).toBe(true);
+      expect(report.citations.find((citation) => citation.key === "real")?.status).toBe("verified");
+      expect(report.citations.find((citation) => citation.key === "fake")?.status).toBe("mismatch");
+      expect(report.citations.find((citation) => citation.key === "missing")?.status).toBe("missing");
+    } finally {
+      globalThis.fetch = nativeFetch;
+    }
   });
 
   test("cancels and safely retries Agent planning without duplicate plans or changes", async () => {
@@ -926,7 +992,7 @@ describe("workspace API", () => {
       async rereviewIssues(input) { expect(input.documents.find((document) => document.path === "main.tex")?.content).toContain("outside the trust boundary"); return { assessments: input.issues.map((issue) => ({ issueId: issue.id, resolved: true, assessment: "The trust boundary is now explicit." })), regressions: [] }; }
     };
     const request = await testApplication(provider);
-    const project = (await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Resolution Paper", venue: "security-top4" }) })).json()) as PaperProject;
+    const project = (await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Resolution Paper", venue: "network-information-security" }) })).json()) as PaperProject;
     const opened = (await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json()) as FileContentResponse;
     const content = "\\section{Threat Model}\nThreat model placeholder.\n";
     await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, baseVersion: opened.file.version }) });
@@ -934,7 +1000,7 @@ describe("workspace API", () => {
     const issueId = review.report.issues[0]!.id;
     const planned = await (await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "Resolve the endpoint-compromise review issue", scope: { type: "project" }, issueIds: [issueId] }) })).json() as { plan: { id: string }; resolution: { id: string; status: string; reviewSnapshotIds: string[]; baseProjectVersion: number; skill: { venue: string } } };
     expect(planned.resolution.status).toBe("planned");
-    expect(planned.resolution).toMatchObject({ reviewSnapshotIds: [expect.stringContaining("snapshot_")], skill: { venue: "security-top4" } });
+    expect(planned.resolution).toMatchObject({ reviewSnapshotIds: [expect.stringContaining("snapshot_")], skill: { venue: "network-information-security" } });
     const reportsAfterPlan = await (await request(`/api/projects/${project.id}/reviews`)).json() as Array<{ issues: Array<{ id: string; status: string }> }>;
     expect(reportsAfterPlan[0]!.issues.find((issue) => issue.id === issueId)?.status).toBe("planned");
 
@@ -985,7 +1051,7 @@ describe("workspace API", () => {
       }
     };
     const request = await testApplication(provider);
-    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Completion Paper", venue: "ai-top-tier" }) })).json() as PaperProject;
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Completion Paper", venue: "artificial-intelligence" }) })).json() as PaperProject;
     const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
     const sentence = "The design protects aggregate telemetry.";
     const content = `\\section{Introduction}\n${"context ".repeat(500)}${sentence}`;
@@ -1008,8 +1074,8 @@ describe("workspace API", () => {
     expect(received?.skillInstructions).toContain("[paper-overview] Telemetry: The design protects aggregate telemetry.");
     expect(received?.skillInstructions).not.toContain("[contribution] Telemetry: The design protects aggregate telemetry.");
     expect(received?.paperContext).toContain("[paper-overview] Telemetry: The design protects aggregate telemetry.");
-    expect(received?.skill.id).toBe("ai-top-tier");
-    expect(received?.venueInstructions).toContain("# AI Top-Tier");
+    expect(received?.skill.id).toBe("artificial-intelligence");
+    expect(received?.venueInstructions).toContain("# Artificial intelligence");
     expect(received?.bibliography).toContain("Private Telemetry");
     expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toBe(content);
 

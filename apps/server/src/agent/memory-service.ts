@@ -64,7 +64,7 @@ export class MemoryService {
     if (!this.provider?.extractMemory) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to generate Paper Memory");
     const project = this.workspaces.getProject(projectId);
     const [documents, outline] = await Promise.all([this.documents(projectId), this.workspaces.outline(projectId)]);
-    const skill = await this.skills.load(project.skill);
+    const skill = await this.skills.load(project.skill, project.publicationTarget);
     const documentMap = new Map(documents.map((document) => [document.path, document]));
     const outputs: MemoryAgentOutput[] = [];
     for (const chunk of documentChunks(documents)) {
@@ -333,7 +333,7 @@ export class MemoryService {
   private async polishContent(projectId: string, kind: "overview" | "section" | "fact", title: string, content: string, limit: number, signal?: AbortSignal): Promise<string> {
     if (!this.provider?.polishMemory) throw new ApiError(503, "memory_polish_not_configured", "Configure FASTWRITE_MEMORY_* in .env to polish edited Paper Memory");
     const project = this.workspaces.getProject(projectId);
-    const skill = await this.skills.load(project.skill);
+    const skill = await this.skills.load(project.skill, project.publicationTarget);
     const polished = await this.provider.polishMemory({ kind, title, content: cleanContent(content, limit), skill: project.skill, skillInstructions: skill.instructions, venueInstructions: skill.venueInstructions }, signal);
     const result = cleanContent(polished.content, limit);
     if (!result) throw new ApiError(502, "memory_polish_empty", "The configured Memory model returned empty content");

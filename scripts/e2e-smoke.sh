@@ -322,7 +322,7 @@ async (page) => {
       agentRunId: "run-draft-e2e",
       status: "proposed",
       summary: "Generate a minimal security paper draft",
-      rationale: "Apply the Security Top-4 section contract.",
+      rationale: "Apply the selected research-domain and venue contract.",
       changes,
       createdAt: timestamp,
       updatedAt: timestamp
@@ -359,7 +359,7 @@ async (page) => {
     type: "agent",
     status: "waiting-approval",
     objective: "Refine the paper one file at a time",
-    skill: { id: "security-top4", name: "Security Top-4", version: "1.0.0", venue: "security-top4" },
+    skill: { id: "network-information-security", name: "网络与信息安全", version: "2.0.0", venue: "network-information-security" },
     steps: [],
     auditTrail: [],
     createdAt: agentTimestamp,
@@ -762,7 +762,7 @@ async (page) => {
     const after = before.replace("\\end{document}", "We exclude compromised endpoints from the trusted computing base and evaluate guarantees only within this boundary.\n\\end{document}");
     revisionChangeSet = {
       id: "revision-change-e2e", projectId, agentRunId: taskRun.id, status: "proposed", approvalMode: "explicit-finish",
-      summary: "Clarify the threat-model boundary", rationale: "Resolve the selected Security Top-4 Review Issue.",
+      summary: "Clarify the threat-model boundary", rationale: "Resolve the selected venue Review Issue.",
       changes: [{ path: "main.tex", from: 0, to: before.length, before, after, baseVersion: (await (await page.request.get(apiRoot + "/file?path=main.tex")).json()).file.version,
         hunks: [{ id: "revision-hunk-e2e", from: 0, to: before.length, before, after, status: "pending", rationale: "Make the claim match the explicit attacker model.", evidence: [{ issueId: "issue-e2e", issueTitle: "Threat-model boundary needs explicit evidence", path: "main.tex", line: 4, excerpt: "We define the trust boundary.", inferred: false }] }]
       }], createdAt: timestamp, updatedAt: timestamp
@@ -1056,7 +1056,7 @@ async (page) => {
   await dialog.getByLabel(/Branch, tag or commit/).fill("camera-ready");
   await dialog.getByLabel(/Project name/).fill("Imported Security Paper");
   await dialog.getByLabel(/Main document/).fill("paper.tex");
-  await dialog.getByLabel("Writing profile").selectOption("security-top4");
+  await dialog.getByLabel("Research domain").selectOption("network-information-security");
   await page.waitForTimeout(350);
   await page.addScriptTag({ path: "node_modules/axe-core/axe.min.js" });
   const accessibility = await page.evaluate(async () => await window.axe.run(document, {
@@ -1074,7 +1074,7 @@ async (page) => {
     ref: "camera-ready",
     name: "Imported Security Paper",
     mainDocument: "paper.tex",
-    venue: "security-top4"
+    venue: "network-information-security"
   };
   if (JSON.stringify(requestBody) !== JSON.stringify(expected)) {
     throw new Error("Unexpected GitHub import payload: " + JSON.stringify(requestBody));
