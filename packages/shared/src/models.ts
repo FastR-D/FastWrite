@@ -19,6 +19,7 @@ export type ManuscriptStage = "draft" | "submission" | "camera-ready";
 export interface PublicationTarget {
   domain: ResearchDomainId;
   venueId: PublicationVenueId;
+  year?: number;
   track?: string;
   stage: ManuscriptStage;
 }
@@ -51,12 +52,13 @@ export interface LatexTemplateOption {
   sourceUrl: string;
   verifiedAt: string;
   venueSpecific: boolean;
+  years?: ReadonlyArray<number>;
 }
 
 export type ComplianceFindingStatus = "pass" | "error" | "warning" | "unresolved";
 export interface ComplianceFinding {
   id: string;
-  category: "pages" | "template" | "anonymity" | "comments" | "citations" | "references" | "required-section";
+  category: "pages" | "template" | "anonymity" | "comments" | "citations" | "references" | "required-section" | (string & {});
   status: ComplianceFindingStatus;
   message: string;
   path?: string;
@@ -288,6 +290,7 @@ export interface ReviseRequest {
   workingText?: string;
   /** Conversation context for the selected span. The server caps this before sending it to the provider. */
   history?: ReviseTurn[];
+  issueIds?: string[];
 }
 
 export interface ReviseTurn {
@@ -340,6 +343,15 @@ export interface TextHunk {
   status: TextHunkStatus;
   rationale?: string;
   evidence?: TextHunkEvidence[];
+  findings?: HunkFinding[];
+}
+
+export interface HunkFinding {
+  id: string;
+  source: "claim" | "citation" | "review" | "compliance";
+  referenceId: string;
+  status: "pass" | "warning" | "blocking";
+  message: string;
 }
 
 export interface TextHunkEvidence {
@@ -443,7 +455,7 @@ export interface DraftPlanResponse {
 }
 
 export type ReviewSeverity = "blocking" | "major" | "minor" | "suggestion";
-export type ReviewIssueStatus = "open" | "planned" | "in_revision" | "resolved" | "dismissed";
+export type ReviewIssueStatus = "open" | "planned" | "in_revision" | "needs_review" | "resolved" | "dismissed";
 
 export interface ReviewSnapshotFile {
   path: string;
@@ -466,10 +478,12 @@ export interface ReviewSnapshot {
 }
 
 export interface ReviewEvidence {
-  path: string;
+  path?: string;
   section?: string;
   line?: number;
   excerpt: string;
+  page?: number;
+  source?: "latex" | "pdf-preview" | "citation" | "compliance";
   inferred: boolean;
 }
 
@@ -511,6 +525,11 @@ export interface ReviewReport {
   weaknesses: string[];
   nextSteps: string[];
   issues: ReviewIssue[];
+  /** Input used for this report; PDF text is request-scoped and never persisted. */
+  inputType?: "source" | "pdf-preview";
+  createdFromProjectVersion?: number;
+  stale?: boolean;
+  passes?: Array<{ id: "mechanical" | "evidence" | "domain" | "venue" | "synthesis"; status: "completed" | "failed" | "skipped"; issues: string[]; error?: string }>;
   createdAt: string;
 }
 
@@ -625,11 +644,123 @@ export interface AgentTaskPlan {
     evidencePaths: string[];
     action: string;
   }>;
+  evidenceDependencies?: EvidenceDependency[];
+  missingEvidence?: string[];
   changeSetId?: string;
   acceptedProjectVersion?: number;
   compileRecordId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface EvidenceDependency {
+  step: string;
+  requiredClaimIds: string[];
+  missingEvidence: string[];
+}
+
+export interface ResearchWork {
+  id: string;
+  title: string;
+  authors: string[];
+  year?: number;
+  venue?: string;
+  metadataStatus: "candidate" | "verified" | "conflicting" | "unresolved";
+  publicationStatus: "normal" | "corrected" | "retracted" | "unknown";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectResearchWork {
+  projectId: string;
+  workId: string;
+  status: "candidate" | "saved" | "rejected";
+  citationKey?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ResearchRunStatus = "planned" | "running" | "completed" | "cancelled" | "failed";
+export interface ResearchRun {
+  id: string;
+  projectId: string;
+  query: string;
+  status: ResearchRunStatus;
+  provider?: string;
+  queryPlan?: { steps: string[]; rationale?: string };
+  workIds: string[];
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ResearchIdentifier {
+  workId: string;
+  scheme: "doi" | "arxiv" | "openalex" | "semantic-scholar" | "url";
+  value: string;
+}
+
+export interface MetadataObservation {
+  id: string;
+  workId: string;
+  provider: "crossref" | "openalex" | "semantic-scholar" | "arxiv" | "publisher" | "user";
+  fields: Record<string, string | number | string[]>;
+  fetchedAt: string;
+}
+
+export type ResearchEvidenceKind = "background" | "claim" | "method" | "result" | "limitation" | "quote";
+export interface SourceEvidence {
+  id: string;
+  projectId: string;
+  workId: string;
+  kind: ResearchEvidenceKind;
+  origin: "source-text" | "registry-abstract" | "model-extraction" | "user";
+  representation: "verbatim" | "paraphrase";
+  status: "candidate" | "approved" | "rejected" | "stale";
+  content: string;
+  locatorType: "page" | "section" | "paragraph" | "abstract";
+  locator: string;
+  createdByRunId?: string;
+  approvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClaimAnchor {
+  path: string;
+  fileVersion: number;
+  startOffset: number;
+  endOffset: number;
+  exactText: string;
+  prefix: string;
+  suffix: string;
+}
+
+export interface PaperClaim {
+  id: string;
+  projectId: string;
+  anchor: ClaimAnchor;
+  type: "background" | "contribution" | "method" | "result" | "comparison" | "limitation";
+  reviewStatus: "detected" | "needs-review" | "supported" | "partial" | "unsupported";
+  anchorStatus: "current" | "stale" | "reanchored" | "orphaned";
+  createdBy: "user" | "agent" | "scanner";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ClaimEvidenceLink =
+  | { id: string; claimId: string; kind: "literature"; evidenceId: string; citationKey?: string }
+  | { id: string; claimId: string; kind: "workspace"; path: string; anchor: ClaimAnchor }
+  | { id: string; claimId: string; kind: "review-waiver"; reason: string; approvedByUser: true };
+
+export interface AlignmentFinding {
+  id: string;
+  kind: "number" | "file" | "citation";
+  status: "pass" | "warning" | "unresolved";
+  message: string;
+  path?: string;
+  line?: number;
+  evidence?: string;
 }
 
 export interface AgentTaskPlanResponse {
@@ -694,8 +825,9 @@ export function normalizePublicationTarget(value: unknown, profile: WritingProfi
   const domain = normalizeWritingProfile(raw.domain ?? legacyDomain ?? profile);
   if (domain !== profile) return undefined;
   const stage: ManuscriptStage = raw.stage === "draft" || raw.stage === "camera-ready" ? raw.stage : "submission";
+  const year = typeof raw.year === "number" && Number.isInteger(raw.year) && raw.year >= 2000 && raw.year <= 2100 ? raw.year : undefined;
   const track = typeof raw.track === "string" && /^[a-z0-9][a-z0-9-]{0,79}$/i.test(raw.track) ? raw.track : undefined;
-  return { domain, venueId: raw.venueId, stage, ...(track ? { track } : {}) };
+  return { domain, venueId: raw.venueId, stage, ...(year ? { year } : {}), ...(track ? { track } : {}) };
 }
 
 /** @deprecated Prefer WRITING_PROFILES. */

@@ -40,6 +40,9 @@ import { ApiError, errorResponse, json, readJson, withRuntimeHeaders } from "./h
 import { JsonDatabase } from "./storage/database";
 import { WorkspaceService } from "./workspace/workspace-service";
 import { LatexTemplateService } from "./templates/latex-template-service";
+import { ResearchService } from "./research/research-service";
+import { ClaimService } from "./claims/claim-service";
+import { AlignmentService } from "./alignment/alignment-service";
 
 interface Services {
   database: JsonDatabase;
@@ -58,6 +61,9 @@ interface Services {
   skillRegistry: SkillRegistry;
   compliance: ComplianceService;
   latexTemplates: LatexTemplateService;
+  research: ResearchService;
+  claims: ClaimService;
+  alignment: AlignmentService;
 }
 
 type Handler = (request: Request, params: Record<string, string>, url: URL) => Promise<Response> | Response;
@@ -78,6 +84,32 @@ function providerFor(configuration: AgentProviderConfiguration): AgentProvider |
   return configuration.apiKey ? new OpenAIAgentProvider(configuration.apiKey, configuration.model, configuration.baseURL) : undefined;
 }
 
+interface AgentSettingsInput {
+  apiKey?: string;
+  baseURL?: string;
+  model?: string;
+}
+
+function boundedSetting(value: unknown, maximum: number): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, maximum) : undefined;
+}
+
+function runtimeAgentProvider(getProvider: () => AgentProvider | undefined): AgentProvider {
+  return new Proxy({}, {
+    get(_target, property) {
+      if (property === "then") return undefined;
+      const current = getProvider();
+      const method = current?.[property as keyof AgentProvider];
+      return typeof method === "function" ? (...args: unknown[]) => {
+        const provider = getProvider();
+        const activeMethod = provider?.[property as keyof AgentProvider];
+        if (typeof activeMethod !== "function") throw new ApiError(503, "agent_not_configured", "Add an API key in Project settings to enable Agent tasks");
+        return (activeMethod as (...parameters: unknown[]) => unknown).apply(provider, args);
+      } : undefined;
+    }
+  }) as AgentProvider;
+}
+
 export async function createApplication(dataDirectory = config.dataDirectory, options: ApplicationOptions = {}) {
   const database = new JsonDatabase(dataDirectory);
   await database.initialize();
@@ -88,24 +120,43 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const texPackages = options.texPackages ?? new TexPackageService(dataDirectory);
   await texPackages.initialize();
   const defaultProvider = options.agentProvider;
-  const providers = {
+  const configuredProviders = {
     completion: defaultProvider ?? providerFor(config.agentProviders.completion),
     agent: defaultProvider ?? providerFor(config.agentProviders.agent),
     revise: defaultProvider ?? providerFor(config.agentProviders.revise),
     review: defaultProvider ?? providerFor(config.agentProviders.review),
     memory: defaultProvider ?? providerFor(config.agentProviders.memory)
   };
+  let runtimeConfiguration: AgentProviderConfiguration | undefined;
+  let runtimeProvider: AgentProvider | undefined;
+  const providers = Object.fromEntries(Object.entries(configuredProviders).map(([workflow, provider]) => [workflow, runtimeAgentProvider(() => runtimeProvider ?? provider)])) as typeof configuredProviders;
+  const configureAgent = (input: AgentSettingsInput) => {
+    const apiKey = boundedSetting(input.apiKey, 1_024);
+    if (!apiKey) throw new ApiError(400, "agent_api_key_required", "Enter an API key to enable Agent tasks");
+    const baseURL = boundedSetting(input.baseURL, 2_048);
+    if (baseURL) {
+      try { new URL(baseURL); } catch { throw new ApiError(400, "agent_base_url_invalid", "Base URL must be a valid absolute URL"); }
+    }
+    runtimeConfiguration = { apiKey, ...(baseURL ? { baseURL } : {}), ...(boundedSetting(input.model, 256) ? { model: boundedSetting(input.model, 256) } : {}) };
+    runtimeProvider = providerFor(runtimeConfiguration);
+  };
   const skillRegistry = new SkillRegistry(config.skillsDirectory);
-  const latexTemplates = new LatexTemplateService(dataDirectory);
+  const latexTemplates = new LatexTemplateService(dataDirectory, fetch, config.templateDirectory);
   const memories = new MemoryService(database, workspaces, skillRegistry, providers.memory);
   const revisions = new ReviseService(database, workspaces, skillRegistry, providers.revise, memories);
   const drafts = new DraftService(database, workspaces, skillRegistry, providers.agent);
   const reviews = new ReviewService(database, workspaces, skillRegistry, providers.review);
   const compliance = new ComplianceService(workspaces, skillRegistry);
+  const research = new ResearchService(database, workspaces);
+  const claims = new ClaimService(database, workspaces);
+  const alignment = new AlignmentService(workspaces);
   const agentTasks = new AgentTaskService(database, workspaces, skillRegistry, providers.agent, memories, providers.review, compliance);
   const completions = new CompletionService(workspaces, skillRegistry, providers.completion, memories);
-  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler: new LatexCompileService(dataDirectory, workspaces), skillRegistry, compliance, latexTemplates };
-  const routes = buildRoutes(services);
+  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler: new LatexCompileService(dataDirectory, workspaces), skillRegistry, compliance, latexTemplates, research, claims, alignment };
+  const routes = buildRoutes(services, {
+    status: () => ({ configured: Boolean(runtimeProvider ?? configuredProviders.agent), source: runtimeProvider ? "runtime" : configuredProviders.agent ? "environment" : "none", ...(runtimeConfiguration?.baseURL ? { baseURL: runtimeConfiguration.baseURL } : {}), ...(runtimeConfiguration?.model ? { model: runtimeConfiguration.model } : {}) }),
+    configure: configureAgent
+  });
 
   return async function fetch(request: Request): Promise<Response> {
     try {
@@ -124,14 +175,41 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
 }
 
-function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates }: Services): Route[] {
+function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string }; configure: (input: AgentSettingsInput) => void }): Route[] {
   return [
     route("GET", "/api/health", async () => json({ status: "ok" })),
+    route("GET", "/api/agent-settings", async () => json(agentSettings.status())),
+    route("PUT", "/api/agent-settings", async (request) => { agentSettings.configure(await readJson<AgentSettingsInput>(request)); return json(agentSettings.status()); }),
     route("GET", "/api/venues", async () => json(await skillRegistry.catalog())),
     route("POST", "/api/projects/:projectId/compliance-checks", async (request, params) => {
       const body = await readJson<{ pdfBase64?: string; renderedPages?: number; mainBodyPages?: number; verifyCitationsOnline?: boolean }>(request);
       return json(await compliance.check(required(params, "projectId"), body), 201);
     }),
+    route("POST", "/api/projects/:projectId/research-runs", async (request, params) => {
+      const body = await readJson<{ query?: string }>(request);
+      if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiError(400, "invalid_research_request", "Research request must be an object");
+      return json(await research.search(required(params, "projectId"), typeof body.query === "string" ? body.query : "", request.signal), 201);
+    }),
+    route("POST", "/api/projects/:projectId/research-runs/:runId/confirm", async (_request, params) => json(await research.confirm(required(params, "projectId"), required(params, "runId")))),
+    route("PATCH", "/api/projects/:projectId/research-runs/:runId", async (request, params) => json(await research.updatePlan(required(params, "projectId"), required(params, "runId"), await readJson<{ steps: string[]; rationale?: string }>(request)))),
+    route("POST", "/api/projects/:projectId/research-runs/:runId/cancel", async (_request, params) => json(await research.cancel(required(params, "projectId"), required(params, "runId")))),
+    route("GET", "/api/projects/:projectId/research-runs", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().researchRuns.filter((item) => item.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }),
+    route("GET", "/api/projects/:projectId/research-works", async (_request, params) => json(research.listWorks(required(params, "projectId")))),
+    route("POST", "/api/projects/:projectId/research-works/import", async (request, params) => { const body = await readJson<Parameters<ResearchService["importWork"]>[1]>(request); if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiError(400, "invalid_research_request", "Research import must be an object"); return json(await research.importWork(required(params, "projectId"), body), 201); }),
+    route("PATCH", "/api/projects/:projectId/research-works/:workId", async (request, params) => json(await research.saveWork(required(params, "projectId"), required(params, "workId"), await readJson<{ status?: "candidate" | "saved" | "rejected"; citationKey?: string }>(request)))),
+    route("GET", "/api/projects/:projectId/research-citations/:citationKey", async (_request, params) => json(await research.citationContext(required(params, "projectId"), required(params, "citationKey")))),
+    route("POST", "/api/projects/:projectId/research-works/:workId/bibtex-changes", async (request, params) => { const body = await readJson<{ targetBibPath?: string }>(request); if (!body.targetBibPath) throw new ApiError(400, "target_bib_required", "targetBibPath is required"); const changeSet = await research.proposeBibtexChange(required(params, "projectId"), required(params, "workId"), body.targetBibPath); return json(await database.mutate((state) => { state.changeSets.push(changeSet); return changeSet; }), 201); }),
+    route("POST", "/api/projects/:projectId/research-works/:workId/pdf-evidence", async (request, params) => { const body = await readJson<{ pdfBase64?: string; authorized?: boolean }>(request); if (!body.pdfBase64 || body.authorized !== true) throw new ApiError(403, "pdf_authorization_required", "Provide bounded PDF data with explicit authorization"); return json(await research.extractPdfEvidence(required(params, "projectId"), required(params, "workId"), body.pdfBase64, body.authorized === true), 201); }),
+    route("POST", "/api/projects/:projectId/claim-scans", async (_request, params) => json(await claims.scan(required(params, "projectId")), 201)),
+    route("POST", "/api/projects/:projectId/alignment-checks", async (_request, params) => json(await alignment.check(required(params, "projectId")), 201)),
+    route("GET", "/api/projects/:projectId/claims", async (_request, params) => json(claims.list(required(params, "projectId")))),
+    route("POST", "/api/projects/:projectId/claims/:claimId/reanchor", async (_request, params) => json(await claims.reanchor(required(params, "projectId"), required(params, "claimId")))),
+    route("PATCH", "/api/projects/:projectId/claims/:claimId", async (request, params) => json(await claims.update(required(params, "projectId"), required(params, "claimId"), await readJson<{ reviewStatus?: "detected" | "needs-review" | "supported" | "partial" | "unsupported"; anchorStatus?: "current" | "stale" | "reanchored" | "orphaned" }>(request)))),
+    route("POST", "/api/projects/:projectId/claims/:claimId/links", async (request, params) => json(await claims.link(required(params, "projectId"), required(params, "claimId"), await readJson<any>(request)), 201)),
+    route("DELETE", "/api/projects/:projectId/claims/:claimId/links/:linkId", async (_request, params) => { await claims.unlink(required(params, "projectId"), required(params, "claimId"), required(params, "linkId")); return new Response(null, { status: 204 }); }),
+    route("GET", "/api/projects/:projectId/evidence", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().sourceEvidence.filter((item) => item.projectId === projectId)); }),
+    route("POST", "/api/projects/:projectId/evidence", async (request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); const body = await readJson<{ workId?: string; kind?: "background" | "claim" | "method" | "result" | "limitation" | "quote"; content?: string; locatorType?: "page" | "section" | "paragraph" | "abstract"; locator?: string; origin?: "source-text" | "registry-abstract" | "model-extraction" | "user"; representation?: "verbatim" | "paraphrase" }>(request); if (!body.workId || !body.content?.trim() || !body.locator) throw new ApiError(400, "evidence_invalid", "workId, content and locator are required"); const state = database.snapshot(); if (!state.researchWorks.some((work) => work.id === body.workId)) throw new ApiError(404, "research_work_not_found", "Research work not found"); const timestamp = new Date().toISOString(); return json(await database.mutate((current) => { const evidence = { id: `evidence_${crypto.randomUUID()}`, projectId, workId: body.workId!, kind: body.kind ?? "background", origin: body.origin ?? "user", representation: body.representation ?? "paraphrase", status: "candidate" as const, content: body.content!.trim().slice(0, 4000), locatorType: body.locatorType ?? "abstract", locator: body.locator!.trim().slice(0, 200), createdAt: timestamp, updatedAt: timestamp }; current.sourceEvidence.push(evidence); return evidence; }), 201); }),
+    route("PATCH", "/api/projects/:projectId/evidence/:evidenceId", async (request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); const body = await readJson<{ status?: "candidate" | "approved" | "rejected" | "stale" }>(request); return json(await database.mutate((state) => { const evidence = state.sourceEvidence.find((item) => item.projectId === projectId && item.id === required(params, "evidenceId")); if (!evidence) throw new ApiError(404, "evidence_not_found", "Evidence not found"); if (body.status) evidence.status = body.status; if (body.status === "approved") evidence.approvedAt = new Date().toISOString(); evidence.updatedAt = new Date().toISOString(); return evidence; })); }),
     route("GET", "/api/texlive/:packageName", async (_request, params, url) => texPackages.texLiveArchive(required(params, "packageName"), url.searchParams.get("tlYear"))),
     route("GET", "/api/fetch/:packageName", async (_request, params, url) => texPackages.ctanPackage(required(params, "packageName"), url.searchParams.get("tlYear"))),
     route("GET", "/api/ctan-pkg/:packageName", async (_request, params) => texPackages.ctanPackageInfo(required(params, "packageName"))),
@@ -150,6 +228,10 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
     route("PATCH", "/api/projects/:projectId", async (request, params) => {
       const body = await readJson<{ name?: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget | null }>(request);
       return json(await workspaces.updateProject(required(params, "projectId"), body));
+    }),
+    route("DELETE", "/api/projects/:projectId", async (_request, params) => {
+      await workspaces.deleteProject(required(params, "projectId"));
+      return new Response(null, { status: 204 });
     }),
     route("GET", "/api/projects/:projectId/export", async (_request, params) => {
       return workspaces.exportProject(required(params, "projectId"));
@@ -218,8 +300,9 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
     }),
     route("GET", "/api/projects/:projectId/reviews", async (_request, params) => json(reviews.list(required(params, "projectId")))),
     route("POST", "/api/projects/:projectId/reviews", async (request, params) => {
-      const body = await readJson<{ sourceOnly?: boolean }>(request);
-      return json(await reviews.run(required(params, "projectId"), body.sourceOnly === true, request.signal), 201);
+      const body = await readJson<{ sourceOnly?: boolean; pageText?: string[] }>(request);
+      if (body.pageText !== undefined && (!Array.isArray(body.pageText) || body.pageText.some((item) => typeof item !== "string") || body.pageText.length > 20 || body.pageText.reduce((total, item) => total + item.length, 0) > 200_000)) throw new ApiError(400, "review_pdf_preview_invalid", "PDF preview text exceeds the bounded review input limits");
+      return json(await reviews.run(required(params, "projectId"), body.sourceOnly === true, request.signal, body.pageText ?? []), 201);
     }),
     route("PATCH", "/api/projects/:projectId/review-issues/:issueId", async (request, params) => {
       return json(await reviews.updateIssue(required(params, "projectId"), required(params, "issueId"), await readJson<{ status?: ReviewIssueStatus; priority?: number; reason?: string }>(request)));

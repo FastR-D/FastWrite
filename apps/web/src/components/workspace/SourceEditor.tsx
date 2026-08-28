@@ -6,6 +6,7 @@ import { AlertCircle, Check, CloudOff, LoaderCircle, Sparkles, Undo2 } from "luc
 import type { CompletionKind, CompletionResponse, FileContentResponse, SourceLocation, TextSelection } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
 import { completionSuffix } from "./completion";
+import { currentTheme, THEME_CHANGE_EVENT } from "../../lib/theme";
 
 type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
 type CompletionMetricEvent = "suggested" | "cancelled" | "accepted" | "ignored" | "error";
@@ -77,6 +78,34 @@ function configureMonaco() {
       "editorIndentGuide.background1": "#D8DEE4",
       "editorBracketMatch.background": "#DDF4FF",
       "editorBracketMatch.border": "#54AEFF"
+    }
+  });
+  monaco.editor.defineTheme("fastwrite-github-dark", {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "comment", foreground: "8B949E" },
+      { token: "keyword", foreground: "FF7B72" },
+      { token: "keyword.control", foreground: "D2A8FF", fontStyle: "bold" },
+      { token: "type", foreground: "79C0FF" },
+      { token: "string", foreground: "A5D6FF" },
+      { token: "string.escape", foreground: "7EE787" },
+      { token: "operator", foreground: "D2A8FF" }
+    ],
+    colors: {
+      "editor.background": "#0D1117",
+      "editor.foreground": "#C9D1D9",
+      "editorGutter.background": "#0D1117",
+      "editorLineNumber.foreground": "#6E7681",
+      "editorLineNumber.activeForeground": "#C9D1D9",
+      "editor.lineHighlightBackground": "#161B22",
+      "editor.selectionBackground": "#264F78",
+      "editor.inactiveSelectionBackground": "#264F7855",
+      "editorCursor.foreground": "#58A6FF",
+      "editorWhitespace.foreground": "#30363D",
+      "editorIndentGuide.background1": "#21262D",
+      "editorBracketMatch.background": "#1F3B5B",
+      "editorBracketMatch.border": "#58A6FF"
     }
   });
 }
@@ -230,7 +259,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     configureMonaco();
     const editor = monaco.editor.create(host, {
       model: null,
-      theme: "fastwrite-github",
+      theme: currentTheme() === "dark" ? "fastwrite-github-dark" : "fastwrite-github",
       ariaLabel: `Source editor for ${documentRef.current.file.path}`,
       automaticLayout: true,
       minimap: { enabled: false },
@@ -266,7 +295,10 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       editor.onDidChangeCursorSelection(() => emitSelection(editor, decorationsRef.current, documentRef.current, versionRef.current, onSelectionRef.current, onCursorRef.current, cursorRef, completionRef, setCompletion, completionAbortRef))
     ];
     setEditorReady(true);
+    const updateTheme = () => monaco.editor.setTheme(currentTheme() === "dark" ? "fastwrite-github-dark" : "fastwrite-github");
+    window.addEventListener(THEME_CHANGE_EVENT, updateTheme);
     return () => {
+      window.removeEventListener(THEME_CHANGE_EVENT, updateTheme);
       if (timerRef.current) window.clearTimeout(timerRef.current);
       abortRef.current?.abort();
       if (completionTimerRef.current) window.clearTimeout(completionTimerRef.current);

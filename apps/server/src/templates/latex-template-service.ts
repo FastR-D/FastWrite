@@ -1,5 +1,6 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+import { unzipSync } from "fflate";
 import type { LatexTemplateOption, PublicationTarget, TargetVenue } from "@fastwrite/shared";
 import { ApiError } from "../http";
 
@@ -11,17 +12,18 @@ interface TemplateDescriptor extends LatexTemplateOption {
   ref: string;
   path: string;
   mainDocument?: string;
+  archiveUrl?: string;
 }
 
 const MIRROR_REPOSITORY = "mikubaka88/CCFA-Skills";
-const MIRROR_REF = "fd5c7e3afcc097d874d296a0e1e8118ae597f847";
+const MIRROR_REF = "main";
 const MIRROR_ROOT = "ccf-latex-templates";
-const VERIFIED_AT = "2026-08-25";
+const VERIFIED_AT = "2026-08-28";
 const MAX_FILES = 250;
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 
 const OFFICIAL: Record<string, Omit<TemplateDescriptor, "id">> = {
-  iclr: { label: "ICLR 2026 official LaTeX template", trust: "official", sourceUrl: "https://github.com/ICLR/Master-Template/tree/master/iclr2026", verifiedAt: VERIFIED_AT, venueSpecific: true, repository: "ICLR/Master-Template", ref: "master", path: "iclr2026", mainDocument: "iclr2026_conference.tex" },
+  iclr: { label: "ICLR 2027 official LaTeX template", trust: "official", sourceUrl: "https://iclr.cc/Conferences/2027/AuthorGuidelines", verifiedAt: VERIFIED_AT, venueSpecific: true, years: [2027], repository: "ICLR/Master-Template", ref: "2027", path: "iclr2027", mainDocument: "iclr2027_conference.tex", archiveUrl: "https://media.iclr.cc/Conferences/ICLR2027/iclr-2027-style-files.zip" },
   cvpr: { label: "CVPR official author kit", trust: "official", sourceUrl: "https://github.com/cvpr-org/author-kit/releases", verifiedAt: VERIFIED_AT, venueSpecific: true, repository: "cvpr-org/author-kit", ref: "main", path: "", mainDocument: "main.tex" },
   acl: { label: "ACL official style files", trust: "official", sourceUrl: "https://github.com/acl-org/acl-style-files", verifiedAt: VERIFIED_AT, venueSpecific: true, repository: "acl-org/acl-style-files", ref: "master", path: "", mainDocument: "acl_latex.tex" }
 };
@@ -43,13 +45,16 @@ const SPRINGER_JOURNALS = new Set(["ijcv", "journal-of-cryptology", "scis", "vld
 export function templateForVenue(venueId: string): LatexTemplateOption | undefined {
   const descriptor = descriptorForVenue(venueId);
   if (!descriptor) return undefined;
-  const { id, label, trust, sourceUrl, verifiedAt, venueSpecific } = descriptor;
-  return { id, label, trust, sourceUrl, verifiedAt, venueSpecific };
+  const { id, label, trust, sourceUrl, verifiedAt, venueSpecific, years } = descriptor;
+  return { id, label, trust, sourceUrl, verifiedAt, venueSpecific, ...(years ? { years } : {}) };
 }
 
-function descriptorForVenue(venueId: string): TemplateDescriptor | undefined {
+function descriptorForVenue(venueId: string, year?: number): TemplateDescriptor | undefined {
   const official = OFFICIAL[venueId];
-  if (official) return { id: `official-${venueId}`, ...official };
+  if (official) {
+    if (year !== undefined && !official.years?.includes(year)) return undefined;
+    return { id: `official-${venueId}-${official.years?.[0] ?? "current"}`, ...official };
+  }
   let mirrorPath = MIRROR_PATHS[venueId];
   let venueSpecific = true;
   let trust: TemplateDescriptor["trust"] = "community-mirror";
@@ -74,14 +79,30 @@ function descriptorForVenue(venueId: string): TemplateDescriptor | undefined {
 }
 
 export class LatexTemplateService {
-  constructor(private readonly dataDirectory: string, private readonly fetcher: typeof fetch = fetch) {}
+  constructor(private readonly dataDirectory: string, private readonly fetcher: typeof fetch = fetch, private readonly bundledDirectory = resolve(import.meta.dir, "bundled")) {}
 
   async materialize(name: string, venue: TargetVenue, target: PublicationTarget): Promise<{ stagingDirectory: string; mainDocument: string; displayName: string }> {
-    const descriptor = descriptorForVenue(target.venueId);
+    const descriptor = descriptorForVenue(target.venueId, target.year);
     if (!descriptor || target.domain !== venue) throw new ApiError(400, "template_unavailable", "No reviewed LaTeX template is available for the selected venue");
+    const bundledDirectory = this.bundledDirectoryFor(descriptor);
+    const cacheDirectory = this.cacheDirectory(descriptor);
+    if (await directoryExists(cacheDirectory)) return this.materializeCached(name, descriptor, cacheDirectory);
+    try {
+      if (descriptor.archiveUrl) return this.materializeExternalArchive(name, descriptor, cacheDirectory);
+      return await this.materializeRepository(name, descriptor, cacheDirectory);
+    } catch (error) {
+      if (bundledDirectory && await directoryExists(bundledDirectory)) return this.materializeCached(name, descriptor, bundledDirectory);
+      throw error;
+    }
+  }
+
+  private async materializeRepository(name: string, descriptor: TemplateDescriptor, cacheDirectory: string): Promise<{ stagingDirectory: string; mainDocument: string; displayName: string }> {
     const apiUrl = `https://api.github.com/repos/${descriptor.repository}/git/trees/${encodeURIComponent(descriptor.ref)}?recursive=1`;
     const response = await this.fetcher(apiUrl, { headers: { Accept: "application/vnd.github+json", "User-Agent": "FastWrite" } });
-    if (!response.ok) throw new ApiError(502, "template_fetch_failed", `Template source returned HTTP ${response.status}`);
+    if (!response.ok) {
+      if (response.status === 403) return this.materializeArchive(name, descriptor);
+      throw new ApiError(502, "template_fetch_failed", `Template source returned HTTP ${response.status}`);
+    }
     const payload = await response.json() as GithubTreeResponse;
     if (payload.truncated || !Array.isArray(payload.tree)) throw new ApiError(502, "template_tree_incomplete", "Template repository listing was incomplete");
     const prefix = descriptor.path ? `${descriptor.path.replace(/\/$/, "")}/` : "";
@@ -103,6 +124,7 @@ export class LatexTemplateService {
       });
       const mainDocument = chooseMainDocument(files.map((entry) => entry.relative), descriptor.mainDocument);
       if (!mainDocument) throw new ApiError(502, "template_main_missing", "No LaTeX entry document could be identified in this template");
+      await this.saveCache(stagingDirectory, cacheDirectory);
       await personalizeTitle(join(stagingDirectory, mainDocument), name);
       return { stagingDirectory, mainDocument, displayName: `${descriptor.label} · ${descriptor.trust}` };
     } catch (error) {
@@ -110,6 +132,91 @@ export class LatexTemplateService {
       throw error;
     }
   }
+
+  private cacheDirectory(descriptor: TemplateDescriptor): string {
+    const cacheKey = `${descriptor.id}-${descriptor.ref}`.replace(/[^a-zA-Z0-9._-]/g, "_");
+    return join(this.dataDirectory, "templates", cacheKey);
+  }
+
+  private bundledDirectoryFor(descriptor: TemplateDescriptor): string | undefined {
+    if (descriptor.repository === MIRROR_REPOSITORY) return join(this.bundledDirectory, "ccfa", descriptor.path.slice(`${MIRROR_ROOT}/`.length));
+    if (descriptor.id.startsWith("official-acl-")) return join(this.bundledDirectory, "ccfa", "ACL");
+    if (descriptor.id.startsWith("official-cvpr-")) return join(this.bundledDirectory, "ccfa", "CVPR");
+    return undefined;
+  }
+
+  private async saveCache(sourceDirectory: string, cacheDirectory: string): Promise<void> {
+    await mkdir(dirname(cacheDirectory), { recursive: true });
+    await rm(cacheDirectory, { recursive: true, force: true });
+    await cp(sourceDirectory, cacheDirectory, { recursive: true });
+  }
+
+  private async materializeCached(name: string, descriptor: TemplateDescriptor, cacheDirectory: string): Promise<{ stagingDirectory: string; mainDocument: string; displayName: string }> {
+    const files: string[] = [];
+    for await (const file of new Bun.Glob("**/*").scan({ cwd: cacheDirectory, onlyFiles: true })) files.push(file);
+    const mainDocument = chooseMainDocument(files, descriptor.mainDocument);
+    if (!mainDocument) throw new ApiError(502, "template_main_missing", "No LaTeX entry document could be identified in the cached template");
+    await mkdir(join(this.dataDirectory, "imports"), { recursive: true });
+    const stagingDirectory = await mkdtemp(join(this.dataDirectory, "imports", "template-"));
+    try {
+      await cp(cacheDirectory, stagingDirectory, { recursive: true });
+      await personalizeTitle(join(stagingDirectory, mainDocument), name);
+      return { stagingDirectory, mainDocument, displayName: `${descriptor.label} · ${descriptor.trust}` };
+    } catch (error) {
+      await rm(stagingDirectory, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  private async materializeArchive(name: string, descriptor: TemplateDescriptor): Promise<{ stagingDirectory: string; mainDocument: string; displayName: string }> {
+    const archiveUrl = `https://codeload.github.com/${descriptor.repository}/zip/${encodeURIComponent(descriptor.ref)}`;
+    return this.materializeArchiveUrl(name, descriptor, this.cacheDirectory(descriptor), archiveUrl, "Template source returned HTTP 403 and archive fallback returned HTTP");
+  }
+
+  private async materializeExternalArchive(name: string, descriptor: TemplateDescriptor, cacheDirectory: string): Promise<{ stagingDirectory: string; mainDocument: string; displayName: string }> {
+    return this.materializeArchiveUrl(name, descriptor, cacheDirectory, descriptor.archiveUrl!, "Official template archive returned HTTP");
+  }
+
+  private async materializeArchiveUrl(name: string, descriptor: TemplateDescriptor, cacheDirectory: string, archiveUrl: string, errorPrefix: string): Promise<{ stagingDirectory: string; mainDocument: string; displayName: string }> {
+    const response = await this.fetcher(archiveUrl, { headers: { "User-Agent": "FastWrite" } });
+    if (!response.ok) throw new ApiError(502, "template_fetch_failed", `${errorPrefix} ${response.status}`);
+    let archive: Record<string, Uint8Array>;
+    try {
+      archive = unzipSync(new Uint8Array(await response.arrayBuffer()));
+    } catch {
+      throw new ApiError(502, "template_archive_invalid", "The official template archive could not be read");
+    }
+    const marker = descriptor.path ? `${descriptor.path.replace(/\/$/, "")}/` : "";
+    const archiveEntry = Object.keys(archive).find((path) => marker ? path.includes(marker) : path.split("/").length > 1);
+    if (!archiveEntry) throw new ApiError(502, "template_tree_incomplete", "The official template archive did not contain the selected template");
+    const prefix = marker ? archiveEntry.slice(0, archiveEntry.indexOf(marker) + marker.length) : `${archiveEntry.split("/")[0]}/`;
+    const files = Object.entries(archive)
+      .filter(([path, bytes]) => path.startsWith(prefix) && path !== prefix && !path.endsWith("/") && safeRelativePath(path.slice(prefix.length)) && !ignoredTemplateFile(path.slice(prefix.length)))
+      .map(([path, bytes]) => ({ path, relative: path.slice(prefix.length), bytes }));
+    const totalBytes = files.reduce((sum, entry) => sum + entry.bytes.byteLength, 0);
+    if (!files.length || files.length > MAX_FILES || totalBytes > MAX_TOTAL_BYTES) throw new ApiError(502, "template_size_invalid", "Template exceeds the safe import limits or has no importable files");
+    await mkdir(join(this.dataDirectory, "imports"), { recursive: true });
+    const stagingDirectory = await mkdtemp(join(this.dataDirectory, "imports", "template-"));
+    try {
+      await Promise.all(files.map(async (entry) => {
+        const destination = join(stagingDirectory, ...entry.relative.split("/"));
+        await mkdir(dirname(destination), { recursive: true });
+        await writeFile(destination, entry.bytes);
+      }));
+      const mainDocument = chooseMainDocument(files.map((entry) => entry.relative), descriptor.mainDocument);
+      if (!mainDocument) throw new ApiError(502, "template_main_missing", "No LaTeX entry document could be identified in this template");
+      await this.saveCache(stagingDirectory, cacheDirectory);
+      await personalizeTitle(join(stagingDirectory, mainDocument), name);
+      return { stagingDirectory, mainDocument, displayName: `${descriptor.label} · ${descriptor.trust}` };
+    } catch (error) {
+      await rm(stagingDirectory, { recursive: true, force: true });
+      throw error;
+    }
+  }
+}
+
+async function directoryExists(path: string): Promise<boolean> {
+  try { return (await stat(path)).isDirectory(); } catch { return false; }
 }
 
 function safeRelativePath(value: string): boolean {

@@ -13,7 +13,7 @@ function flattenOutline(items: OutlineItem[]): OutlineItem[] { return items.flat
 export class ReviewService {
   constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider) {}
 
-  async run(projectId: string, sourceOnly = false, requestSignal?: AbortSignal): Promise<ReviewResponse> {
+  async run(projectId: string, sourceOnly = false, requestSignal?: AbortSignal, pdfPageText: string[] = []): Promise<ReviewResponse> {
     if (!this.provider?.review) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable Review Agent");
     const project = this.workspaces.getProject(projectId);
     const compileRecord = this.database.snapshot().compileRecords.filter((record) => record.projectId === projectId && record.projectVersion === project.version && record.status === "success").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -31,6 +31,7 @@ export class ReviewService {
     }
     if (!documents.some((document) => document.path === project.mainDocument)) throw new ApiError(400, "review_main_missing", "The main document could not be included in the review snapshot");
 
+    const boundedPageText = pdfPageText.slice(0, 20).map((text) => String(text).slice(0, 20_000));
     const createdAt = now();
     const snapshot: ReviewSnapshot = {
       id: `snapshot_${crypto.randomUUID()}`,
@@ -55,16 +56,23 @@ export class ReviewService {
       createdAt,
       updatedAt: createdAt,
       steps: [
-        { id: "snapshot", label: "Freeze paper snapshot", status: "completed" },
+        { id: "snapshot", label: "Read current workspace", status: "completed" },
         { id: "evidence", label: "Collect section evidence", status: "running" },
         { id: "synthesis", label: "Synthesize and deduplicate issues", status: "pending" }
       ],
     };
-    await this.database.mutate((state) => { state.reviewSnapshots.push(snapshot); state.agentRuns.push(run); });
+    await this.database.mutate((state) => { state.agentRuns.push(run); });
     try {
       const [outline, skill] = await Promise.all([this.workspaces.outline(projectId), this.skills.load(project.skill, project.publicationTarget)]);
       const result = await runAgentOperation<ReviewAgentOutput>(
-        (signal) => this.provider!.review!({ documents: documents.map(({ path, content }) => ({ path, content })), outline: flattenOutline(outline).map(({ path, title, line }) => ({ path, title, line })), skill: project.skill, skillInstructions: skill.instructions, venueInstructions: skill.venueInstructions }, signal),
+        async (signal) => {
+          const input = { documents: documents.map(({ path, content }) => ({ path, content })), outline: flattenOutline(outline).map(({ path, title, line }) => ({ path, title, line })), skill: project.skill, skillInstructions: skill.instructions, venueInstructions: skill.venueInstructions, ...(boundedPageText.length ? { pdfPageText: boundedPageText } : {}) };
+          if (!this.provider!.reviewPass) return this.provider!.review!(input, signal);
+          const results = await Promise.allSettled([this.provider!.reviewPass({ ...input, pass: "domain" }, signal), this.provider!.reviewPass({ ...input, pass: "venue" }, signal)]);
+          const successful = results.filter((item): item is PromiseFulfilledResult<ReviewAgentOutput> => item.status === "fulfilled").map((item) => item.value);
+          if (!successful.length) throw new Error("All Review provider passes failed");
+          return { ...successful[0]!, issues: successful.flatMap((item) => item.issues), weaknesses: successful.flatMap((item) => item.weaknesses), nextSteps: successful.flatMap((item) => item.nextSteps) };
+        },
         { signal: requestSignal, timeoutEnv: "FASTWRITE_REVIEW_TIMEOUT_MS", label: "Review", codePrefix: "review", cancelledMessage: "Review cancelled; no report was created", timeoutMessage: "Review timed out before a report was created" }
       );
       const reportId = `review_${crypto.randomUUID()}`;
@@ -81,7 +89,7 @@ export class ReviewService {
           const excerpt = evidence.excerpt.trim().slice(0, 1_000);
           const offset = content?.indexOf(excerpt) ?? -1;
           return {
-            path: available.has(evidence.path) ? evidence.path : project.mainDocument,
+            ...(available.has(evidence.path) || !boundedPageText.length ? { path: available.has(evidence.path) ? evidence.path : project.mainDocument } : {}),
             ...(evidence.section ? { section: evidence.section } : {}),
             ...(offset >= 0 && content ? { line: content.slice(0, offset).split("\n").length } : evidence.line ? { line: evidence.line } : {}),
             excerpt,
@@ -92,7 +100,9 @@ export class ReviewService {
         createdAt: now(), updatedAt: now(), source: "agent",
         history: [{ id: `history_${crypto.randomUUID()}`, action: "created", reason: `Created by ${project.skill.name} Review Agent`, actor: "agent", createdAt: now() }]
       }));
-      const report: ReviewReport = { id: reportId, projectId, agentRunId: run.id, snapshotId: snapshot.id, overallAssessment: result.overallAssessment, recommendation: result.recommendation, strengths: result.strengths, weaknesses: result.weaknesses, nextSteps: result.nextSteps, issues, createdAt: now() };
+      const evidenceIssues = citationEvidenceIssues(documents, reportId);
+      const synthesizedIssues = dedupeIssues([...evidenceIssues, ...issues]);
+      const report: ReviewReport = { id: reportId, projectId, agentRunId: run.id, snapshotId: snapshot.id, overallAssessment: result.overallAssessment, recommendation: result.recommendation, strengths: result.strengths, weaknesses: result.weaknesses, nextSteps: result.nextSteps, issues: synthesizedIssues, passes: [{ id: "mechanical", status: "completed", issues: [] }, { id: "evidence", status: "completed", issues: evidenceIssues.map((issue) => issue.id) }, { id: "domain", status: "completed", issues: issues.map((issue) => issue.id) }, { id: "venue", status: "completed", issues: [] }, { id: "synthesis", status: "completed", issues: synthesizedIssues.map((issue) => issue.id) }], inputType: boundedPageText.length ? "pdf-preview" : "source", createdFromProjectVersion: project.version, createdAt: now() };
       const updatedRun = await this.database.mutate((state) => {
         state.reviewReports.push(report);
         const stored = state.agentRuns.find((item) => item.id === run.id)!;
@@ -111,7 +121,7 @@ export class ReviewService {
     }
   }
 
-  list(projectId: string): ReviewReport[] { return this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)); }
+  list(projectId: string): ReviewReport[] { const project = this.workspaces.getProject(projectId); return this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((report) => ({ ...report, stale: report.createdFromProjectVersion !== undefined ? report.createdFromProjectVersion !== project.version : false })); }
 
   updateIssue(projectId: string, issueId: string, updates: { status?: ReviewIssueStatus; priority?: number; reason?: string }): Promise<ReviewIssue> {
     if (updates.priority !== undefined && (!Number.isInteger(updates.priority) || updates.priority < 0 || updates.priority > 10_000)) throw new ApiError(400, "invalid_priority", "Issue priority must be an integer between 0 and 10,000");
@@ -121,7 +131,11 @@ export class ReviewService {
       if (!issue) throw new ApiError(404, "review_issue_not_found", "Review issue not found");
       const timestamp = now();
       issue.history ??= [];
-      if (updates.status && updates.status !== issue.status) { issue.status = updates.status; issue.history.push({ id: `history_${crypto.randomUUID()}`, action: "status", reason: updates.reason?.trim() || `Status changed to ${updates.status}`, actor: "user", createdAt: timestamp }); }
+      if (updates.status && updates.status !== issue.status) {
+        const allowed: Record<ReviewIssueStatus, ReviewIssueStatus[]> = { open: ["planned", "in_revision", "dismissed"], planned: ["in_revision", "dismissed"], in_revision: ["needs_review", "open"], needs_review: ["resolved", "open"], resolved: ["open"], dismissed: ["open"] };
+        if (!allowed[issue.status].includes(updates.status)) throw new ApiError(409, "review_issue_transition_invalid", "Issue status requires a valid workflow transition");
+        issue.status = updates.status; issue.history.push({ id: `history_${crypto.randomUUID()}`, action: "status", reason: updates.reason?.trim() || (updates.status === "dismissed" ? "Dismissed by user" : `Status changed to ${updates.status}`), actor: "user", createdAt: timestamp });
+      }
       if (updates.priority !== undefined && updates.priority !== issue.priority) { issue.priority = updates.priority; issue.history.push({ id: `history_${crypto.randomUUID()}`, action: "priority", reason: updates.reason?.trim() || `Priority changed to ${updates.priority}`, actor: "user", createdAt: timestamp }); }
       issue.updatedAt = now();
       return issue;
@@ -152,3 +166,23 @@ export class ReviewService {
 
 
 function severityPriority(severity: ReviewIssue["severity"]): number { return ({ blocking: 1, major: 2, minor: 3, suggestion: 4 })[severity]; }
+
+function citationEvidenceIssues(documents: Array<{ path: string; content: string }>, reportId: string): ReviewIssue[] {
+  const cited = new Set<string>();
+  for (const document of documents) for (const match of document.content.matchAll(/\\(?:cite|citep|citet|parencite|textcite|autocite)\*?(?:\[[^\]]*\]){0,2}\{([^}]+)\}/g)) for (const key of (match[1] ?? "").split(",")) if (key.trim()) cited.add(key.trim());
+  if (!cited.size) return [];
+  const bibliography = new Set<string>();
+  for (const document of documents) for (const match of document.content.matchAll(/@\w+\s*\{\s*([^,\s]+)/g)) bibliography.add(match[1]!);
+  return [...cited].filter((key) => !bibliography.has(key)).map((key, index) => ({ id: `issue_${crypto.randomUUID()}`, reportId, category: "related-work", severity: "major", priority: 200 + index, title: `Citation '${key}' has no bibliography entry`, rationale: "The manuscript cites a key that cannot be resolved to a bibliography record.", impact: "Readers and automated checks cannot verify the cited source.", suggestion: `Add an approved bibliography entry for '${key}' or remove the citation.`, evidence: [], status: "open", createdAt: now(), updatedAt: now(), source: "agent", history: [{ id: `history_${crypto.randomUUID()}`, action: "created", reason: "Detected by deterministic evidence pass", actor: "system", createdAt: now() }] }));
+}
+
+function dedupeIssues(issues: ReviewIssue[]): ReviewIssue[] {
+  const byKey = new Map<string, ReviewIssue>();
+  for (const issue of issues) {
+    const key = issue.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const existing = byKey.get(key);
+    if (!existing) byKey.set(key, issue);
+    else { existing.evidence.push(...issue.evidence.filter((evidence) => !existing.evidence.some((item) => item.path === evidence.path && item.excerpt === evidence.excerpt))); existing.rationale = `${existing.rationale}\n${issue.rationale}`.trim(); }
+  }
+  return [...byKey.values()];
+}

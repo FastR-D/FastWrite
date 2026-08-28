@@ -6,7 +6,9 @@
 
 1. **Workspace 是正文真相**：AI 输出、Memory 和 Review 都是派生数据，不能取代论文源文件。
 2. **用户控制写入**：Completion 由 `Tab` 接受；Agent 和 Revise 通过 ChangeSet 审批；Review 不写正文。
-3. **上下文按任务最小化**：跨文件 Agent 可读取完整论文上下文，本地写作只读取当前 Section，Review 以冻结 PDF 为正文。
+3. **上下文按任务最小化**：跨文件 Agent 可读取完整论文上下文，本地写作只读取当前 Section，Review 以请求时读取的当前源码为主；可选接收有界、临时的 PDF 预览文本。
+
+> Review 契约更新：新 Review 不创建或持久化 ReviewSnapshot、PDF artifact、页面文本或哈希。历史快照仅作兼容读取；报告记录输入类型和生成时项目版本，并在项目变更后视为可能过时。
 4. **所有结果绑定版本**：文件版本防止覆盖并发编辑，项目版本绑定编译、审稿与问题解决状态。
 5. **证据优先**：缺少事实、结果或引用时保留 TODO、返回空建议或报告不确定性，不允许推断成论文事实。
 
@@ -70,7 +72,7 @@ ReviewSnapshot(PDF) -> Review Issue -> Revise locally / Fix with Agent
                -> targeted re-review -> resolved / reopened
 ```
 
-ReviewSnapshot 必须固定项目版本、成功编译记录、PDF artifact、PDF SHA-256、Skill 和源码文件摘要。Review Provider 读取原始 PDF；若 Provider 不支持 PDF 文件输入，Adapter 必须从同一 PDF 生成逐页图像和 PDF 文本，不能退化为直接审阅 LaTeX 源码。
+新 Review 不创建 ReviewSnapshot，也不保存 PDF artifact、PDF SHA-256 或页面文本；Provider 默认读取当前源码，浏览器可按请求提交有界 PDF 预览文本。
 
 一条**审稿意见（Review Issue）**是 ReviewReport 中的一个独立问题。它必须包含类别、严重级别、理由、影响、建议、PDF 页码和 PDF 原文；通过 SyncTeX 或文本匹配定位成功时，再附加源码路径与行号。
 
@@ -83,7 +85,7 @@ ReviewSnapshot 必须固定项目版本、成功编译记录、PDF artifact、PD
 | Completion | 光标附近、Outline、Bib、Skill、已审核论文概览和当前 Section |
 | Agent | 项目源码、Skill、完整已审核 Memory、User Instructions；从 Review 发起时增加用户选中的审稿意见及 PDF 证据 |
 | Revise | 选区、同文件前后文、精确 Section、Skill、已审核论文概览和当前 Section；从 Review 发起时增加一条审稿意见及 PDF 证据 |
-| Review | 当前版本的冻结 PDF、Skill；源码、Outline、SyncTeX 仅用于证据映射；不读取 Memory |
+| Review | 请求时当前源码、可选 PDF 预览文本、Skill；不读取 Memory |
 | Targeted re-review | 修改后的当前版本 PDF、原 ReviewSnapshot 与用户选中的审稿意见、Skill；不读取 Memory |
 
 Paper Memory 是有源码证据且经用户审核的派生上下文，包含 Overview、Section 摘要和原子 Facts。其生命周期为：
@@ -105,7 +107,7 @@ Extract candidates -> user review/edit -> lock/apply -> source changes mark stal
 
 - `PaperFile.version` 是文件级乐观并发令牌，用于保存、Completion、选区和 ChangeSet 校验。
 - `PaperProject.version` 是项目级单调计数器，用于绑定编译记录、ReviewSnapshot、已接受的 Agent 修改和 IssueResolution；它不是 Git commit 或同步版本。
-- Review 必须使用当前项目版本的成功编译 PDF；source-only 只能作为开发诊断，不能生成正式 ReviewReport。
+- Review 默认使用当前项目源码；缺少 PDF 预览文本时降级为 source review，报告记录实际输入类型。
 - Targeted re-review 必须使用修改之后、当前项目版本的新 PDF，并与原 ReviewSnapshot 和所选审稿意见比较。
 
 ### 内部 Git 历史

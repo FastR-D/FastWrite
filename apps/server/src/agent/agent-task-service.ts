@@ -51,7 +51,7 @@ export class AgentTaskService {
       output.venueChecks = mergeComplianceChecks(output.venueChecks ?? [], complianceFindings);
       const affectedFiles = output.affectedFiles;
       if (!affectedFiles.length || affectedFiles.some((path) => !allowedPath(path)) || (request.scope.type === "file" && affectedFiles.some((path) => path !== request.scope.path))) throw new ApiError(502, "agent_plan_invalid", "Agent returned files outside the requested scope");
-      const plan: AgentTaskPlan = { id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { objective, scope: request.scope, intent, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, intent, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, ...(output.sectionBudget ? { sectionBudget: output.sectionBudget } : {}), ...(output.venueChecks ? { venueChecks: output.venueChecks } : {}), createdAt, updatedAt: now() };
+      const plan: AgentTaskPlan = { id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { objective, scope: request.scope, intent, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, intent, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, ...(output.sectionBudget ? { sectionBudget: output.sectionBudget } : {}), ...(output.venueChecks ? { venueChecks: output.venueChecks } : {}), ...(output.evidenceDependencies ? { evidenceDependencies: output.evidenceDependencies } : {}), ...(output.missingEvidence ? { missingEvidence: output.missingEvidence } : {}), createdAt, updatedAt: now() };
       const reports = this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId);
       const reviewSnapshotIds = [...new Set(issues.flatMap((issue) => reports.find((report) => report.issues.some((candidate) => candidate.id === issue.id))?.snapshotId ?? []))];
       const resolution: IssueResolution | undefined = issues.length ? {
@@ -102,7 +102,7 @@ export class AgentTaskService {
       const allowedOutputPaths = new Set(plan.affectedFiles);
       const generated = await Promise.all(plan.affectedFiles.map(async (path, index) => {
         const scopedDocuments = generationDocuments(visibleDocuments, path, project.mainDocument, issues, plan.request.objective);
-        const output = await runAgentOperation<{ files?: DraftGeneratedFile[] }>((signal) => this.provider!.generateAgentTask!({ ...input, documents: scopedDocuments, steps: plan.steps, affectedFiles: plan.affectedFiles, targetPath: path, risks: plan.risks, validation: plan.validation, sectionBudget: plan.sectionBudget ?? [], venueChecks: plan.venueChecks ?? [] }, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: `Agent execution for ${path}` });
+        const output = await runAgentOperation<{ files?: DraftGeneratedFile[] }>((signal) => this.provider!.generateAgentTask!({ ...input, documents: scopedDocuments, steps: plan.steps, affectedFiles: plan.affectedFiles, targetPath: path, risks: plan.risks, validation: plan.validation, sectionBudget: plan.sectionBudget ?? [], venueChecks: plan.venueChecks ?? [], evidenceDependencies: plan.evidenceDependencies ?? [], missingEvidence: plan.missingEvidence ?? [] }, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: `Agent execution for ${path}` });
         const files = this.validateGeneratedFiles(Array.isArray(output?.files) ? output.files : [], path, allowedOutputPaths);
         await this.database.mutate((state) => {
           const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!;
@@ -137,12 +137,17 @@ export class AgentTaskService {
           const evidence = linkedIssues.flatMap((issue) => issue.evidence.map((item) => ({
             issueId: issue.id,
             issueTitle: issue.title,
-            path: item.path,
+            path: item.path ?? project.mainDocument,
             ...(item.line ? { line: item.line } : {}),
             excerpt: item.excerpt,
             inferred: item.inferred
           })));
           if (evidence.length) hunk.evidence = evidence;
+          const citationKeys = [...hunk.after.matchAll(/\\(?:cite|citep|citet|parencite|textcite|autocite)\*?(?:\[[^\]]*\]){0,2}\{([^}]+)\}/g)].flatMap((match) => (match[1] ?? "").split(",").map((key) => key.trim()).filter(Boolean));
+          if (citationKeys.length) {
+            const approved = new Set(this.database.snapshot().projectResearchWorks.filter((item) => item.projectId === projectId && item.status === "saved" && item.citationKey).map((item) => item.citationKey!));
+            hunk.findings = citationKeys.map((key) => ({ id: `citation:${key}`, source: "citation" as const, referenceId: key, status: approved.has(key) ? "pass" as const : "blocking" as const, message: approved.has(key) ? `Citation '${key}' is approved for this project.` : `Citation '${key}' has not been approved in Research; verify it before accepting this hunk.` }));
+          }
         }
       }
       const effectiveChanges = changes.filter((change) => change.hunks?.length);
@@ -250,7 +255,7 @@ export class AgentTaskService {
   }); }
 }
 
-function toAgentIssue(issue: ReviewIssue): AgentTaskIssue { return { id: issue.id, title: issue.title, rationale: issue.rationale, suggestion: issue.suggestion, evidence: issue.evidence.map((evidence) => ({ path: evidence.path, excerpt: evidence.excerpt })) }; }
+function toAgentIssue(issue: ReviewIssue): AgentTaskIssue { return { id: issue.id, title: issue.title, rationale: issue.rationale, suggestion: issue.suggestion, evidence: issue.evidence.filter((evidence) => evidence.path).map((evidence) => ({ path: evidence.path!, excerpt: evidence.excerpt })) }; }
 function withMemory(skill: string, memory: string) { return memory ? `${skill}\n\nConfirmed Paper Memory (treat as project facts):\n${memory}` : skill; }
 
 function agentVisibleDocuments<T extends { path: string; content: string }>(documents: T[]): T[] {
@@ -277,7 +282,7 @@ function generationDocuments(
   const priority = [
     targetPath,
     mainDocument,
-    ...issues.flatMap((issue) => issue.evidence.map((evidence) => evidence.path)),
+    ...issues.flatMap((issue) => issue.evidence.map((evidence) => evidence.path).filter((path): path is string => Boolean(path))),
     ...searchDocumentPaths(documents, objective)
   ];
   const selected: Array<{ path: string; content: string; version: number }> = [];
@@ -351,6 +356,11 @@ function normalizeAgentPlanOutput(raw: unknown, fallbackPath: string, allowedPat
     if (typeof item.requirement !== "string" || typeof item.action !== "string" || typeof item.status !== "string" || !allowedStatuses.has(item.status)) return [];
     return [{ requirement: item.requirement.trim(), action: item.action.trim(), status: item.status as "satisfied" | "missing" | "uncertain" | "not-applicable", evidencePaths: stringList(item.evidencePaths) }];
   });
+  const evidenceDependencies = recordList(output.evidenceDependencies).flatMap((item) => {
+    if (typeof item.step !== "string") return [];
+    return [{ step: item.step.trim(), requiredClaimIds: stringList(item.requiredClaimIds), missingEvidence: stringList(item.missingEvidence) }];
+  });
+  const missingEvidence = stringList(output.missingEvidence);
   const affectedFiles: string[] = [];
   for (const candidate of stringList(output.affectedFiles)) {
     try {
@@ -367,7 +377,9 @@ function normalizeAgentPlanOutput(raw: unknown, fallbackPath: string, allowedPat
     risks,
     validation: validation.length ? validation : ["Compile the resulting paper", "Review every proposed file before accepting"],
     sectionBudget,
-    venueChecks
+    venueChecks,
+    ...(evidenceDependencies.length ? { evidenceDependencies } : {}),
+    ...(missingEvidence.length ? { missingEvidence } : {})
   };
 }
 

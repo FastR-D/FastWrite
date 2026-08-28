@@ -122,7 +122,7 @@ export function DraftDialog({ open, project, onClose, onAccepted, compileState, 
   const compiling = compileState.state === "loading" || compileState.state === "compiling";
 
   return (
-    <Dialog open={open} width="fullscreen" title="Agent · Draft paper" description={`${project.skill.name} · v${project.skill.version}`} onClose={() => { if (!busy) onClose(); }} footer={
+    <Dialog open={open} width="fullscreen" title="Agent · Draft paper" description={project.skill.name} onClose={() => { if (!busy) onClose(); }} footer={
       busy ? <Button variant="secondary" onClick={() => requestRef.current?.abort()}>Cancel task</Button> :
       stage === "input" ? <><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!brief.trim()} onClick={() => void begin()}>Plan outline</Button></> :
       stage === "outline" ? <><Button variant="ghost" onClick={() => void discardPlan()}>Discard outline</Button><Button variant="primary" onClick={() => void generate()}>Confirm & generate</Button></> :

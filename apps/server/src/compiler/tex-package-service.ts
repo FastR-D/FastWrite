@@ -94,7 +94,7 @@ export class TexPackageService implements TexPackageProvider {
   async ctanPackage(packageName: string, requestedYear?: string | null): Promise<Response> {
     const name = validatePackageName(packageName);
     const year = parseTexLiveYear(requestedYear);
-    const cachePath = join(this.ctanCache, `${name}@tl${year}.json`);
+    const cachePath = join(this.ctanCache, `${name}@tl${year}-v2.json`);
     const cached = await readFile(cachePath).catch(() => null);
     if (cached) return new Response(cached, { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=31536000, immutable" } });
 
@@ -137,11 +137,12 @@ export class TexPackageService implements TexPackageProvider {
   }
 
   private async downloadCtanPackage(name: string, info: CtanPackageInfo): Promise<ProcessedPackage> {
-    if (info.ctan?.file && info.ctan.path) {
-      const response = await this.fetchUpstream(`${CTAN_MIRROR_ORIGIN}${safeCtanPath(info.ctan.path)}`);
+    const directCtanPath = info.ctan?.path && /\.[a-z0-9]+$/i.test(info.ctan.path) ? info.ctan.path : undefined;
+    if (info.ctan?.file && directCtanPath) {
+      const response = await this.fetchUpstream(`${CTAN_MIRROR_ORIGIN}${safeCtanPath(directCtanPath)}`);
       if (response.ok) {
         const content = new TextDecoder().decode(await boundedBytes(response, name));
-        const fileName = info.ctan.path.split("/").pop() ?? `${name}.sty`;
+        const fileName = directCtanPath.split("/").pop() ?? `${name}.sty`;
         const directory = `/texlive/texmf-dist/tex/latex/${name}`;
         return { name, files: { [`${directory}/${fileName}`]: { path: directory, content } }, totalFiles: 1, dependencies: extractDependencies(content, name), source: "ctan-raw" };
       }

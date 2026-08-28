@@ -8,6 +8,8 @@ import { Button } from "../components/ui/Button";
 import { Dialog } from "../components/ui/Dialog";
 import { PublicationTargetFields } from "../components/ui/PublicationTargetFields";
 import { navigate, projectPath } from "../lib/navigation";
+import { publicationTargetAbbreviation } from "../lib/labels";
+import { ThemeToggle } from "../components/ui/ThemeToggle";
 
 export function ProjectsPage() {
   const [projects, setProjects] = useState<PaperProject[]>([]);
@@ -43,7 +45,7 @@ export function ProjectsPage() {
           <span className="brand__mark">F</span>
           <span>FastWrite</span>
         </a>
-        <span className="skill-badge">Agentic Paper Writing</span>
+        <div className="topbar-actions"><span className="skill-badge">Agentic Paper Writing</span><ThemeToggle /></div>
       </header>
       <main className="projects-main">
         <section className="projects-hero">
@@ -83,7 +85,7 @@ export function ProjectsPage() {
                   <code>{project.mainDocument}</code>
                   <div className="project-card__meta">
                     <span><Clock3 /> {relativeTime(project.updatedAt)}</span>
-                    <span>{project.publicationTarget?.venueId.toUpperCase() ?? project.skill.name}</span>
+                    <span>{publicationTargetAbbreviation(project.publicationTarget, project.skill.id)}</span>
                   </div>
                 </button>
               ))}
@@ -102,14 +104,13 @@ function NewPaperDialog({ open, onClose, onCreated }: { open: boolean; onClose: 
   const [profile, setProfile] = useState<WritingProfile>("network-information-security");
   const [publicationTarget, setPublicationTarget] = useState<PublicationTarget | undefined>();
   const [selectedVenue, setSelectedVenue] = useState<PublicationVenueOption | undefined>();
-  const [initializeFromTemplate, setInitializeFromTemplate] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const create = async () => {
     setLoading(true);
     setError("");
     try {
-      onCreated(await api.projects.create({ name: name.trim(), mainDocument: "main.tex", venue: profile, ...(publicationTarget ? { publicationTarget } : {}), ...(initializeFromTemplate && selectedVenue?.template ? { initializeFromTemplate: true } : {}) }));
+      onCreated(await api.projects.create({ name: name.trim(), mainDocument: "main.tex", venue: profile, ...(publicationTarget ? { publicationTarget } : {}), ...(selectedVenue?.template ? { initializeFromTemplate: true } : {}) }));
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Could not create project");
     } finally {
@@ -117,12 +118,16 @@ function NewPaperDialog({ open, onClose, onCreated }: { open: boolean; onClose: 
     }
   };
   return (
-    <Dialog open={open} title="Create a new paper" description={selectedVenue?.template && initializeFromTemplate ? "Start from the selected venue's complete LaTeX template." : "Start with a minimal, compilable LaTeX document."} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" loading={loading} disabled={!name.trim()} onClick={() => void create()}>Create paper</Button></>}>
+    <Dialog open={open} title="Create a new paper" description={selectedVenue?.template ? "Start from the selected venue's complete LaTeX template." : "Start with a minimal, compilable LaTeX document."} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" loading={loading} disabled={!name.trim()} onClick={() => void create()}>Create paper</Button></>}>
       <div className="form-stack">
         <label className="field"><span>Project name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="My security paper" autoFocus /></label>
         <label className="field"><span>Research domain</span><select value={profile} onChange={(event) => { setProfile(event.target.value as WritingProfile); setPublicationTarget(undefined); setSelectedVenue(undefined); }}>{WRITING_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><small>The research domain and selected venue jointly guide all writing workflows.</small></label>
         <PublicationTargetFields profile={profile} value={publicationTarget} onChange={setPublicationTarget} onSelectedVenueChange={setSelectedVenue} />
-        {selectedVenue?.template ? <label className="field field--checkbox"><span><input type="checkbox" checked={initializeFromTemplate} onChange={(event) => setInitializeFromTemplate(event.target.checked)} /> Initialize from LaTeX template</span><small>{selectedVenue.template.label}. <a href={selectedVenue.template.sourceUrl} target="_blank" rel="noreferrer">Inspect source</a>. {selectedVenue.template.trust === "official" ? "Fetched from the venue's official repository." : selectedVenue.template.trust === "publisher" ? "Publisher-family starting point; confirm the venue-specific options." : "Pinned community mirror; compare it with the current official author guide before submission."}</small></label> : null}
+        {selectedVenue?.template ? <div className="field field--template-info">
+          <span>{selectedVenue.template.label}.</span>
+          <small><a href={selectedVenue.template.sourceUrl} target="_blank" rel="noreferrer">Inspect source</a>.</small>
+          <small>{selectedVenue.template.trust === "official" ? "Fetched from the venue's official source." : selectedVenue.template.trust === "publisher" ? "Publisher-family starting point; confirm the venue-specific options." : "Current community-maintained source; compare it with the official author guide before submission."}</small>
+        </div> : null}
         {error ? <div className="form-error" role="alert">{error}</div> : null}
       </div>
     </Dialog>

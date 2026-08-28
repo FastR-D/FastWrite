@@ -25,6 +25,21 @@ describe("workspace API", () => {
     expect(mimeType(".wasm")).toBe("application/wasm");
   });
 
+  test("accepts a runtime Agent key without exposing it", async () => {
+    const request = await testApplication();
+    const before = await request("/api/agent-settings");
+    expect(before.status).toBe(200);
+    const configured = await request("/api/agent-settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ apiKey: "sk-test-private-key", baseURL: "https://api.example.test/v1", model: "test-model" })
+    });
+    expect(configured.status).toBe(200);
+    expect(await configured.json()).toEqual({ configured: true, source: "runtime", baseURL: "https://api.example.test/v1", model: "test-model" });
+    const status = await request("/api/agent-settings");
+    expect(JSON.stringify(await status.json())).not.toContain("sk-test-private-key");
+  });
+
   test("creates, reads and version-checks an empty project", async () => {
     const request = await testApplication();
     const createdResponse = await request("/api/projects", {

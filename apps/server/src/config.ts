@@ -14,8 +14,9 @@ const releaseDirectory = dirname(process.execPath);
 const isStandaloneExecutable = (Bun as unknown as { isStandaloneExecutable?: boolean }).isStandaloneExecutable === true || import.meta.dir.startsWith("/$bunfs/");
 const defaultDataDirectory = isStandaloneExecutable ? join(releaseDirectory, "paperdata") : ".fastwrite-data";
 const defaultSkillsDirectory = isStandaloneExecutable ? join(releaseDirectory, "skills") : resolve(import.meta.dir, "skills");
+const defaultTemplateDirectory = isStandaloneExecutable ? join(releaseDirectory, "bundled") : resolve(import.meta.dir, "templates", "bundled");
 
-export type AgentWorkflow = "completion" | "agent" | "revise" | "review" | "memory";
+export type AgentWorkflow = "completion" | "agent" | "revise" | "review" | "memory" | "research";
 export interface AgentProviderConfiguration {
   apiKey?: string | undefined;
   baseURL?: string | undefined;
@@ -42,7 +43,8 @@ export function agentProviderConfigurations(environment: NodeJS.ProcessEnv = pro
     agent: forWorkflow("AGENT"),
     revise: forWorkflow("REVISE"),
     review: forWorkflow("REVIEW"),
-    memory: forWorkflow("MEMORY")
+    memory: forWorkflow("MEMORY"),
+    research: forWorkflow("RESEARCH")
   };
 }
 
@@ -55,6 +57,7 @@ export const config = {
   maxEntries: 10_000,
   uploadTtlMs: 24 * 60 * 60 * 1000,
   skillsDirectory: resolve(process.env.FASTWRITE_SKILLS_DIR || defaultSkillsDirectory),
+  templateDirectory: resolve(process.env.FASTWRITE_TEMPLATE_DIR || defaultTemplateDirectory),
   agentModel,
   openAIKey,
   openAIBaseURL,

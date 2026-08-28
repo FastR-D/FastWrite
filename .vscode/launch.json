@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastWrite (开发)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "bun run dev",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "FastWrite API (调试)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["--inspect", "apps/server/src/server.ts"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.env",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ]
+}

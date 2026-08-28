@@ -124,12 +124,22 @@ export class ReviseService {
         createdAt,
         updatedAt: timestamp()
       };
+      for (const hunk of changeSet.changes[0]?.hunks ?? []) {
+        const citationKeys = [...hunk.after.matchAll(/\\(?:cite|citep|citet|parencite|textcite|autocite)\*?(?:\[[^\]]*\]){0,2}\{([^}]+)\}/g)].flatMap((match) => (match[1] ?? "").split(",").map((key) => key.trim()).filter(Boolean));
+        const approved = new Set(this.database.snapshot().projectResearchWorks.filter((item) => item.projectId === projectId && item.status === "saved" && item.citationKey).map((item) => item.citationKey!));
+        if (citationKeys.length) hunk.findings = citationKeys.map((key) => ({ id: `citation:${key}`, source: "citation" as const, referenceId: key, status: approved.has(key) ? "pass" as const : "blocking" as const, message: approved.has(key) ? `Citation '${key}' is approved.` : `Citation '${key}' requires Research approval before acceptance.` }));
+      }
       const updatedRun = await this.database.mutate((state) => {
         state.changeSets.push(changeSet);
         const stored = state.agentRuns.find((candidate) => candidate.id === runId)!;
         stored.status = "waiting-approval";
         stored.changeSetId = changeSetId;
         stored.updatedAt = timestamp();
+        const issueIds = [...new Set((request.issueIds ?? []).filter((id) => state.reviewReports.some((report) => report.projectId === projectId && report.issues.some((issue) => issue.id === id))))];
+        if (issueIds.length) {
+          const snapshotIds = [...new Set(state.reviewReports.filter((report) => report.projectId === projectId && issueIds.some((id) => report.issues.some((issue) => issue.id === id))).map((report) => report.snapshotId))];
+          state.issueResolutions.push({ id: `resolution_${crypto.randomUUID()}`, projectId, issueIds, reviewSnapshotIds: snapshotIds, agentRunId: runId, baseProjectVersion: project.version, skill: structuredClone(project.skill), ...(project.publicationTarget ? { publicationTarget: structuredClone(project.publicationTarget) } : {}), changeSetId, status: "planned", createdAt: createdAt, updatedAt: timestamp() });
+        }
         return stored;
       });
       return { run: updatedRun, changeSet };
@@ -268,6 +278,7 @@ export class ReviseService {
       for (const id of ids) {
         const hunk = hunks.find((candidate) => candidate.id === id);
         if (!hunk) throw new ApiError(409, "changeset_hunk_decided", `Hunk '${id}' is missing`);
+        if (decision.status === "accepted" && hunk.findings?.some((finding) => finding.status === "blocking")) throw new ApiError(409, "changeset_blocked", "This hunk has blocking evidence findings");
         if (hunk.status === decision.status) throw new ApiError(409, "changeset_hunk_unchanged", `Hunk '${id}' is already ${decision.status}`);
         if (!explicitFinish && hunk.status !== "pending") throw new ApiError(409, "changeset_hunk_decided", `Hunk '${id}' is already decided`);
         hunk.status = decision.status;
@@ -367,6 +378,7 @@ export class ReviseService {
     if (!new Set(["proposed", "partially-accepted"]).has(changeSet.status)) throw new ApiError(409, "changeset_not_proposed", "This change is no longer awaiting approval");
     const hunks = changeSet.changes.flatMap((change) => change.hunks ?? []);
     if (!hunks.length || hunks.some((hunk) => hunk.status === "pending")) throw new ApiError(409, "changeset_review_incomplete", "Accept or reject every hunk before finishing the review");
+    if (hunks.some((hunk) => hunk.status === "accepted" && hunk.findings?.some((finding) => finding.status === "blocking"))) throw new ApiError(409, "changeset_blocked", "Resolve blocking evidence findings or explicitly override them before accepting this ChangeSet");
     const accepted = hunks.some((hunk) => hunk.status === "accepted");
     const projectVersion = this.workspaces.getProject(projectId).version;
     const finishedAt = timestamp();

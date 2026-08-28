@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compilerPackageProgress, compilerResourceProgress, resolveCompilerBundles, trackedCompilerResourceName } from "./compilerResources";
+import { compilerDependencyPackages, compilerFontPackages, compilerPackageProgress, compilerResourceProgress, resolveCompilerBundles, trackedCompilerResourceName } from "./compilerResources";
 
 describe("compiler resources", () => {
   test("reports bounded byte progress with the current resource", () => {
@@ -31,5 +31,19 @@ describe("compiler resources", () => {
       bundles: { core: {}, algorithms: {}, hyperref: { requires: ["graphics"] }, graphics: {} }
     }, ["extra-misc"]);
     expect(bundles).toEqual(["algorithms", "core", "extra-misc", "graphics", "hyperref"]);
+  });
+
+  test("discovers dependencies and PostScript fonts from local style files", () => {
+    const localFiles = {
+      "conference.sty": "\\RequirePackage{eso-pic}\n\\font\\conferenceheader = phvb at 8pt",
+      "included.tex": "\\RequirePackage{amsmath}"
+    };
+    expect(compilerDependencyPackages("\\usepackage{conference,times}", localFiles)).toEqual(["amsmath", "conference", "eso-pic", "helvetic", "times"]);
+    expect(compilerFontPackages("\\usepackage{conference,times}", localFiles)).toEqual(["courier", "helvetic", "times"]);
+    expect(resolveCompilerBundles("\\usepackage{conference,times}", {
+      engines: { pdflatex: { required: ["core"] } },
+      packages: { times: "tex-latex-misc", helvetic: "fonts-misc" },
+      bundles: { core: {}, "tex-latex-misc": {}, "fonts-misc": {} }
+    }, [], localFiles)).toEqual(["core", "fonts-misc", "tex-latex-misc"]);
   });
 });

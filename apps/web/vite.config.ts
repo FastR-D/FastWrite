@@ -43,7 +43,19 @@ export default defineConfig(({ mode }) => {
     clearScreen: false,
     build: {
       target: "esnext",
-      sourcemap: true
+      sourcemap: true,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes("node_modules")) return;
+            if (id.includes("monaco-editor")) return "monaco";
+            if (id.includes("pdfjs-dist") || id.includes("react-pdf")) return "pdf";
+            if (id.includes("@siglum/") || id.includes("blake3-wasm") || id.includes("xzwasm")) return "latex-engine";
+            if (id.includes("lucide-react")) return "icons";
+            if (id.includes("react-dom") || id.includes("/react/")) return "react-vendor";
+          }
+        }
+      }
     },
     optimizeDeps: {
       exclude: ["@siglum/engine", "blake3-wasm"]

@@ -1,0 +1,489 @@
+% \iffalse
+%
+% Copyright 2016-2025, Association for Computing Machinery
+% This work may be distributed and/or modified under the
+% conditions of the LaTeX Project Public License, either
+% version 1.3 of this license or (at your option) any
+% later version.
+% The latest version of the license is in
+%    http://www.latex-project.org/lppl.txt
+% and version 1.3 or later is part of all distributions of
+% LaTeX version 2005/12/01 or later.
+%
+% This work has the LPPL maintenance status `maintained'.
+%
+% The Current Maintainer of this work is Boris Veytsman,
+% <borisv@lk.net>
+%
+% This work consists of the file acmart.dtx, the derived file
+% acmart.cls, the files ACM-Reference-Format.bst, and templates
+% sample-acmlarge.tex, sample-acmsmall.tex, sample-acmtog.tex,
+% samplebody-conf.tex, samplebody-journals.tex, sample-manuscript.tex,
+% sample-sigconf-authordraft.tex, sample-sigconf.tex,
+% sample-sigplan.tex
+%
+% \fi
+%
+%
+%% \CharacterTable
+%%  {Upper-case    \A\B\C\D\E\F\G\H\I\J\K\L\M\N\O\P\Q\R\S\T\U\V\W\X\Y\Z
+%%   Lower-case    \a\b\c\d\e\f\g\h\i\j\k\l\m\n\o\p\q\r\s\t\u\v\w\x\y\z
+%%   Digits        \0\1\2\3\4\5\6\7\8\9
+%%   Exclamation   \!     Double quote  \"     Hash (number) \#
+%%   Dollar        \$     Percent       \%     Ampersand     \&
+%%   Acute accent  \'     Left paren    \(     Right paren   \)
+%%   Asterisk      \*     Plus          \+     Comma         \,
+%%   Minus         \-     Point         \.     Solidus       \/
+%%   Colon         \:     Semicolon     \;     Less than     \<
+%%   Equals        \=     Greater than  \>     Question mark \?
+%%   Commercial at \@     Left bracket  \[     Backslash     \\
+%%   Right bracket \]     Circumflex    \^     Underscore    \_
+%%   Grave accent  \`     Left brace    \{     Vertical bar  \|
+%%   Right brace   \}     Tilde         \~}
+%
+%
+% \MakeShortVerb{|}
+% \def\guide{acmguide}
+% \iffalse
+% From
+% http://tex.stackexchange.com/questions/117892/can-i-convert-a-string-to-catcode-11 by egreg
+% \fi
+% \begingroup
+%  \everyeof{\noexpand}
+%  \endlinechar=-1
+%  \xdef\currentjob{\scantokens\expandafter{\jobname}}
+% \endgroup
+%
+% \ifx\currentjob\guide\OnlyDescription\fi
+% \GetFileInfo{acmart.dtx}
+% \title{\LaTeX{} Class for the \emph{Association for Computing
+% Machinery}\thanks{\copyright 2016--2025, Association for Computing Machinery}}
+% \author{Boris Veytsman\thanks{%
+% \href{mailto:borisv@lk.net}{\texttt{borisv@lk.net}},
+% \href{mailto:boris@varphi.com}{\texttt{boris@varphi.com}}}}
+% \date{\filedate, \fileversion}
+% \maketitle
+% \begin{abstract}
+%   This package provides a class for typesetting publications of
+%   the Association for Computing Machinery.
+% \end{abstract}
+% \tableofcontents
+%
+% \clearpage
+%
+%\section{Introduction}
+%\label{sec:intro}
+%
+% The Association for Computing
+% Machinery\footnote{\url{http://www.acm.org/}} is the world's largest
+% educational and scientific computing society, which delivers
+% resources that advance computing as a science and a
+% profession.  It was one of the
+% early adopters of \TeX\ for its typesetting.
+%
+% It provided several different classes for a number of journals and
+% conference proceedings.  Unfortunately during the years since these
+% classes were written, the code was patched many times, and
+% supporting different versions of the classes became difficult.
+%
+% This new consolidated template package replaces all previous
+% independent class files and packages and provides a single
+% up-to-date LaTeX package with optional calls. The package uses only
+% free \TeX\ packages and fonts included in \TeX Live, Mik\TeX\ and
+% other popular \TeX\ distributions. The new ACM templates use a new
+% font set (libertine) which will need to be installed on your machine
+% before using the templates. Please download and install the
+% libertine font set before writing your paper. Fonts used in the
+% template cannot be substituted; margin adjustments are not allowed. 
+%
+%  I am grateful to
+%  Michael D.~Adams,
+%  Leif Andersen,
+%  Lawrence Christopher Angrave,
+%  Dirk Beyer,
+%  Andrew Black,
+%  Joachim Breitner,
+%  Yegor Bugayenko,
+%  Benjamin Byholm,
+%  John Collins,
+%  Roberto Di Cosmo,
+%  Nils Anders Danielsson,
+%  Michael Ekstrand,
+%  Matthew Fluet,
+%  Paolo G.~Giarrusso,
+%  Ben Greenman,
+%  Enrico Gregorio,
+%  Jamie Davis,
+%  Ulrike Fischer,
+%  Jason Hemann,
+%  Peter Kemp,
+%  Luis Leiva,
+%  Ben Liblit,
+%  Rholais Lii,
+%  LianTze Lim,
+%  Kuldeep S. Meel,
+%  Kai Mindermann,
+%  Frank Mittelbach,
+%  Serguei Mokhov,
+%  Ross Moore,
+%  John Owens,
+%  Joel Nider,
+%  Scott Pakin,
+%  Tobias Pape,
+%  Henning Pohl,
+%  Philip Quinn,
+%  Mathias Rav,
+%  Andreas Reichinger,
+%  Matteo Riondato,
+%  Craig Rodkin,
+%  Bernard Rous,
+%  Feras Saad,
+%  Kerry A. Seitz, Jr.,
+%  M Senthilkumar,
+%  David Shamma,
+%  Gabriel Scherer,
+%  Kartik Singhal,
+%  Christoph Sommer,
+%  Stephen Spencer,
+%  Shin Hwei Tan,
+%  Daniel Thomas,
+%  Shari Trewin,
+%  Zack Weinberg,
+%  John Wickerson
+%  and many others for their invaluable help.
+%
+% The development version of the package is available at
+% \url{https://github.com/borisveytsman/acmart}.
+%
+%\section{User's guide}
+%\label{sec:ug}
+%
+%
+% This class uses many commands and customizaton options, so it might
+% appear intimidating for a casual user.  Do not panic!  Many of these
+% commands and options can be safely left with their default values
+% or the values recommended by your conference or journal editors.  If
+% you have problems or questions, do not hesitate to ask me directly
+% or the community at \url{https://github.com/borisveytsman/acmart},
+% \url{https://tex.stackexchange.com} or the closest \TeX\ Users
+% Group.  The world-wide \TeX\ Users Group is at
+% \url{https://tug.org/}; please consider joining us if you use \TeX\
+% regularly.
+%
+%\subsection{Installation}
+%\label{sec:ug_install}
+%
+% Most probably, you already have this package installed in your
+% favorite \TeX\ distribution;  if not, you may want to upgrade.  You
+% may need to upgrade it anyway since this package uses a number of
+% relatively recent packages, especially the ones related to fonts.
+%
+% The latest released version of this package can be found on CTAN:
+% \url{https://www.ctan.org/pkg/acmart}.   The development version can
+% be found on GitHub: \url{https://github.com/borisveytsman/acmart}.
+% At this address you can file a bug report---or even contribute your
+% own enhancement by making a pull request.
+%
+% Please note that the version on Github is a development (or
+% experimental) version: please download it for testing new features.
+% The production version is the one on CTAN and ACM sites.
+%
+% Most users should not attempt to install this package themselves
+% but should rather rely on their \TeX\ distributions to provide it.  If you
+% decide to install the package yourself, follow the standard rules:
+% \begin{enumerate}
+% \item Run |latex acmart.ins|.  This will produce the file
+% |acmart.cls|
+% \item Put the files |acmart.cls|, |acm-jdslogo.png|,
+%   and |ACM-Reference-Format.bst|
+%   in places where \LaTeX{} can find them (see \cite{TeXFAQ} or
+%   the documentation for your \TeX{} system).\label{item:install}
+% \item Update the database of file names.  Again, see \cite{TeXFAQ}
+% or the documentation for your \TeX{} system for the system-specific
+% details.\label{item:update}
+% \item The file |acmart.pdf| provides the documentation for the
+% package.  (This is probably the file you are reading now.)
+% \end{enumerate}
+% As an alternative to items~\ref{item:install} and~\ref{item:update}
+% you can just put the files in the working directory where your
+% |.tex| file is.
+%
+%
+% This class uses a number of other packages.  They are included in all
+% major \TeX\ distributions (\TeX Live, Mac\TeX, Mik\TeX) of 2015 and
+% later, so you probably have them installed.  Just in case here is
+% the list of these packages:
+% \begin{itemize}
+% \item \textsl{amsart}, \url{https://ctan.org/pkg/amsart},
+% \item \textsl{babel}, \url{https://ctan.org/pkg/babel},
+% \item \textsl{balance}, \url{https://ctan.org/pkg/balance},
+% \item \textsl{booktabs}, \url{https://ctan.org/pkg/booktabs},
+% \item \textsl{caption}, \url{https://ctan.org/pkg/caption},
+% \item \textsl{cmap}, \url{https://ctan.org/pkg/cmap},
+% \item \textsl{comment}, \url{https://ctan.org/pkg/comment},
+% \item \textsl{doclicense}, \url{https://ctan.org/pkg/doclicense},
+% \item \textsl{draftwatermark}, \url{https://ctan.org/pkg/draftwatermark},
+% \item \textsl{environ}, \url{https://ctan.org/pkg/environ},
+% \item \textsl{etoolbox}, \url{https://ctan.org/pkg/etoolbox},
+% \item \textsl{fancyhdr}, \url{https://ctan.org/pkg/fancyhdr},
+% \item \textsl{float}, \url{https://ctan.org/pkg/float},
+% \item \textsl{fontenc}, \url{https://ctan.org/pkg/fontenc},
+% \item \textsl{framed}, \url{https://ctan.org/pkg/framed},
+% \item \textsl{geometry}, \url{https://ctan.org/pkg/geometry},
+% \item \textsl{graphicx}, \url{https://ctan.org/pkg/graphicx},
+% \item \textsl{hyperref}, \url{https://ctan.org/pkg/hyperref},
+% \item \textsl{hyperxmp}, \url{https://ctan.org/pkg/hyperxmp},
+% \item \textsl{iftex}, \url{https://ctan.org/pkg/iftex},
+% \item \textsl{libertine}, \url{https://ctan.org/pkg/libertine},
+% \item \textsl{manyfoot}, \url{https://ctan.org/pkg/manyfoot},
+% \item \textsl{microtype}, \url{https://ctan.org/pkg/microtype},
+% \item \textsl{natbib}, \url{https://ctan.org/pkg/natbib},
+% \item \textsl{newtxmath}, \url{https://ctan.org/pkg/newtxmath},
+% \item \textsl{pbalance}, \url{https://ctan.org/pkg/pbalance},
+% \item \textsl{refcount}, \url{https://ctan.org/pkg/refcount},
+% \item \textsl{setspace}, \url{https://ctan.org/pkg/setspace},
+% \item \textsl{totpages}, \url{https://ctan.org/pkg/totpages},
+% \item \textsl{unicode-math}, \url{https://ctan.org/pkg/unicode-math},
+% \item \textsl{xcolor}, \url{https://ctan.org/pkg/xcolor},
+% \item \textsl{xkeyval}, \url{https://ctan.org/pkg/xkeyval},
+% \item \textsl{xstring}, \url{https://ctan.org/pkg/xstring},
+% \item \textsl{zi4}, \url{https://ctan.org/pkg/zi4},
+% \item \textsl{zref-savepos}, \url{https://ctan.org/pkg/zref-savepos},
+% \item \textsl{zref-user}, \url{https://ctan.org/pkg/zref-user}.
+% \end{itemize}
+%
+%
+%\subsection{Invocation and options}
+%\label{sec:invocation}
+%
+% To use this class, put in the preamble of your document
+% \begin{quote}
+%   \cs{documentclass}\oarg{options}|{acmart}|
+% \end{quote}
+% There are several options corresponding to the type of the document and
+% its general appearance.  They are described below.  Generally
+% speaking, the options have |key=value| forms, for example,
+% \begin{verbatim}
+% \documentclass[format=acmsmall, screen=true, review=false]{acmart}
+% \end{verbatim}
+%
+%
+% The option |format| describes the format of the output.  There are
+% several possible values for this option, for example,
+% \begin{verbatim}
+%   \documentclass[format=acmtog]{acmart}
+% \end{verbatim}
+% Actually the words |format=| can be omitted, e.g.,
+% \begin{verbatim}
+%   \documentclass[acmtog, review=false]{acmart}
+% \end{verbatim}
+% The possible formats are listed in Table~\ref{tab:opts_format}.
+% Note that formats starting with |acm| are intended for journals,
+% transactions, and course materials, while formats starting with
+% |sig| are intended for proceedings published as books.
+%
+% Sometimes conference proceedings are published as a special issue
+% (or issues) of an ACM journal.  In this case, you should use the
+% journal format.  The templates |sample-acmsmall-conf.tex| and
+% |sample-acmtog-conf.tex| show how to enter conference information.
+% Note that you need to comment out |\acmJournal{...}| line for such
+% papers to get the conference information in the footers and headers.
+%
+% \begin{table}
+%   \centering
+%   \caption{The possible values for the \texttt{format} option}
+%   \label{tab:opts_format}
+%   \begin{tabularx}{\textwidth}{>{\ttfamily}lX}
+%     \toprule
+%     \normalfont Value & Meaning\\
+%     \midrule
+%   manuscript & A manuscript. This is the default. \\
+%       acmsmall & Small single-column format.  Used for ACMJCSS,
+%            ACMJDS, AILET, CIE, CSUR,
+%            FAC, GAMES, JACM, JATS,  JDIQ, JDS, JEA, JERIC,
+%            JETC, JRC, PACMCGIT, PACMHCI, PACMMOD, PACMNET,
+%            PACMPL, PACMSE, POMACS, TAAS, TACCESS, TACO, TAIS, TAISAP,
+%            TALG, TALLIP (formerly TALIP), TCPS, TDS,
+%            TEAC, TECS, TELO, THRI, TIIS, TIOT, TISSEC, TIST, TKDD, TMIS,
+%            TOCE, TOCHI, TOCL,
+%            TOCS, TOCT, TODAES, TODS, TOIS, TOIT, TOMACS, TOMM (formerly
+%            TOMCCAP), TOMPECS, TOMS, TOPC, TOPLAS, TOPML, TOPS, TORS
+%            TOS, TOSEM, TOSN, TQC, TRETS,
+%            TSAS, TSC, TSLP, and TWEB, including special issues. \\
+%   acmlarge  & Large single-column format.  Used for DLT, DTRAP, HEALTH,
+%           IMWUT, JOCCH, and TAP, including special issues. \\
+%   acmtog   & Large double-column format.  Used for
+%          TOG, including annual conference Technical Papers.\\
+%   sigconf & Proceedings format for most ACM
+%          conferences (with the exception of SIGPLAN) and all ICPS
+%          volumes.\\
+%   sigplan & Proceedings format for SIGPLAN conferences.\\
+%   acmengage & ACM EngageCSEdu Course materials.\\
+%   acmcp & ACM cover page. \\
+%   \bottomrule
+%   \end{tabularx}
+% \end{table}
+%
+% Starting in 2020, ACM retired formats |sigchi| and |sigchi-a|.
+% SIGCHI conferences now use |sigconf| format for their publications.
+% If a file uses |sigchi| format, a warning is issued, and the format
+% is automatically switched to |sigconf|.  Format |sigchi-a| can be
+% used for non-ACM documents only (see Section~\ref{sec:sigchi-a}).
+% The format |acmcp| is used for ACM cover pages discussed in
+% Section~\ref{sec:ug_acmcp}.
+%
+%
+% There are several Boolean options that can take |true| or |false|
+% values.  They are listed in Table~\ref{tab:opts_bool}.  The words
+% |=true| can be omitted when setting a Boolean option, so instead of
+% |screen=true| one can write just |screen|, for example,
+% \begin{verbatim}
+% \documentclass[acmsmall, screen, review]{acmart}
+% \end{verbatim}
+% The option |review| is useful when combined with the |manuscript| format
+% option.  It provides a version suitable for reviewers and
+% copy editors.
+%
+% Two samples in the |samples| directory, |manuscript| and
+% |acmsmall-submission|, show manuscripts formatted for submission to
+% ACM.
+%
+% The default for the option |screen| depends on the publication.  At
+% present it is |false| for all publications \emph{but} PACM, since
+% PACM is now electronic-only.  Thus PACM titles~(see
+% Table~\ref{tab:pubs}) set this option to |true|.  In the future this
+% option may involve additional features suitable for on-screen
+% versions of articles.
+%
+% The option |natbib| is used when the corresponding
+% \BibTeX\ style is based on |natbib|.  In most cases you do not need
+% to set it.  See
+% Section~\ref{sec:ug_bibliography}.
+%
+% The option |anonymous| is used
+% for anonymous review processes and causes all author information to be
+% obscured.
+%
+% The option |timestamp| is used to include a time stamp in the
+% footer of each page.  When preparing a document, this can help avoid
+% confusing different revisions.  The footer also includes the page range of
+% the document.  This helps detect missing pages in hard copies.
+%
+% The option |authordraft| is intended for author's drafts that are not
+% intended for distribution.  It typesets a copyright block to give the
+% author an idea of its size and the overall size of the paper but
+% overprints it with the phrase ``Unpublished working draft. Not for
+% distribution.'', which is also used as a watermark.  This option sets
+% |timestamp| and |review| to |true|, but these can be
+% overriden by setting these options to |false| \emph{after}
+% setting |authordraft| to |true|.
+%
+% The option |balance| determines whether the last page in the two
+% column mode has balanced columns.  By default it is |true|; however,
+% it may lead to problems for some documents.  When there are many
+% figures near the end of the document, the attempts to balance
+% columns may lead to the loss of the figures.  Set this option to |false| if
+% you encounter problems.   An alternative is the
+% (experimental) option |pbalance|, which uses the new package
+% |pbalance|.  You may want to try |pbalance=true| to see if you get
+% better results.  
+%
+% The option |urlbreakonhyphens| determines whether URLs can be split
+% between lines after hyphens.  By default it is true.  Set it to
+% |false| to disallow these breaks.
+%
+% \begin{table}
+%   \centering
+%   \caption{Boolean options}
+%   \label{tab:opts_bool}
+%   \begin{tabularx}{\textwidth}{>{\ttfamily}l>{\ttfamily}lX}
+%     \toprule
+%     \normalfont Option & \normalfont Default & Meaning\\
+%     \midrule
+%     review & false & A review version: lines are numbered and
+%     hyperlinks are colored\\
+%     screen & {\rmfamily see text} & A screen version:
+%     hyperlinks are colored\\
+%     natbib & true & Whether to use the |natbib| package (see
+%     Section~\ref{sec:ug_bibliography})\\
+%     anonymous & false & Whether to make author(s) anonymous\\
+%     authorversion & false & Whether to generate a special
+%     version for the authors' personal use or posting (see
+%     Section~\ref{sec:ug_topmatter})\\
+%     nonacm & false & Use the class typesetting options for
+%     a non-ACM document, which will not include the conference/journal
+%     header and footers.  Currenly such documents allow only a
+%     Creative Commons license.\\
+%     timestamp & false & Whether to put a time stamp in the
+%     footer of each page\\
+%     authordraft & false & Whether author's-draft mode is enabled\\
+%     acmthm & true & Whether to define theorem-like environments, see
+%                       Section~\ref{sec:ug_theorems}\\
+%     balance & true & Whether to balance the last page in two column
+%                        mode\\
+%     pbalance & false & Whether to balance the last page in two column
+%                        mode using pbalance package\\
+%     urlbreakonhyphens & true & Whether to break urls on hyphens\\
+%     \bottomrule
+%   \end{tabularx}
+% \end{table}
+%
+% The option |language| is used to define the languages for the
+% multi-language papers.  It is discussed in
+% Section~\ref{sec:ug_i13n}. 
+%
+%\subsection{Top matter}
+%\label{sec:ug_topmatter}
+%
+% A number of commands set up \emph{top matter} or (in
+% computer science jargon) \emph{metadata} for an article.  They
+% establish the publication name, article title, authors, DOI and
+% other data.  Some of these commands, like \cs{title} and \cs{author},
+% should be put by the authors.  Others, like \cs{acmVolume} and
+% \cs{acmDOI}---by the editors.  Below we describe these commands and
+% mention who should issue them.  These macros should be used
+% \emph{before} the \cs{maketitle} command.  Note that in previous
+% versions of ACM classes some of these commands should be used before
+% \cs{maketitle}, and some after it. Now they all must be used before
+% \cs{maketitle}.
+%
+%
+% This class internally loads the |amsart| class, so many top-matter
+% commands are inherited from |amsart|~\cite{Downes04:amsart}.
+%
+% \DescribeMacro{\acmJournal}%
+% The macro \cs{acmJournal}\marg{shortName} sets the name of the
+% journal or transaction for journals and transactions.  The argument
+% is the short name of the publication \emph{in uppercase}, for
+% example,
+% \begin{verbatim}
+% \acmJournal{TOMS}
+% \end{verbatim}
+% The currently recognized journals are listed in
+% Table~\ref{tab:pubs}.  Note that conference proceedings published in
+% \emph{book} form do not set this macro.
+%
+%
+%
+% \DescribeMacro{\acmConference}%
+% The macro
+% \cs{acmConference}\oarg{short name}\marg{name}\marg{date}\marg{venue} is
+% used for conference proceedings published in the book form.  The
+% arguments are the following:
+% \begin{description}
+% \item[short name:] the abbreviated name of the conference (optional).
+% \item[name:] the name of the conference.
+% \item[date:] the date(s) of the conference.
+% \item[venue:] the place of the conference.
+% \end{description}
+% Examples:
+% \begin{verbatim}
+% \acmConference[TD'15]{Technical Data Conference}{November
+% 12--16}{Dallas, TX, USA}
+% \acmConference{SA'15 Art Papers}{November 02--06, 2015}{Kobe, Japan}
+% \end{verbatim}
+%
+% \DescribeMacro{\acmBooktitle}%
+% By default we assume that conference proceedings are published
+% in the book named \emph{Proceedings of \textsc{CONFERENCE}}, where
+% \textsc{CONFERENCE} is the name of the conference infe

@@ -29,6 +29,7 @@ try {
   await rm(standaloneEntry, { force: true });
 }
 await cp(join(projectRoot, "apps", "server", "dist", "skills"), join(output, "skills"), { recursive: true });
+await cp(join(projectRoot, "apps", "server", "dist", "templates", "bundled"), join(output, "bundled"), { recursive: true });
 await Bun.write(join(output, "README.md"), `# FastWrite
 
 ## Run

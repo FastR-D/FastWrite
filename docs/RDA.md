@@ -7,7 +7,9 @@ FastWrite 是面向安全与 AI 顶会论文的 AI 写作工作台。用户始�
 1. **自动补全（Completion）**：在光标处预测下一句或 LaTeX 内容。
 2. **Agent 初稿与修改**：生成论文初稿，继续未完成内容，或执行跨文件修改。
 3. **逐段精修（Revise）**：围绕当前句子、段落或 Section 连续打磨，用户确认后再写入。
-4. **自动审稿与问题解决（Review）**：根据编译后的 PDF 提出审稿意见，并调用 Agent 或 Revise 协助解决。
+4. **自动审稿与问题解决（Review）**：根据当前源码及可选的临时 PDF 预览文本提出审稿意见，并调用 Agent 或 Revise 协助解决。
+
+Review 以请求时读取到的 Workspace 源码为主要输入；PDF 页面文本仅按请求临时传递且有界，不保存 PDF、页面图、哈希或冻结快照。没有页面文本时自动降级为源码 Review，报告标记实际输入类型。
 
 四项功能按明确边界共享 Writing Skill、Paper Memory 和版本信息。Agent 与 Revise 的正文修改统一使用 ChangeSet；Completion 只有在用户按下 `Tab` 后插入；Review 不直接写正文。任何流程都不得编造实验、结果或引用。
 
@@ -60,7 +62,7 @@ Revise 只读取当前选区、同一文件的前后文、精确 Section、Writi
 
 ### 3.4 自动审稿与问题解决
 
-Review 必须以当前项目版本成功编译出的 **PDF** 为审稿正文，并按 Writing Skill 生成总体评价、优缺点、下一步和结构化审稿意见。冻结快照必须绑定实际 PDF artifact 与摘要；源码、Outline 和 SyncTeX 只用于把 PDF 中的证据定位回可编辑源码，不能代替 PDF 参与审稿判断。
+Review 按请求发生时读取的当前源码生成总体评价、优缺点、下一步和结构化审稿意见；可选接收有界 PDF 预览文本作为辅助，不创建冻结快照。
 
 一条**审稿意见（Review Issue）**是报告中的一个独立、可解决问题，包含类别、严重级别、优先级、理由、影响、建议，以及 PDF 页码和原文证据。能够可靠映射时，再附加源码路径和行号。审稿意见支持筛选、手工新增、合并重复项和状态跟踪。
 
@@ -81,7 +83,7 @@ Review 必须以当前项目版本成功编译出的 **PDF** 为审稿正文，�
 
 ### Paper Memory
 
-Memory 只保存有源码证据且经用户审核的论文核心、Section 摘要和事实。Agent 使用完整已审核 Memory 与 User Instructions；Completion 和 Revise 只使用论文核心及当前 Section；Review 独立读取冻结 PDF，不使用 Memory。
+Memory 只保存有源码证据且经用户审核的论文核心、Section 摘要和事实。Agent 使用完整已审核 Memory 与 User Instructions；Completion 和 Revise 只使用论文核心及当前 Section；Review 不使用 Memory。
 
 ### ChangeSet 与版本
 
@@ -116,7 +118,7 @@ Rollback 必须基于内部 Git，采用 `revert` 语义而不是 `reset`：对�
 | 自动补全 | 自动意图、内联虚文本、取消与过期保护、Tab/Esc |
 | Agent 初稿与修改 | 计划确认、多文件 ChangeSet、逐 hunk 审批、编辑与回滚 |
 | 逐段精修 | 任意选区/当前 Section、连续对话、Diff、Accept/Reject/Rollback |
-| 自动审稿闭环 | 冻结 PDF、页码证据、Revise/Agent 路由、新 PDF 针对性复审 |
+| 自动审稿闭环 | 当前源码、可选临时 PDF 预览、证据摘录、Revise/Agent 路由、针对性复审 |
 | Git 历史与同步 | 内部聚合 checkpoint、Git-based revert、单一手动 Sync、单次最多一条公开 commit、三方冲突处理 |
 
 P1 不新增更多 AI 模式，不恢复自动分段 Editor，也不建设复杂 Prompt 管理器。

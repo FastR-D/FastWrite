@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Check, Database, GripVertical, LoaderCircle, Maximize2, Minimize2, Pencil, RotateCcw, Send, ShieldCheck, Sparkles, Trash2, Workflow, X } from "lucide-react";
+import { Bot, Check, Database, GripVertical, LoaderCircle, Maximize2, Minimize2, Pencil, RotateCcw, Send, ShieldCheck, Sparkles, Trash2, Workflow, X, Search } from "lucide-react";
 import type { ChangeSet, PaperProject, ReviewIssue, ReviseCommandId, ReviseTurn, TextSelection } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { diffWords } from "../../lib/wordDiff";
 import { Button } from "../ui/Button";
 import { ReviewDialog } from "./ReviewDialog";
 import { MemoryDialog } from "./MemoryDialog";
+import { ResearchDialog } from "./ResearchDialog";
 import { AgentTaskWorkspace, type AgentTaskSeed } from "./AgentTaskDialog";
 import type { CompileStateReport } from "./PdfPane";
 import { compileRepairObjective, compileRepairPath, type CompileRepairRequest } from "./compileRepair";
@@ -50,6 +51,7 @@ export function AiWorkspace({ project, selection, sectionSelection, height, full
   const [error, setError] = useState("");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [researchOpen, setResearchOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"revise" | "agent">("revise");
   const [agentSeed, setAgentSeed] = useState<AgentTaskSeed>({});
   const [editingProposal, setEditingProposal] = useState(false);
@@ -255,10 +257,11 @@ export function AiWorkspace({ project, selection, sectionSelection, height, full
         <nav className="ai-workspace__tabs" aria-label="AI writing mode"><button className={activeTab === "revise" ? "is-active" : ""} onClick={() => setActiveTab("revise")}><Sparkles /> Revise</button><button className={activeTab === "agent" ? "is-active" : ""} onClick={() => { setAgentSeed(selection?.path ? { path: selection.path } : {}); setActiveTab("agent"); }}><Workflow /> Agent</button></nav>
         <div className="ai-workspace__tools">
           <button className="ai-header-action" onClick={() => setMemoryOpen(true)}><Database /> Memory</button>
+          <button className="ai-header-action" onClick={() => setResearchOpen(true)}><Search /> Research</button>
           <button className="ai-header-action" onClick={() => setReviewOpen(true)}><ShieldCheck /> Review</button>
           {activeTab === "revise" ? <button className="ai-header-action" title="Clear current conversation" onClick={clearConversation}><Trash2 /> Clear</button> : null}
           <button className="ai-header-action" title={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={onToggleFullscreen}>{fullscreen ? <Minimize2 /> : <Maximize2 />}</button>
-          <span className="ai-skill"><Bot /> {project.skill.name} · v{project.skill.version}</span>
+          <span className="ai-skill"><Bot /> {project.skill.name}</span>
         </div>
       </header>
       <div className={`ai-workspace__body${resizingWidth ? " is-resizing-width" : ""}`} style={fullscreen ? { width: `min(${fullscreenWidth}px, 100%)` } : undefined}>
@@ -296,6 +299,7 @@ export function AiWorkspace({ project, selection, sectionSelection, height, full
     </section>
     <ReviewDialog open={reviewOpen} project={project} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setReviewOpen(false)} onNavigate={onNavigate} onReviseLocally={(issue) => void beginLocalRevision(issue)} onReviseWithAgent={(issueIds, objective) => { setAgentSeed({ issueIds, objective }); setReviewOpen(false); setActiveTab("agent"); }} />
     <MemoryDialog open={memoryOpen} project={project} onClose={() => setMemoryOpen(false)} onNavigate={onNavigate} onChanged={onWorkspaceChanged} />
+    <ResearchDialog open={researchOpen} project={project} onClose={() => setResearchOpen(false)} />
   </>);
 }
 

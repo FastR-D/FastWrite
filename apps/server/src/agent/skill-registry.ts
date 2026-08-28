@@ -6,6 +6,7 @@ import { templateForVenue } from "../templates/latex-template-service";
 export interface LoadedSkill {
   instructions: string;
   venueInstructions: string;
+  venueRules?: { version?: string; sourceUrl?: string; stages?: string[]; checks?: Array<{ id: string; category: string; pattern?: string; message?: string }> };
 }
 
 export class SkillRegistry {
@@ -23,9 +24,10 @@ export class SkillRegistry {
     if (!target) return { instructions: combinedInstructions, venueInstructions: profileInstructions };
     if (target.domain !== skill.id || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(target.venueId)) return { instructions: combinedInstructions, venueInstructions: profileInstructions };
     const venueInstructions = await readFile(join(directory, "references", "venues", `${target.venueId}.md`), "utf8");
+    const venueRules = await readFile(join(directory, "references", "venues", `${target.venueId}.rules.json`), "utf8").then((raw) => JSON.parse(raw) as LoadedSkill["venueRules"]).catch(() => undefined);
     const metadata = parseVenueFrontmatter(venueInstructions, skill.id);
-    const targetContext = `Selected publication target: ${metadata?.label ?? target.venueId}\nManuscript stage: ${target.stage}\nTrack: ${target.track ?? "main or regular article"}`;
-    return { instructions: combinedInstructions, venueInstructions: `${profileInstructions}\n\n${specializationInstructions}\n\n${targetContext}\n\n${venueInstructions}` };
+    const targetContext = `Selected publication target: ${metadata?.label ?? target.venueId}\nTemplate year: ${target.year ?? "current verified edition"}\nManuscript stage: ${target.stage}\nTrack: ${target.track ?? "main or regular article"}`;
+    return { instructions: combinedInstructions, venueInstructions: `${profileInstructions}\n\n${specializationInstructions}\n\n${targetContext}\n\n${venueInstructions}`, ...(venueRules ? { venueRules } : {}) };
   }
 
   async catalog(): Promise<PublicationVenueOption[]> {

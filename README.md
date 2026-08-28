@@ -13,6 +13,8 @@ bun run dev
 
 浏览器 WASM 编译器会在编译时自动识别缺少的 TeX 包，由 FastWrite Server 从兼容的 TeX Live/CTAN 源按需下载；下载结果会在服务端和浏览器中缓存，不需要预先同步 `local-packages`。
 
+选定 venue 的 LaTeX 模板首次成功获取后会缓存到 `FASTWRITE_DATA_DIR/templates/`（未配置时为默认数据目录）；后续初始化直接使用本地缓存，不会重复下载。
+
 ## 生产运行
 
 ```bash

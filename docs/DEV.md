@@ -73,13 +73,13 @@ AiWorkspace/Revise -> POST /api/projects/:id/revisions
 
 ```text
 ReviewDialog -> POST /api/projects/:id/reviews
-             -> ReviewService.run -> ReviewSnapshot + ReviewReport + Issues
+             -> ReviewService.run -> ReviewReport + Issues（可选请求期 PDF 预览文本）
 Issue -> Revise locally
       -> Fix with Agent -> AgentTaskService -> IssueResolution
       -> compile -> targeted re-review
 ```
 
-目标设计要求 `ReviewService` 读取当前 `projectVersion` 对应的 PDF artifact；源码、Outline 和 SyncTeX 只用于把 PDF 页码与原文映射回源码。ReviewEvidence 应保存 PDF 页码与 PDF excerpt，并可选保存源码路径和行号。
+Review 新契约：服务端只读取请求发生时的当前源码；浏览器提交的 pageText 有页数、单页和总大小上限，仅在请求内存中使用，不进入数据库、日志或 Agent audit trail。新 Review 不写入 ReviewSnapshot，旧快照仅兼容读取。
 
 当前实现尚未达到该设计：浏览器编译的 PDF 只保存在前端 Blob URL；服务器编译返回 `pdfBase64` 后也不持久化。`CompileRecord` 只有状态和摘要，`ReviewAgentInput` 实际只有 `documents + outline`，targeted re-review 同样只读取源码；`sourceOnly` 还可以生成正式报告。因此现状是源码审稿原型，不是 PDF 审稿。
 

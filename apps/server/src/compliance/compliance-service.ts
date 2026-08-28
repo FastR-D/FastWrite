@@ -4,9 +4,24 @@ import type { WorkspaceService } from "../workspace/workspace-service";
 
 interface ComplianceCheckInput { pdfBase64?: string; renderedPages?: number; mainBodyPages?: number; verifyCitationsOnline?: boolean }
 interface BibEntry { key: string; type: string; fields: Record<string, string>; path: string; line: number }
+export interface ComplianceRuleContext { projectId: string; projectVersion: number; documents: Array<{ path: string; content: string }>; stage?: string }
+export interface ComplianceRule {
+  id: string;
+  category: string;
+  sourceUrl?: string;
+  stages?: string[];
+  check(context: ComplianceRuleContext): ComplianceFinding | ComplianceFinding[];
+}
 
 export class ComplianceService {
+  private readonly rules: ComplianceRule[] = [];
   constructor(private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry) {}
+
+  registerRule(rule: ComplianceRule): () => void {
+    if (!/^[a-z0-9][a-z0-9._-]{0,99}$/.test(rule.id) || !rule.category || typeof rule.check !== "function") throw new Error("Invalid compliance rule");
+    this.rules.push(rule);
+    return () => { const index = this.rules.indexOf(rule); if (index >= 0) this.rules.splice(index, 1); };
+  }
 
   async check(projectId: string, input: ComplianceCheckInput = {}): Promise<ComplianceReport> {
     const project = this.workspaces.getProject(projectId);
@@ -17,8 +32,22 @@ export class ComplianceService {
     const renderedPages = validPageCount(input.renderedPages) ?? (input.pdfBase64 ? pdfPageCount(input.pdfBase64) : undefined);
     const mainBodyPages = validPageCount(input.mainBodyPages);
     const findings: ComplianceFinding[] = [];
+    if (project.publicationTarget) {
+      const loaded = await this.skills.load(project.skill, project.publicationTarget);
+      const source = documents.map((document) => document.content).join("\n");
+      for (const rule of loaded.venueRules?.checks ?? []) {
+        let matched = false;
+        try { matched = rule.pattern ? new RegExp(rule.pattern, "i").test(source) : false; } catch { findings.push({ id: `rule:${rule.id}`, category: rule.category, status: "unresolved", message: "Venue rule pattern is invalid; verify the sidecar rule definition." }); continue; }
+        findings.push({ id: `rule:${rule.id}`, category: rule.category, status: matched ? "pass" : "unresolved", message: rule.message ?? (matched ? `Rule '${rule.id}' matched.` : `Rule '${rule.id}' could not be established deterministically.`), ...(loaded.venueRules?.sourceUrl ? { sourceUrl: loaded.venueRules.sourceUrl } : {}) });
+      }
+    }
     findings.push(...venueFindings(venue, tex, renderedPages, mainBodyPages, project.publicationTarget?.stage));
     findings.push(...commentFindings(tex, project.publicationTarget?.stage));
+    const ruleContext: ComplianceRuleContext = { projectId, projectVersion: project.version, documents, ...(project.publicationTarget?.stage ? { stage: project.publicationTarget.stage } : {}) };
+    for (const rule of this.rules) if (!rule.stages || rule.stages.includes(project.publicationTarget?.stage ?? "submission")) {
+      const result = rule.check(ruleContext);
+      for (const finding of Array.isArray(result) ? result : [result]) findings.push({ ...finding, id: finding.id || rule.id, category: finding.category || rule.category, ...(finding.sourceUrl || !rule.sourceUrl ? {} : { sourceUrl: rule.sourceUrl }) });
+    }
     const citations = citedKeys(tex);
     const entries = parseBibliography(documents);
     findings.push(...referenceFindings(citations, entries));

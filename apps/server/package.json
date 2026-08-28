@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
-    "build": "bun build src/server.ts --outdir dist --target bun && rm -rf dist/skills && cp -R src/skills dist/skills",
+    "build": "bun build src/server.ts --outdir dist --target bun && rm -rf dist/skills dist/templates && cp -R src/skills dist/skills && mkdir -p dist/templates && cp -R src/templates/bundled dist/templates/bundled",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

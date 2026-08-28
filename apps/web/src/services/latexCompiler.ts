@@ -1,6 +1,6 @@
 import type { SiglumCompiler } from "@siglum/engine";
 import xzwasmUrl from "xzwasm/dist/package/xzwasm.min.js?url";
-import { COMPILER_RESOURCE_VERSION, compilerPackageProgress, compilerResourceProgress, resolveCompilerBundles, type CompilerBundleManifest } from "./compilerResources";
+import { COMPILER_BUNDLES_URL, COMPILER_RESOURCE_VERSION, compilerDependencyPackages, compilerFontPackages, compilerPackageProgress, compilerResourceProgress, resolveCompilerBundles, type CompilerBundleManifest } from "./compilerResources";
 
 export interface BrowserCompileResult {
   success: boolean;
@@ -34,7 +34,7 @@ async function instance(): Promise<SiglumCompiler> {
   if (!compiler) {
     const { SiglumCompiler } = await import("@siglum/engine");
     compiler = new SiglumCompiler({
-      bundlesUrl: "/bundles",
+      bundlesUrl: COMPILER_BUNDLES_URL,
       wasmUrl: "/busytex.wasm",
       workerUrl: "/worker.js",
       xzwasmUrl,
@@ -78,11 +78,13 @@ export async function compileLatex(source: string, additionalFiles: Record<strin
   const controller = new AbortController();
   resourceAbortController = controller;
   try {
-    const networkSummary = await preloadCompilerResources(source, controller.signal);
+    const prescannedSource = withDependencyPrescan(source, additionalFiles);
+    const networkSummary = await preloadCompilerResources(prescannedSource, additionalFiles, controller.signal);
     await initializeCompiler();
     logMessages = [];
     const activeCompiler = await instance();
-    const result = await activeCompiler.compile(source, {
+    await preloadFontMetrics(activeCompiler, compilerFontPackages(source, additionalFiles));
+    const result = await activeCompiler.compile(prescannedSource, {
       additionalFiles,
       useCache: Object.keys(additionalFiles).length === 0
     });
@@ -96,6 +98,14 @@ export async function compileLatex(source: string, additionalFiles: Record<strin
     };
   } finally {
     if (resourceAbortController === controller) resourceAbortController = null;
+  }
+}
+
+async function preloadFontMetrics(activeCompiler: SiglumCompiler, packages: string[]): Promise<void> {
+  for (const packageName of packages) {
+    notifyProgress({ stage: "packages", detail: `Loading TeX font metrics for ${packageName}…` });
+    const result = await activeCompiler.ctanFetcher.fetchPackage(packageName);
+    if (!result) throw new Error(`Could not load required TeX font metrics for ${packageName}`);
   }
 }
 
@@ -146,14 +156,24 @@ function notifyProgress(progress: CompilerProgress) {
   for (const listener of progressListeners) listener(progress);
 }
 
-async function preloadCompilerResources(source: string, signal: AbortSignal): Promise<string> {
+function withDependencyPrescan(source: string, additionalFiles: Record<string, string | Uint8Array>): string {
+  const packages = compilerDependencyPackages(source, additionalFiles);
+  if (!packages.length) return source;
+  return `${source}\n${packages.map((packageName) => `% \\RequirePackage{${packageName}}`).join("\n")}`;
+}
+
+async function preloadCompilerResources(source: string, additionalFiles: Record<string, string | Uint8Array>, signal: AbortSignal): Promise<string> {
+  const previousVersion = localStorage.getItem(NETWORK_VERSION_KEY);
+  if (previousVersion && previousVersion !== COMPILER_RESOURCE_VERSION && localStorage.getItem(NETWORK_FORCE_REFRESH_KEY) !== "1") {
+    await repairCompilerCache();
+  }
   if (localStorage.getItem(NETWORK_VERSION_KEY) === COMPILER_RESOURCE_VERSION) return `WASM/bundle cache version ${COMPILER_RESOURCE_VERSION} reused without resource downloads.`;
   const forceRefresh = localStorage.getItem(NETWORK_FORCE_REFRESH_KEY) === "1";
   notifyProgress({ stage: "resources", detail: "Inspecting WASM and TeX bundle resources…" });
-  const manifestResponse = await fetch("/bundles/bundles.json", { signal, cache: forceRefresh ? "reload" : "default" });
+  const manifestResponse = await fetch(`${COMPILER_BUNDLES_URL}/bundles.json`, { signal, cache: forceRefresh ? "reload" : "default" });
   if (!manifestResponse.ok) throw new Error("TeX bundle manifest is unavailable");
   const manifest = await manifestResponse.json() as CompilerBundleManifest;
-  const resources = ["/busytex.wasm", ...resolveCompilerBundles(source, manifest, EAGER_BUNDLES).map((bundle) => `/bundles/${bundle}.data.gz`)];
+  const resources = ["/busytex.wasm", ...resolveCompilerBundles(source, manifest, EAGER_BUNDLES, additionalFiles).map((bundle) => `${COMPILER_BUNDLES_URL}/${bundle}.data.gz`)];
   const sizes = await Promise.all(resources.map(async (url) => {
     const response = await fetch(url, { method: "HEAD", signal, cache: forceRefresh ? "reload" : "default" });
     if (!response.ok) throw new Error(`Could not inspect compiler resource '${url}'`);

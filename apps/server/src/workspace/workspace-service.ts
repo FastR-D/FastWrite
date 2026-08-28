@@ -66,6 +66,13 @@ export class WorkspaceService {
     return project;
   }
 
+  async deleteProject(id: string): Promise<void> {
+    this.getProject(id);
+    const projectDirectory = join(this.projectsDirectory, id);
+    await rm(projectDirectory, { recursive: true, force: true });
+    await this.database.deleteProject(id);
+  }
+
   workspaceRoot(id: string): string {
     this.getProject(id);
     return join(this.projectsDirectory, id, "workspace");
@@ -281,6 +288,10 @@ export class WorkspaceService {
         project.updatedAt = timestamp;
         project.version += 1;
       }
+      for (const claim of state.paperClaims.filter((candidate) => candidate.projectId === id && (candidate.anchor.path === from.relativePath || candidate.anchor.path.startsWith(`${from.relativePath}/`)))) {
+        claim.anchorStatus = "stale";
+        claim.updatedAt = timestamp;
+      }
     });
     await this.snapshotHistory(id, `Rename ${from.relativePath} to ${to.relativePath}`);
   }
@@ -305,6 +316,10 @@ export class WorkspaceService {
       if (stored) {
         stored.updatedAt = now();
         stored.version += 1;
+      }
+      for (const claim of state.paperClaims.filter((candidate) => candidate.projectId === id && (candidate.anchor.path === target.relativePath || candidate.anchor.path.startsWith(`${target.relativePath}/`)))) {
+        claim.anchorStatus = "orphaned";
+        claim.updatedAt = now();
       }
     });
     await this.snapshotHistory(id, `Delete ${target.relativePath}`);
@@ -484,6 +499,10 @@ export class WorkspaceService {
       if (project) {
         project.updatedAt = updatedAt;
         project.version += 1;
+      }
+      for (const claim of state.paperClaims.filter((candidate) => candidate.projectId === id && candidate.anchor.path === path && candidate.anchor.fileVersion < version)) {
+        claim.anchorStatus = "stale";
+        claim.updatedAt = updatedAt;
       }
     });
   }

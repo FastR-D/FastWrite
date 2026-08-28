@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { ComplianceFinding, DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection } from "@fastwrite/shared";
+import type { ComplianceFinding, DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection, EvidenceDependency } from "@fastwrite/shared";
 
 export interface ReviseAgentInput {
   instruction: string;
@@ -27,6 +27,7 @@ export interface AgentProvider {
   planDraft?(input: DraftAgentInput, signal?: AbortSignal): Promise<{ outline: DraftOutlineSection[] }>;
   generateDraft?(input: DraftAgentInput & { outline: DraftOutlineSection[]; mainDocument: string }, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }>;
   review?(input: ReviewAgentInput, signal?: AbortSignal): Promise<ReviewAgentOutput>;
+  reviewPass?(input: ReviewAgentInput & { pass: "mechanical" | "evidence" | "domain" | "venue" }, signal?: AbortSignal): Promise<ReviewAgentOutput>;
   extractMemory?(input: MemoryAgentInput, signal?: AbortSignal): Promise<MemoryAgentOutput>;
   summarizeMemory?(input: MemoryHierarchyInput, signal?: AbortSignal): Promise<MemoryHierarchyOutput>;
   polishMemory?(input: MemoryPolishInput, signal?: AbortSignal): Promise<{ content: string }>;
@@ -56,6 +57,8 @@ export interface AgentTaskPlanOutput {
   validation: string[];
   sectionBudget?: Array<{ section: string; targetPages?: number; purpose: string }>;
   venueChecks?: Array<{ requirement: string; status: "satisfied" | "missing" | "uncertain" | "not-applicable"; evidencePaths: string[]; action: string }>;
+  evidenceDependencies?: EvidenceDependency[];
+  missingEvidence?: string[];
 }
 export interface AgentTaskExecutionInput extends AgentTaskInput, AgentTaskPlanOutput { targetPath: string }
 
@@ -98,6 +101,7 @@ export interface ReviewAgentInput {
   skill: PaperSkillRef;
   skillInstructions: string;
   venueInstructions: string;
+  pdfPageText?: string[];
 }
 
 export interface ReviewAgentOutput {
@@ -249,6 +253,10 @@ export class OpenAIAgentProvider implements AgentProvider {
       },
       signal
     );
+  }
+
+  async reviewPass(input: ReviewAgentInput & { pass: "mechanical" | "evidence" | "domain" | "venue" }, signal?: AbortSignal): Promise<ReviewAgentOutput> {
+    return this.review({ ...input, venueInstructions: `${input.venueInstructions}\n\nReview pass: ${input.pass}. Restrict findings to this pass and do not duplicate unrelated concerns.` }, signal);
   }
 
   async extractMemory(input: MemoryAgentInput, signal?: AbortSignal): Promise<MemoryAgentOutput> {

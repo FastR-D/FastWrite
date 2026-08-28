@@ -38,6 +38,8 @@ import type {
   ComplianceReport,
   TargetVenue,
   WorkspaceTreeNode
+  ,ResearchWork, ResearchRun, ProjectResearchWork, PaperClaim, SourceEvidence
+  ,AlignmentFinding
 } from "@fastwrite/shared";
 
 export class ApiClientError extends Error {
@@ -71,6 +73,10 @@ function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestI
 }
 
 export const api = {
+  agentSettings: {
+    get: (signal?: AbortSignal) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string }>("/api/agent-settings", signal ? { signal } : undefined),
+    save: (body: { apiKey: string; baseURL?: string; model?: string }) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string }>("/api/agent-settings", jsonInit("PUT", body))
+  },
   venues: {
     list: (signal?: AbortSignal) => request<PublicationVenueOption[]>("/api/venues", signal ? { signal } : undefined)
   },
@@ -90,6 +96,7 @@ export const api = {
     addFile: (id: string, path: string, file: File, signal?: AbortSignal) => request<PaperFile>(`/api/projects/${id}/assets?path=${encodeURIComponent(path)}`, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: file, ...(signal ? { signal } : {}) }),
     renameFile: (id: string, from: string, to: string) => request<void>(`/api/projects/${id}/files`, jsonInit("PATCH", { from, to })),
     deleteFile: (id: string, path: string) => request<void>(`/api/projects/${id}/files?path=${encodeURIComponent(path)}`, { method: "DELETE" })
+    ,delete: (id: string) => request<void>(`/api/projects/${id}`, { method: "DELETE" })
   },
   uploads: {
     create: (body: { projectName: string; mainDocument: string; venue: string; publicationTarget?: PublicationTarget; sourceName: string; entries: UploadManifestEntry[] }, signal?: AbortSignal) => request<UploadSession>("/api/upload-sessions", jsonInit("POST", body, signal)),
@@ -165,5 +172,26 @@ export const api = {
   },
   compliance: {
     check: (projectId: string, body: { renderedPages?: number; mainBodyPages?: number; verifyCitationsOnline?: boolean }, signal?: AbortSignal) => request<ComplianceReport>(`/api/projects/${projectId}/compliance-checks`, jsonInit("POST", body, signal))
+  },
+  research: {
+    search: (projectId: string, query: string, signal?: AbortSignal) => request<{ run: ResearchRun; works: ResearchWork[] }>(`/api/projects/${projectId}/research-runs`, jsonInit("POST", { query }, signal)),
+    confirm: (projectId: string, runId: string) => request<ResearchRun>(`/api/projects/${projectId}/research-runs/${runId}/confirm`, { method: "POST" }),
+    updatePlan: (projectId: string, runId: string, queryPlan: { steps: string[]; rationale?: string }) => request<ResearchRun>(`/api/projects/${projectId}/research-runs/${runId}`, jsonInit("PATCH", queryPlan)),
+    cancel: (projectId: string, runId: string) => request<ResearchRun>(`/api/projects/${projectId}/research-runs/${runId}/cancel`, { method: "POST" }),
+    works: (projectId: string, signal?: AbortSignal) => request<Array<ResearchWork & { project: ProjectResearchWork }>>(`/api/projects/${projectId}/research-works`, signal ? { signal } : undefined),
+    import: (projectId: string, body: { title: string; authors?: string[]; year?: number; venue?: string; doi?: string; arxiv?: string; citationKey?: string }) => request<ResearchWork>(`/api/projects/${projectId}/research-works/import`, jsonInit("POST", body)),
+    approve: (projectId: string, workId: string, body: { status?: "candidate" | "saved" | "rejected"; citationKey?: string }) => request<ProjectResearchWork>(`/api/projects/${projectId}/research-works/${workId}`, jsonInit("PATCH", body)),
+    citationContext: (projectId: string, key: string) => request<{ key: string; contexts: Array<{ path: string; line: number; excerpt: string }> }>(`/api/projects/${projectId}/research-citations/${encodeURIComponent(key)}`),
+    bibtexChange: (projectId: string, workId: string, targetBibPath: string) => request<ChangeSet>(`/api/projects/${projectId}/research-works/${workId}/bibtex-changes`, jsonInit("POST", { targetBibPath }))
+    ,pdfEvidence: (projectId: string, workId: string, pdfBase64: string) => request<SourceEvidence[]>(`/api/projects/${projectId}/research-works/${workId}/pdf-evidence`, jsonInit("POST", { pdfBase64, authorized: true }))
+  },
+  claims: {
+    scan: (projectId: string) => request<PaperClaim[]>(`/api/projects/${projectId}/claim-scans`, { method: "POST" }),
+    list: (projectId: string) => request<PaperClaim[]>(`/api/projects/${projectId}/claims`),
+    evidence: (projectId: string) => request<SourceEvidence[]>(`/api/projects/${projectId}/evidence`),
+    addEvidence: (projectId: string, body: { workId: string; content: string; kind?: string; locator: string; locatorType?: string; origin?: string; representation?: string }) => request<SourceEvidence>(`/api/projects/${projectId}/evidence`, jsonInit("POST", body))
+  },
+  alignment: {
+    check: (projectId: string) => request<{ projectId: string; findings: AlignmentFinding[] }>(`/api/projects/${projectId}/alignment-checks`, { method: "POST" })
   }
 };

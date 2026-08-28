@@ -1,4 +1,58 @@
-export const COMPILER_RESOURCE_VERSION = "siglum-0.1.4-bundles-1-dynamic-packages-1";
+export const COMPILER_RESOURCE_VERSION = "siglum-0.1.4-bundles-1-dynamic-packages-3";
+export const COMPILER_BUNDLES_URL = "https://cdn.siglum.org/tl2025/bundles";
+
+const PACKAGE_COMMAND = /\\(?:usepackage|RequirePackage|RequirePackageWithOptions|LoadClass|LoadClassWithOptions)(?:\[[^\]]*\])?\{([^}]+)\}/g;
+const FONT_COMMAND = /\\font\s*\\?[A-Za-z@]+\s*=\s*([A-Za-z][A-Za-z0-9_-]*)/g;
+const FONT_PACKAGE_PREFIXES: ReadonlyArray<readonly [string, string]> = [["phv", "helvetic"], ["ptm", "times"], ["pcr", "courier"]];
+const FONT_PACKAGES = new Set(["times", "helvetic", "courier"]);
+const FONT_PACKAGE_DEPENDENCIES: Readonly<Record<string, readonly string[]>> = {
+  times: ["helvetic", "courier"]
+};
+
+export function compilerDependencyPackages(source: string, additionalFiles: Record<string, string | Uint8Array> = {}): string[] {
+  const packages = new Set<string>();
+  const scan = (content: string) => {
+    for (const match of content.matchAll(PACKAGE_COMMAND)) {
+      for (const packageName of match[1]!.split(",").map((name) => name.trim())) if (packageName) packages.add(packageName);
+    }
+    for (const match of content.matchAll(FONT_COMMAND)) {
+      const fontName = match[1]!.toLowerCase();
+      const fontPackage = FONT_PACKAGE_PREFIXES.find(([prefix]) => fontName.startsWith(prefix))?.[1];
+      if (fontPackage) packages.add(fontPackage);
+    }
+  };
+
+  scan(source);
+  for (const [path, content] of Object.entries(additionalFiles)) {
+    if (!/\.(?:sty|cls|tex)$/i.test(path)) continue;
+    scan(typeof content === "string" ? content : new TextDecoder().decode(content));
+  }
+  return [...packages].sort();
+}
+
+export function compilerFontPackages(source: string, additionalFiles: Record<string, string | Uint8Array> = {}): string[] {
+  const packages = new Set<string>();
+  const addPackage = (packageName: string) => {
+    if (!FONT_PACKAGES.has(packageName)) return;
+    packages.add(packageName);
+    for (const dependency of FONT_PACKAGE_DEPENDENCIES[packageName] ?? []) packages.add(dependency);
+  };
+  const scan = (content: string) => {
+    for (const match of content.matchAll(PACKAGE_COMMAND)) {
+      for (const packageName of match[1]!.split(",").map((name) => name.trim())) addPackage(packageName);
+    }
+    for (const match of content.matchAll(FONT_COMMAND)) {
+      const fontName = match[1]!.toLowerCase();
+      const fontPackage = FONT_PACKAGE_PREFIXES.find(([prefix]) => fontName.startsWith(prefix))?.[1];
+      if (fontPackage) addPackage(fontPackage);
+    }
+  };
+  scan(source);
+  for (const [path, content] of Object.entries(additionalFiles)) {
+    if (/\.(?:sty|cls|tex)$/i.test(path)) scan(typeof content === "string" ? content : new TextDecoder().decode(content));
+  }
+  return [...packages].sort();
+}
 
 export function compilerResourceProgress(loadedBytes: number, totalBytes: number, resource: string, cached = false): { percent: number; detail: string } {
   const percent = totalBytes > 0 ? Math.min(100, Math.round((loadedBytes / totalBytes) * 100)) : 100;
@@ -40,13 +94,11 @@ export interface CompilerBundleManifest {
   packages: Record<string, string>;
 }
 
-export function resolveCompilerBundles(source: string, manifest: CompilerBundleManifest, eager: string[]): string[] {
+export function resolveCompilerBundles(source: string, manifest: CompilerBundleManifest, eager: string[], additionalFiles: Record<string, string | Uint8Array> = {}): string[] {
   const selected = new Set([...(manifest.engines.pdflatex?.required ?? []), ...eager]);
-  for (const match of source.matchAll(/\\usepackage(?:\[[^\]]*\])?\{([^}]+)\}/g)) {
-    for (const packageName of match[1]!.split(",").map((name) => name.trim())) {
-      const bundle = manifest.packages[packageName];
-      if (bundle) selected.add(bundle);
-    }
+  for (const packageName of compilerDependencyPackages(source, additionalFiles)) {
+    const bundle = manifest.packages[packageName];
+    if (bundle) selected.add(bundle);
   }
   const pending = [...selected];
   for (let index = 0; index < pending.length; index += 1) {

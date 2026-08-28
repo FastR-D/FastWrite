@@ -3,7 +3,7 @@ import { normalizePublicationTarget } from "./models";
 
 describe("publication targets", () => {
   test("normalizes a venue and its supported track", () => {
-    expect(normalizePublicationTarget({ domain: "artificial-intelligence", venueId: "acl", stage: "submission", track: "short" }, "artificial-intelligence")).toEqual({ domain: "artificial-intelligence", venueId: "acl", stage: "submission", track: "short" });
+    expect(normalizePublicationTarget({ domain: "artificial-intelligence", venueId: "acl", year: 2027, stage: "submission", track: "short" }, "artificial-intelligence")).toEqual({ domain: "artificial-intelligence", venueId: "acl", year: 2027, stage: "submission", track: "short" });
   });
 
   test("rejects profile mismatches and normalizes invalid stages", () => {

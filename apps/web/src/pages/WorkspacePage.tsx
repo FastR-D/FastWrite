@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ChevronDown,
@@ -24,10 +24,10 @@ import { Dialog } from "../components/ui/Dialog";
 import { FileTree } from "../components/workspace/FileTree";
 import { AddFileDialog } from "../components/workspace/AddFileDialog";
 import { OutlineTree } from "../components/workspace/OutlineTree";
-import { PdfPane, type CompileStateReport } from "../components/workspace/PdfPane";
+import type { CompileStateReport } from "../components/workspace/PdfPane";
 import { ProjectSettingsDialog } from "../components/workspace/ProjectSettingsDialog";
 import { RenameFileDialog } from "../components/workspace/RenameFileDialog";
-import { SourceEditor, type SourceEditorHandle } from "../components/workspace/SourceEditor";
+import type { SourceEditorHandle } from "../components/workspace/SourceEditor";
 import { AiWorkspace } from "../components/workspace/AiWorkspace";
 import { GithubSyncDialog } from "../components/workspace/GithubSyncDialog";
 import { ComplianceDialog } from "../components/workspace/ComplianceDialog";
@@ -35,6 +35,11 @@ import type { CompileFailureContext, CompileRepairRequest } from "../components/
 import { navigate } from "../lib/navigation";
 import { currentSectionSelection } from "../lib/sectionSelection";
 import { FASTWRITE_SAVE_EVENT } from "../lib/keyboard";
+import { publicationTargetAbbreviation } from "../lib/labels";
+import { ThemeToggle } from "../components/ui/ThemeToggle";
+
+const SourceEditor = lazy(() => import("../components/workspace/SourceEditor").then((module) => ({ default: module.SourceEditor })));
+const PdfPane = lazy(() => import("../components/workspace/PdfPane").then((module) => ({ default: module.PdfPane })));
 
 interface WorkspacePageProps {
   projectId: string;
@@ -225,7 +230,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
 
   const prepareLocalRevision = useCallback(async (issue: ReviewIssue): Promise<TextSelection | null> => {
     const evidence = issue.evidence.find((item) => !item.inferred && (item.excerpt.trim() || item.line));
-    if (!evidence) return null;
+    if (!evidence?.path) return null;
     const nextTree = await hydrateTreePath(projectId, treeRef.current, evidence.path);
     commitTree(nextTree);
     const opened = await api.projects.readFile(projectId, evidence.path);
@@ -288,9 +293,10 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <div className="project-identity"><strong>{project.name}</strong><span>{project.mainDocument}</span></div>
         </div>
         <div className="workspace-topbar__right">
-          <span className="skill-badge">{project.skill.name}</span>
+          <span className="skill-badge" title={project.publicationTarget?.venueId ?? project.skill.name}>{publicationTargetAbbreviation(project.publicationTarget, project.skill.id)}</span>
           <Button size="small" variant="secondary" icon={<ShieldCheck />} onClick={() => setComplianceOpen(true)}>Compliance</Button>
           {project.source.type === "github" ? <Button className="workspace-sync-button" size="small" variant="secondary" icon={<RefreshCw />} onClick={() => setSyncOpen(true)}>Sync</Button> : null}
+          <ThemeToggle />
           <IconButton label="Project settings" icon={<MoreHorizontal />} onClick={() => void openSettings()} />
         </div>
       </header>
@@ -316,7 +322,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         <main className="workspace-center">
           <section className="editor-region">
             {fileDocument ? (
-              <SourceEditor ref={editorRef} projectId={projectId} document={fileDocument} targetLine={targetLine} targetSelection={targetSelection} onSelection={(nextSelection) => { setSelection(nextSelection); if (nextSelection || !targetSelection) setTargetSelection(null); }} onCursor={setCursorLocation} onSaved={async (saved) => { setFileDocument((current) => current?.file.path === saved.file.path ? saved : current); await refreshWorkspace(undefined, saved.file.path); }} />
+              <Suspense fallback={<div className="workspace-panel-loading">Loading editor…</div>}><SourceEditor ref={editorRef} projectId={projectId} document={fileDocument} targetLine={targetLine} targetSelection={targetSelection} onSelection={(nextSelection) => { setSelection(nextSelection); if (nextSelection || !targetSelection) setTargetSelection(null); }} onCursor={setCursorLocation} onSaved={async (saved) => { setFileDocument((current) => current?.file.path === saved.file.path ? saved : current); await refreshWorkspace(undefined, saved.file.path); }} /></Suspense>
             ) : selectedNode?.type === "file" && selectedNode.kind === "image" ? (
               <AssetPreview projectId={projectId} path={selectedNode.path} name={selectedNode.name} />
             ) : (
@@ -356,7 +362,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         <PanelDivider label="Resize PDF preview" active={resizing === "pdf"} value={pdfWidth} min={0} max={780} reverse onPointerDown={() => setResizing("pdf")} onKeyboardChange={setPdfWidth} />
         {pdfWidth > 0 ? (
           <div className="workspace-pdf" style={{ width: pdfWidth }}>
-            <PdfPane projectId={projectId} projectVersion={project.version} mainDocument={project.mainDocument} tree={tree} sourceLocation={pdfSourceLocation} compileRequest={compileRequest} onCompileState={handleCompileState} onFixWithAgent={fixCompileWithAgent} onSyncToSource={(location) => { void navigateToPath(location.path, location.line); }} />
+            <Suspense fallback={<div className="workspace-panel-loading">Loading PDF preview…</div>}><PdfPane projectId={projectId} projectVersion={project.version} mainDocument={project.mainDocument} tree={tree} sourceLocation={pdfSourceLocation} compileRequest={compileRequest} onCompileState={handleCompileState} onFixWithAgent={fixCompileWithAgent} onSyncToSource={(location) => { void navigateToPath(location.path, location.line); }} /></Suspense>
             <IconButton className="pdf-collapse" label="Collapse PDF preview" icon={<PanelRightClose />} onClick={collapsePdf} />
           </div>
         ) : (
