@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, CompletionResponse, ComplianceReport, FileContentResponse, PaperMemory, PaperProject, ReviseResponse, SaveFileResponse, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, ClaimEvidenceLink, CompletionResponse, ComplianceReport, FastReadBundleReceipt, FileContentResponse, PaperClaim, PaperMemory, PaperProject, ProjectResearchWorkDetails, ResearchWork, ReviseResponse, SaveFileResponse, SourceEvidence, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
 import type { AgentProvider, AgentTaskPlanOutput, CompletionAgentInput, DraftGeneratedFile, ReviseAgentInput } from "./agent/provider";
 import { createApplication, mimeType } from "./app";
 
@@ -1272,5 +1272,131 @@ describe("workspace API", () => {
     const finalFile = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
     expect(finalFile.content).toBe(latestConflict.error.details.conflicts[0]!.reviewedContent);
     expect(finalFile.content).not.toContain("external edit");
+  });
+
+  test("imports a manifest-last FastRead bundle into visible research, evidence, claims and BibTeX", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "FastRead handoff" }) })).json() as PaperProject;
+    const bundleId = "0123456789abcdef01234567";
+    const root = `references/fastread/${bundleId}`;
+    const evidenceMarkdown = "# Evidence\n\n- exact quote\n";
+    const citationsJson = JSON.stringify({
+      version: 1,
+      bundle_id: bundleId,
+      selector: { task_id: "paper-task", topic_id: "" },
+      papers: [{ id: "paper-task", title: "FastRead paper", authors: ["Ada Lovelace"], year: 2026, doi: "10.1000/fastread", content_hash: "source-hash" }],
+      citations: [{ task_id: "paper-task", page: 7, exact_quote: "The evaluated method improves accuracy by ten percent.", role: "report", note: "key result", source_hash: "source-hash" }]
+    }, null, 2) + "\n";
+    const referencesBib = "@article{Lovelace2026_1,\n  title = {FastRead paper},\n  author = {Ada Lovelace},\n  year = {2026}\n}\n";
+    const files = { "evidence.md": evidenceMarkdown, "citations.json": citationsJson, "references.bib": referencesBib };
+    for (const [name, content] of Object.entries(files)) expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `${root}/${name}`, content }) })).status).toBe(201);
+    const manifest = JSON.stringify({
+      version: 1,
+      bundle_id: bundleId,
+      immutable: true,
+      files: Object.entries(files).map(([name, content]) => ({ name, sha256: new Bun.CryptoHasher("sha256").update(content).digest("hex"), bytes: Buffer.byteLength(content) }))
+    }, null, 2) + "\n";
+    expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `${root}/manifest.json`, content: manifest }) })).status).toBe(201);
+
+    const bundles = await (await request(`/api/projects/${project.id}/fastread-bundles`)).json() as FastReadBundleReceipt[];
+    expect(bundles).toHaveLength(1);
+    expect(bundles[0]).toMatchObject({ bundleId, status: "imported", workIds: [expect.any(String)], evidenceIds: [expect.any(String)] });
+    const works = await (await request(`/api/projects/${project.id}/research-works`)).json() as Array<ResearchWork & { project: { status: string; citationKey?: string } }>;
+    expect(works).toHaveLength(1);
+    expect(works[0]).toMatchObject({ title: "FastRead paper", project: { status: "saved", citationKey: "Lovelace2026_1" } });
+    const importedEvidence = await (await request(`/api/projects/${project.id}/evidence`)).json() as SourceEvidence[];
+    expect(importedEvidence).toHaveLength(1);
+    expect(importedEvidence[0]).toMatchObject({ status: "approved", representation: "verbatim", locator: "7", sourceHash: "source-hash", fastReadBundleId: bundleId });
+
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "\\documentclass{article}\n\\begin{document}\nOur method improves accuracy by ten percent.\n\\end{document}\n", baseVersion: opened.file.version }) });
+    const firstScan = await (await request(`/api/projects/${project.id}/claim-scans`, { method: "POST" })).json() as PaperClaim[];
+    expect(firstScan).toHaveLength(1);
+    const linked = await (await request(`/api/projects/${project.id}/claims/${firstScan[0]!.id}/links`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "literature", evidenceId: importedEvidence[0]!.id, citationKey: "Lovelace2026_1" }) })).json() as ClaimEvidenceLink;
+    expect(linked.kind).toBe("literature");
+    expect((await request(`/api/projects/${project.id}/claims/${firstScan[0]!.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewStatus: "supported" }) })).status).toBe(200);
+    const secondScan = await (await request(`/api/projects/${project.id}/claim-scans`, { method: "POST" })).json() as PaperClaim[];
+    expect(secondScan[0]!.id).toBe(firstScan[0]!.id);
+    expect(secondScan[0]!.reviewStatus).toBe("supported");
+    expect(await (await request(`/api/projects/${project.id}/claim-links`)).json()).toHaveLength(1);
+
+    const proposed = await (await request(`/api/projects/${project.id}/research-works/${works[0]!.id}/bibtex-changes`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetBibPath: "references.bib" }) })).json() as ChangeSet;
+    expect(proposed.changes[0]).toMatchObject({ operation: "create", path: "references.bib" });
+    expect((await request(`/api/projects/${project.id}/change-sets/${proposed.id}/accept`, { method: "POST" })).status).toBe(200);
+    expect((await (await request(`/api/projects/${project.id}/file?path=references.bib`)).json() as FileContentResponse).content).toContain("FastRead paper");
+
+    const repeated = await (await request(`/api/projects/${project.id}/fastread-bundles/import`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ manifestPath: `${root}/manifest.json` }) })).json() as FastReadBundleReceipt[];
+    expect(repeated[0]!.status).toBe("imported");
+    expect(await (await request(`/api/projects/${project.id}/research-works`)).json()).toHaveLength(1);
+    expect(await (await request(`/api/projects/${project.id}/evidence`)).json()).toHaveLength(1);
+  });
+
+  test("keeps Claim identity anchored across edits and revokes unsupported status when support changes", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Claim lifecycle" }) })).json() as PaperProject;
+    const source = await (await request(`/api/projects/${project.id}/research-works/import`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "Verified result", authors: ["Ada Lovelace"], year: 2026, doi: "10.1000/claim-life", citationKey: "lovelace2026life" }) })).json() as ResearchWork;
+    const evidence = await (await request(`/api/projects/${project.id}/evidence`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ workId: source.id, kind: "result", content: "The evaluated method improves accuracy by ten percent.", locatorType: "page", locator: "7", origin: "source-text", representation: "verbatim" }) })).json() as SourceEvidence;
+    await request(`/api/projects/${project.id}/evidence/${evidence.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "approved" }) });
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const original = "\\documentclass{article}\n\\begin{document}\nThe deployment setting is fixed.\nOur method improves accuracy by ten percent.\nThe evaluation ends here.\n\\end{document}\n";
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: original, baseVersion: opened.file.version }) });
+    const scanned = await (await request(`/api/projects/${project.id}/claim-scans`, { method: "POST" })).json() as PaperClaim[];
+    const claim = scanned.find((item) => item.anchor.exactText === "Our method improves accuracy by ten percent.")!;
+    const linked = await (await request(`/api/projects/${project.id}/claims/${claim.id}/links`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "literature", evidenceId: evidence.id, citationKey: "lovelace2026life" }) })).json() as ClaimEvidenceLink;
+    expect((await request(`/api/projects/${project.id}/claims/${claim.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewStatus: "supported" }) })).status).toBe(200);
+
+    const current = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const shifted = `% context shift\n${original}`;
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: shifted, baseVersion: current.file.version }) });
+    const shiftedClaim = (await (await request(`/api/projects/${project.id}/claims`)).json() as PaperClaim[]).find((item) => item.id === claim.id)!;
+    expect(shiftedClaim).toMatchObject({ id: claim.id, reviewStatus: "supported", anchorStatus: "reanchored" });
+    expect(shiftedClaim.anchor.startOffset).toBeGreaterThan(claim.anchor.startOffset);
+
+    const shiftedFile = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const revised = shifted.replace("improves accuracy by ten percent", "improves accuracy by eleven percent");
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: revised, baseVersion: shiftedFile.file.version }) });
+    const revisedClaim = (await (await request(`/api/projects/${project.id}/claims`)).json() as PaperClaim[]).find((item) => item.id === claim.id)!;
+    expect(revisedClaim).toMatchObject({ id: claim.id, reviewStatus: "needs-review", anchorStatus: "reanchored" });
+    expect(revisedClaim.anchor.exactText).toBe("Our method improves accuracy by eleven percent.");
+    expect((await (await request(`/api/projects/${project.id}/claim-links`)).json() as ClaimEvidenceLink[]).some((item) => item.id === linked.id)).toBe(true);
+    expect((await request(`/api/projects/${project.id}/claims/${claim.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewStatus: "supported" }) })).status).toBe(200);
+    await request(`/api/projects/${project.id}/evidence/${evidence.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "rejected" }) });
+    expect((await (await request(`/api/projects/${project.id}/claims`)).json() as PaperClaim[]).find((item) => item.id === claim.id)?.reviewStatus).toBe("needs-review");
+    await request(`/api/projects/${project.id}/evidence/${evidence.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "approved" }) });
+    await request(`/api/projects/${project.id}/claims/${claim.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewStatus: "supported" }) });
+    await request(`/api/projects/${project.id}/claims/${claim.id}/links/${linked.id}`, { method: "DELETE" });
+    expect((await (await request(`/api/projects/${project.id}/claims`)).json() as PaperClaim[]).find((item) => item.id === claim.id)?.reviewStatus).toBe("needs-review");
+  });
+
+  test("deduplicates manual sources and exposes provenance, identifiers and citation context", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Source provenance" }) })).json() as PaperProject;
+    const body = { title: "A Traceable Source", authors: ["Ada Lovelace"], year: 2026, venue: "TestConf", doi: "https://doi.org/10.1000/TRACE", citationKey: "lovelace2026trace" };
+    const first = await (await request(`/api/projects/${project.id}/research-works/import`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json() as ResearchWork;
+    const second = await (await request(`/api/projects/${project.id}/research-works/import`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, doi: "10.1000/trace" }) })).json() as ResearchWork;
+    expect(second.id).toBe(first.id);
+    const works = await (await request(`/api/projects/${project.id}/research-works`)).json() as ProjectResearchWorkDetails[];
+    expect(works).toHaveLength(1);
+    expect(works[0]).toMatchObject({ id: first.id, project: { status: "saved", citationKey: "lovelace2026trace" }, identifiers: [{ scheme: "doi", value: "10.1000/trace" }] });
+    expect(works[0]!.metadataObservations.map((item) => item.provider)).toEqual(["user"]);
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "\\documentclass{article}\n\\begin{document}\nPrior work is traceable \\cite{lovelace2026trace}.\n\\end{document}\n", baseVersion: opened.file.version }) });
+    const context = await (await request(`/api/projects/${project.id}/research-citations/lovelace2026trace`)).json() as { contexts: Array<{ path: string; line: number; excerpt: string }> };
+    expect(context.contexts[0]).toMatchObject({ path: "main.tex", line: 3 });
+    expect(context.contexts[0]!.excerpt).toContain("lovelace2026trace");
+  });
+
+  test("keeps a failed FastRead hash receipt visible and retryable", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Broken handoff" }) })).json() as PaperProject;
+    const bundleId = "fedcba987654321001234567";
+    const root = `references/fastread/${bundleId}`;
+    for (const [name, content] of [["evidence.md", "evidence"], ["citations.json", JSON.stringify({ version: 1, bundle_id: bundleId, papers: [], citations: [] })], ["references.bib", ""]] as const) await request(`/api/projects/${project.id}/files`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `${root}/${name}`, content }) });
+    const manifest = JSON.stringify({ version: 1, bundle_id: bundleId, immutable: true, files: [{ name: "evidence.md", sha256: "0".repeat(64), bytes: 8 }, { name: "citations.json", sha256: "0".repeat(64), bytes: 2 }, { name: "references.bib", sha256: new Bun.CryptoHasher("sha256").update("").digest("hex"), bytes: 0 }] });
+    expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `${root}/manifest.json`, content: manifest }) })).status).toBe(201);
+    const receipts = await (await request(`/api/projects/${project.id}/fastread-bundles`)).json() as FastReadBundleReceipt[];
+    expect(receipts[0]).toMatchObject({ bundleId, status: "failed" });
+    expect(receipts[0]!.error).toContain("SHA-256");
+    expect(await (await request(`/api/projects/${project.id}/research-works`)).json()).toHaveLength(0);
   });
 });

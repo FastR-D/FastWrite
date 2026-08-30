@@ -204,6 +204,11 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
     route("PATCH", "/api/projects/:projectId/research-runs/:runId", async (request, params) => json(await research.updatePlan(required(params, "projectId"), required(params, "runId"), await readJson<{ steps: string[]; rationale?: string }>(request)))),
     route("POST", "/api/projects/:projectId/research-runs/:runId/cancel", async (_request, params) => json(await research.cancel(required(params, "projectId"), required(params, "runId")))),
     route("GET", "/api/projects/:projectId/research-runs", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().researchRuns.filter((item) => item.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }),
+    route("GET", "/api/projects/:projectId/fastread-bundles", async (_request, params) => json(await research.listFastReadBundles(required(params, "projectId")))),
+    route("POST", "/api/projects/:projectId/fastread-bundles/import", async (request, params) => {
+      const body = await readJson<{ manifestPath?: string }>(request);
+      return json(await research.importFastReadBundles(required(params, "projectId"), typeof body.manifestPath === "string" ? body.manifestPath : undefined), 201);
+    }),
     route("GET", "/api/projects/:projectId/research-works", async (_request, params) => json(research.listWorks(required(params, "projectId")))),
     route("POST", "/api/projects/:projectId/research-works/import", async (request, params) => { const body = await readJson<Parameters<ResearchService["importWork"]>[1]>(request); if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiError(400, "invalid_research_request", "Research import must be an object"); return json(await research.importWork(required(params, "projectId"), body), 201); }),
     route("PATCH", "/api/projects/:projectId/research-works/:workId", async (request, params) => json(await research.saveWork(required(params, "projectId"), required(params, "workId"), await readJson<{ status?: "candidate" | "saved" | "rejected"; citationKey?: string }>(request)))),
@@ -219,18 +224,19 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
       const approved = new Set(database.snapshot().sourceEvidence.filter((item) => item.projectId === projectId && item.status === "approved").map((item) => item.citationKey).filter((key): key is string => Boolean(key)));
       return json({ projectId, projectVersion: project.version, findings: writingGuardMany(documents.map((document) => ({ ...document, approvedCitationKeys: approved }))) }, 201);
     }),
-    route("GET", "/api/projects/:projectId/claims", async (_request, params) => json(claims.list(required(params, "projectId")))),
-    route("GET", "/api/projects/:projectId/claims/:claimId/links", async (_request, params) => { const projectId = required(params, "projectId"); const claimId = required(params, "claimId"); if (!claims.list(projectId).some((item) => item.id === claimId)) throw new ApiError(404, "claim_not_found", "Claim not found"); return json(database.snapshot().claimEvidenceLinks.filter((link) => link.claimId === claimId)); }),
-    route("GET", "/api/projects/:projectId/argument-graph", async (_request, params) => { const projectId = required(params, "projectId"); const persisted = database.snapshot().claimRelations.filter((item) => item.projectId === projectId); const generated = deriveArgumentGraph(projectId, claims.list(projectId)).filter((item) => !persisted.some((saved) => saved.fromClaimId === item.fromClaimId && saved.toClaimId === item.toClaimId)); return json({ projectId, relations: [...persisted, ...generated] }); }),
-    route("POST", "/api/projects/:projectId/adversarial-memo", async (_request, params) => { const projectId = required(params, "projectId"); const ledger = claims.list(projectId); return json(buildAdversarialMemo(projectId, ledger, deriveArgumentGraph(projectId, ledger)), 201); }),
-    route("POST", "/api/projects/:projectId/argument-graph/confirm", async (request, params) => { const projectId = required(params, "projectId"); const body = await readJson<{ fromClaimId: string; toClaimId: string; type: "motivates" | "addresses" | "implements" | "evaluates" | "supports" | "limits" }>(request); const projectClaims = claims.list(projectId); if (!projectClaims.some((item) => item.id === body.fromClaimId) || !projectClaims.some((item) => item.id === body.toClaimId)) throw new ApiError(404, "claim_not_found", "Both claims must belong to the project"); const relation = { id: `relation_${crypto.randomUUID()}`, projectId, fromClaimId: body.fromClaimId, toClaimId: body.toClaimId, type: body.type, status: "confirmed" as const, origin: "user" as const }; await database.mutate((state) => { state.claimRelations.push(relation); }); return json(relation, 201); }),
+    route("GET", "/api/projects/:projectId/claims", async (_request, params) => json(await claims.list(required(params, "projectId")))),
+    route("GET", "/api/projects/:projectId/claim-links", async (_request, params) => json(claims.links(required(params, "projectId")))),
+    route("GET", "/api/projects/:projectId/claims/:claimId/links", async (_request, params) => { const projectId = required(params, "projectId"); const claimId = required(params, "claimId"); if (!(await claims.list(projectId)).some((item) => item.id === claimId)) throw new ApiError(404, "claim_not_found", "Claim not found"); return json(database.snapshot().claimEvidenceLinks.filter((link) => link.claimId === claimId)); }),
+    route("GET", "/api/projects/:projectId/argument-graph", async (_request, params) => { const projectId = required(params, "projectId"); const persisted = database.snapshot().claimRelations.filter((item) => item.projectId === projectId); const generated = deriveArgumentGraph(projectId, await claims.list(projectId)).filter((item) => !persisted.some((saved) => saved.fromClaimId === item.fromClaimId && saved.toClaimId === item.toClaimId)); return json({ projectId, relations: [...persisted, ...generated] }); }),
+    route("POST", "/api/projects/:projectId/adversarial-memo", async (_request, params) => { const projectId = required(params, "projectId"); const ledger = await claims.list(projectId); return json(buildAdversarialMemo(projectId, ledger, deriveArgumentGraph(projectId, ledger)), 201); }),
+    route("POST", "/api/projects/:projectId/argument-graph/confirm", async (request, params) => { const projectId = required(params, "projectId"); const body = await readJson<{ fromClaimId: string; toClaimId: string; type: "motivates" | "addresses" | "implements" | "evaluates" | "supports" | "limits" }>(request); const projectClaims = await claims.list(projectId); if (!projectClaims.some((item) => item.id === body.fromClaimId) || !projectClaims.some((item) => item.id === body.toClaimId)) throw new ApiError(404, "claim_not_found", "Both claims must belong to the project"); const relation = { id: `relation_${crypto.randomUUID()}`, projectId, fromClaimId: body.fromClaimId, toClaimId: body.toClaimId, type: body.type, status: "confirmed" as const, origin: "user" as const }; await database.mutate((state) => { state.claimRelations.push(relation); }); return json(relation, 201); }),
     route("POST", "/api/projects/:projectId/claims/:claimId/reanchor", async (_request, params) => json(await claims.reanchor(required(params, "projectId"), required(params, "claimId")))),
-    route("PATCH", "/api/projects/:projectId/claims/:claimId", async (request, params) => json(await claims.update(required(params, "projectId"), required(params, "claimId"), await readJson<{ reviewStatus?: "detected" | "needs-review" | "supported" | "partial" | "unsupported"; anchorStatus?: "current" | "stale" | "reanchored" | "orphaned" }>(request)))),
+    route("PATCH", "/api/projects/:projectId/claims/:claimId", async (request, params) => json(await claims.update(required(params, "projectId"), required(params, "claimId"), await readJson<{ reviewStatus?: "detected" | "needs-review" | "supported" | "partial" | "unsupported" }>(request)))),
     route("POST", "/api/projects/:projectId/claims/:claimId/links", async (request, params) => json(await claims.link(required(params, "projectId"), required(params, "claimId"), await readJson<any>(request)), 201)),
     route("DELETE", "/api/projects/:projectId/claims/:claimId/links/:linkId", async (_request, params) => { await claims.unlink(required(params, "projectId"), required(params, "claimId"), required(params, "linkId")); return new Response(null, { status: 204 }); }),
     route("GET", "/api/projects/:projectId/evidence", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().sourceEvidence.filter((item) => item.projectId === projectId)); }),
     route("POST", "/api/projects/:projectId/evidence", async (request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); const body = await readJson<{ workId?: string; kind?: "background" | "claim" | "method" | "result" | "limitation" | "quote"; content?: string; locatorType?: "page" | "section" | "paragraph" | "abstract"; locator?: string; origin?: "source-text" | "registry-abstract" | "model-extraction" | "user"; representation?: "verbatim" | "paraphrase" }>(request); if (!body.workId || !body.content?.trim() || !body.locator) throw new ApiError(400, "evidence_invalid", "workId, content and locator are required"); const state = database.snapshot(); if (!state.researchWorks.some((work) => work.id === body.workId)) throw new ApiError(404, "research_work_not_found", "Research work not found"); const timestamp = new Date().toISOString(); return json(await database.mutate((current) => { const evidence = { id: `evidence_${crypto.randomUUID()}`, projectId, workId: body.workId!, kind: body.kind ?? "background", origin: body.origin ?? "user", representation: body.representation ?? "paraphrase", status: "candidate" as const, content: body.content!.trim().slice(0, 4000), locatorType: body.locatorType ?? "abstract", locator: body.locator!.trim().slice(0, 200), createdAt: timestamp, updatedAt: timestamp }; current.sourceEvidence.push(evidence); return evidence; }), 201); }),
-    route("PATCH", "/api/projects/:projectId/evidence/:evidenceId", async (request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); const body = await readJson<{ status?: "candidate" | "approved" | "rejected" | "stale" }>(request); return json(await database.mutate((state) => { const evidence = state.sourceEvidence.find((item) => item.projectId === projectId && item.id === required(params, "evidenceId")); if (!evidence) throw new ApiError(404, "evidence_not_found", "Evidence not found"); if (body.status) evidence.status = body.status; if (body.status === "approved") evidence.approvedAt = new Date().toISOString(); evidence.updatedAt = new Date().toISOString(); return evidence; })); }),
+    route("PATCH", "/api/projects/:projectId/evidence/:evidenceId", async (request, params) => { const body = await readJson<{ status?: "candidate" | "approved" | "rejected" | "stale" }>(request); return json(await claims.updateEvidence(required(params, "projectId"), required(params, "evidenceId"), body.status)); }),
     route("GET", "/api/texlive/:packageName", async (_request, params, url) => texPackages.texLiveArchive(required(params, "packageName"), url.searchParams.get("tlYear"))),
     route("GET", "/api/fetch/:packageName", async (_request, params, url) => texPackages.ctanPackage(required(params, "packageName"), url.searchParams.get("tlYear"))),
     route("GET", "/api/ctan-pkg/:packageName", async (_request, params) => texPackages.ctanPackageInfo(required(params, "packageName"))),
@@ -282,22 +288,33 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
     }),
     route("PUT", "/api/projects/:projectId/file", async (request, params, url) => {
       const body = await readJson<SaveFileRequest>(request);
-      return json(await workspaces.saveTextFile(required(params, "projectId"), requiredQuery(url, "path"), body));
+      const projectId = required(params, "projectId");
+      const saved = await workspaces.saveTextFile(projectId, requiredQuery(url, "path"), body);
+      await claims.refresh(projectId);
+      return json(saved);
     }),
     route("POST", "/api/projects/:projectId/files", async (request, params) => {
       const body = await readJson<{ path: string; content?: string }>(request);
-      return json(await workspaces.createFile(required(params, "projectId"), body.path, body.content ?? ""), 201);
+      const projectId = required(params, "projectId");
+      const created = await workspaces.createFile(projectId, body.path, body.content ?? "");
+      if (/^references\/fastread\/[0-9a-f]{24}\/manifest\.json$/.test(created.path)) await research.tryImportFastReadBundle(projectId, created.path);
+      return json(created, 201);
     }),
     route("PUT", "/api/projects/:projectId/assets", async (request, params, url) => {
       return json(await workspaces.addFile(required(params, "projectId"), requiredQuery(url, "path"), await request.arrayBuffer()), 201);
     }),
     route("PATCH", "/api/projects/:projectId/files", async (request, params) => {
       const body = await readJson<{ from: string; to: string }>(request);
-      await workspaces.renamePath(required(params, "projectId"), body.from, body.to);
+      const projectId = required(params, "projectId");
+      await workspaces.renamePath(projectId, body.from, body.to);
+      await claims.renamePath(projectId, body.from, body.to);
       return new Response(null, { status: 204 });
     }),
     route("DELETE", "/api/projects/:projectId/files", async (_request, params, url) => {
-      await workspaces.deletePath(required(params, "projectId"), requiredQuery(url, "path"));
+      const projectId = required(params, "projectId");
+      const path = requiredQuery(url, "path");
+      await workspaces.deletePath(projectId, path);
+      await claims.deletePath(projectId, path);
       return new Response(null, { status: 204 });
     }),
     route("GET", "/api/projects/:projectId/outline", async (_request, params) => json(await workspaces.outline(required(params, "projectId")))),
@@ -403,19 +420,31 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
       return json(await revisions.editProposal(required(params, "projectId"), required(params, "changeSetId"), await readJson<ChangeSetEditRequest>(request)));
     }),
     route("POST", "/api/projects/:projectId/change-sets/:changeSetId/accept", async (_request, params) => {
-      return json(await revisions.accept(required(params, "projectId"), required(params, "changeSetId")));
+      const projectId = required(params, "projectId");
+      const accepted = await revisions.accept(projectId, required(params, "changeSetId"));
+      await claims.refresh(projectId);
+      return json(accepted);
     }),
     route("POST", "/api/projects/:projectId/change-sets/:changeSetId/decide", async (request, params) => {
-      return json(await revisions.decide(required(params, "projectId"), required(params, "changeSetId"), await readJson<ChangeSetDecisionRequest>(request)));
+      const projectId = required(params, "projectId");
+      const decided = await revisions.decide(projectId, required(params, "changeSetId"), await readJson<ChangeSetDecisionRequest>(request));
+      await claims.refresh(projectId);
+      return json(decided);
     }),
     route("POST", "/api/projects/:projectId/change-sets/:changeSetId/finish", async (_request, params) => {
-      return json(await revisions.finishReview(required(params, "projectId"), required(params, "changeSetId")));
+      const projectId = required(params, "projectId");
+      const finished = await revisions.finishReview(projectId, required(params, "changeSetId"));
+      await claims.refresh(projectId);
+      return json(finished);
     }),
     route("POST", "/api/projects/:projectId/change-sets/:changeSetId/reject", async (_request, params) => {
       return json(await revisions.reject(required(params, "projectId"), required(params, "changeSetId")));
     }),
     route("POST", "/api/projects/:projectId/change-sets/:changeSetId/rollback", async (_request, params) => {
-      return json(await revisions.rollback(required(params, "projectId"), required(params, "changeSetId")));
+      const projectId = required(params, "projectId");
+      const rolledBack = await revisions.rollback(projectId, required(params, "changeSetId"));
+      await claims.refresh(projectId);
+      return json(rolledBack);
     }),
     route("POST", "/api/upload-sessions", async (request) => {
       const body = await readJson<{

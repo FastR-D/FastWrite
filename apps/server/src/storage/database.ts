@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type CompileRecord, type DraftPlan, type GithubSyncRun, type IssueResolution, type PaperMemory, type PaperProject, type ReviewReport, type ReviewSnapshot, type UploadSession, type ResearchWork, type ProjectResearchWork, type ResearchIdentifier, type MetadataObservation, type SourceEvidence, type PaperClaim, type ClaimEvidenceLink, type ResearchRun, type ClaimRelation } from "@fastwrite/shared";
+import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type ClaimEvidenceLink, type ClaimRelation, type CompileRecord, type DraftPlan, type FastReadBundleReceipt, type GithubSyncRun, type IssueResolution, type MetadataObservation, type PaperClaim, type PaperMemory, type PaperProject, type ProjectResearchWork, type ResearchIdentifier, type ResearchRun, type ResearchWork, type ReviewReport, type ReviewSnapshot, type SourceEvidence, type UploadSession } from "@fastwrite/shared";
 
 export interface FileVersionRecord {
   version: number;
@@ -31,10 +31,11 @@ export interface DatabaseState {
   claimEvidenceLinks: ClaimEvidenceLink[];
   researchRuns: ResearchRun[];
   claimRelations: ClaimRelation[];
+  fastReadBundles: FastReadBundleReceipt[];
 }
 
-export const CURRENT_SCHEMA_VERSION = 2;
-const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], claimRelations: [] };
+export const CURRENT_SCHEMA_VERSION = 4;
+const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], fastReadBundles: [], claimRelations: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
@@ -73,6 +74,7 @@ export class JsonDatabase {
         paperClaims: parsed.paperClaims ?? [],
         claimEvidenceLinks: parsed.claimEvidenceLinks ?? [],
         researchRuns: parsed.researchRuns ?? [],
+        fastReadBundles: parsed.fastReadBundles ?? [],
         claimRelations: parsed.claimRelations ?? []
       };
       this.state = migrate(migratedState);
@@ -131,15 +133,19 @@ export class JsonDatabase {
       state.issueResolutions = state.issueResolutions.filter((item) => item.projectId !== projectId);
       state.compileRecords = state.compileRecords.filter((item) => item.projectId !== projectId);
       state.githubSyncRuns = state.githubSyncRuns.filter((item) => item.projectId !== projectId);
-      const workIds = new Set(state.projectResearchWorks.filter((item) => item.projectId === projectId).map((item) => item.workId));
+      const claimIds = new Set(state.paperClaims.filter((item) => item.projectId === projectId).map((item) => item.id));
+      const candidateWorkIds = new Set(state.projectResearchWorks.filter((item) => item.projectId === projectId).map((item) => item.workId));
       state.projectResearchWorks = state.projectResearchWorks.filter((item) => item.projectId !== projectId);
       state.sourceEvidence = state.sourceEvidence.filter((item) => item.projectId !== projectId);
       state.paperClaims = state.paperClaims.filter((item) => item.projectId !== projectId);
-      state.claimEvidenceLinks = state.claimEvidenceLinks.filter((item) => !state.paperClaims.some((claim) => claim.id === item.claimId));
+      state.claimEvidenceLinks = state.claimEvidenceLinks.filter((item) => !claimIds.has(item.claimId));
+      state.claimRelations = state.claimRelations.filter((item) => item.projectId !== projectId);
       state.researchRuns = state.researchRuns.filter((item) => item.projectId !== projectId);
-      state.researchWorks = state.researchWorks.filter((item) => !workIds.has(item.id));
-      state.researchIdentifiers = state.researchIdentifiers.filter((item) => !workIds.has(item.workId));
-      state.metadataObservations = state.metadataObservations.filter((item) => !workIds.has(item.workId));
+      state.fastReadBundles = state.fastReadBundles.filter((item) => item.projectId !== projectId);
+      const orphanedWorkIds = new Set([...candidateWorkIds].filter((workId) => !state.projectResearchWorks.some((item) => item.workId === workId)));
+      state.researchWorks = state.researchWorks.filter((item) => !orphanedWorkIds.has(item.id));
+      state.researchIdentifiers = state.researchIdentifiers.filter((item) => !orphanedWorkIds.has(item.workId));
+      state.metadataObservations = state.metadataObservations.filter((item) => !orphanedWorkIds.has(item.workId));
       delete state.fileVersions[projectId];
     });
   }
@@ -166,6 +172,14 @@ function migrate(state: DatabaseState): DatabaseState {
     state.claimEvidenceLinks ??= [];
     state.researchRuns ??= [];
     state.schemaVersion = 2;
+  }
+  if (state.schemaVersion < 3) {
+    state.fastReadBundles ??= [];
+    state.schemaVersion = 3;
+  }
+  if (state.schemaVersion < 4) {
+    state.claimRelations ??= [];
+    state.schemaVersion = 4;
   }
   if (state.schemaVersion > CURRENT_SCHEMA_VERSION) throw new Error(`Unsupported database schema version ${state.schemaVersion}`);
   return state;

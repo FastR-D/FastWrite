@@ -299,7 +299,7 @@ export function AiWorkspace({ project, selection, sectionSelection, height, full
     </section>
     <ReviewDialog open={reviewOpen} project={project} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setReviewOpen(false)} onNavigate={onNavigate} onReviseLocally={(issue) => void beginLocalRevision(issue)} onReviseWithAgent={(issueIds, objective) => { setAgentSeed({ issueIds, objective }); setReviewOpen(false); setActiveTab("agent"); }} />
     <MemoryDialog open={memoryOpen} project={project} onClose={() => setMemoryOpen(false)} onNavigate={onNavigate} onChanged={onWorkspaceChanged} />
-    <ResearchDialog open={researchOpen} project={project} onClose={() => setResearchOpen(false)} />
+    <ResearchDialog open={researchOpen} project={project} onClose={() => setResearchOpen(false)} onChanged={onWorkspaceChanged} onNavigate={onNavigate} />
   </>);
 }
 

@@ -1,5 +1,5 @@
 import { cp, mkdir, rename, rm, stat } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const projectRoot = resolve(import.meta.dir, "..");
 const output = resolve(projectRoot, "app-bin");
@@ -15,10 +15,11 @@ const releaseData = join(output, "paperdata");
 const legacyData = join(output, ".fastwrite-data");
 const webDirectory = join(projectRoot, "apps", "web", "dist");
 const standaloneEntry = join(projectRoot, "scripts", ".standalone-entry.ts");
+const outputRelative = relative(projectRoot, output);
 
-if (basename(output) !== "app-bin" || !output.startsWith(`${projectRoot}/`)) throw new Error("Refusing to package outside this project's app-bin directory");
+if (basename(output) !== "app-bin" || !outputRelative || outputRelative.startsWith("..") || isAbsolute(outputRelative)) throw new Error("Refusing to package outside this project's app-bin directory");
 
-await run(["bun", "run", "build"]);
+await run([process.execPath, "run", "build"]);
 await mkdir(output, { recursive: true });
 if (!await exists(releaseData) && await exists(legacyData)) await rename(legacyData, releaseData);
 await Promise.all([
@@ -31,7 +32,7 @@ await Promise.all([
 
 await Bun.write(standaloneEntry, await standaloneEntrySource());
 try {
-  await run(["bun", "build", "--compile", `--target=${compileTarget}`, "--asset-naming=[dir]/[name].[ext]", "scripts/.standalone-entry.ts", "--outfile", `app-bin/${executableName}`], projectRoot);
+  await run([process.execPath, "build", "--compile", `--target=${compileTarget}`, "--asset-naming=[dir]/[name].[ext]", "scripts/.standalone-entry.ts", "--outfile", join("app-bin", executableName)], projectRoot);
 } finally {
   await rm(standaloneEntry, { force: true });
 }
@@ -65,7 +66,7 @@ The API base URL and model are optional. The \`skills/\` directory must remain b
 if (await exists(sourceEnvironment) && !await exists(releaseEnvironment)) await cp(sourceEnvironment, releaseEnvironment);
 else if (!await exists(releaseEnvironment)) await Bun.write(join(output, ".env.example"), "# Copy to .env and configure your AI provider.\n# OPENAI_API_KEY=...\n# OPENAI_BASE_URL=https://api.openai.com/v1\n# FASTWRITE_OPENAI_MODEL=gpt-5.6\n");
 
-if (!windowsTarget) await Bun.spawn(["chmod", "+x", executablePath]).exited;
+if (!windowsTarget && await Bun.spawn(["chmod", "+x", executablePath]).exited !== 0) throw new Error("Failed to mark the packaged binary executable");
 
 console.log(`Packaged standalone FastWrite binary for ${compileTarget} into ${output}`);
 
