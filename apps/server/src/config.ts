@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { loadProjectEnvironment } from "./environment";
+import type { AgentWireApi } from "@fastwrite/shared";
 
 export const loadedEnvironmentFile = loadProjectEnvironment();
 
@@ -21,22 +22,32 @@ export interface AgentProviderConfiguration {
   apiKey?: string | undefined;
   baseURL?: string | undefined;
   model?: string | undefined;
+  wireAPI?: AgentWireApi | undefined;
 }
 
 function configured(environment: NodeJS.ProcessEnv, key: string): string | undefined {
   return environment[key]?.trim() || undefined;
 }
 
+function configuredWireAPI(value?: string): AgentWireApi | undefined {
+  const normalized = value?.trim().toLowerCase().replace(/-/g, "_");
+  if (normalized === "responses") return "responses";
+  if (normalized === "chat" || normalized === "chat_completions") return "chat";
+  return undefined;
+}
+
 export function agentProviderConfigurations(environment: NodeJS.ProcessEnv = process.env): Record<AgentWorkflow, AgentProviderConfiguration> {
   const global = {
     apiKey: configured(environment, "OPENAI_API_KEY") ?? configured(environment, "OPENAI_KEY"),
     baseURL: configured(environment, "OPENAI_BASE_URL") ?? configured(environment, "OPENAI_API_BASE"),
-    model: configured(environment, "FASTWRITE_OPENAI_MODEL")
+    model: configured(environment, "FASTWRITE_OPENAI_MODEL"),
+    wireAPI: configuredWireAPI(configured(environment, "FASTWRITE_OPENAI_WIRE_API") ?? configured(environment, "OPENAI_WIRE_API"))
   };
   const forWorkflow = (workflow: Uppercase<AgentWorkflow>): AgentProviderConfiguration => ({
     apiKey: configured(environment, `FASTWRITE_${workflow}_API_KEY`) ?? configured(environment, `FASTWRITE_${workflow}_OPENAI_API_KEY`) ?? global.apiKey,
     baseURL: configured(environment, `FASTWRITE_${workflow}_BASE_URL`) ?? configured(environment, `FASTWRITE_${workflow}_OPENAI_BASE_URL`) ?? global.baseURL,
-    model: configured(environment, `FASTWRITE_${workflow}_MODEL`) ?? configured(environment, `FASTWRITE_${workflow}_OPENAI_MODEL`) ?? global.model
+    model: configured(environment, `FASTWRITE_${workflow}_MODEL`) ?? configured(environment, `FASTWRITE_${workflow}_OPENAI_MODEL`) ?? global.model,
+    wireAPI: configuredWireAPI(configured(environment, `FASTWRITE_${workflow}_WIRE_API`) ?? configured(environment, `FASTWRITE_${workflow}_OPENAI_WIRE_API`)) ?? global.wireAPI
   });
   return {
     completion: forWorkflow("COMPLETION"),

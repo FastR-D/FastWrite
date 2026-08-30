@@ -40,7 +40,7 @@ bun run package:app
 ```
 
 该命令生成可直接发布的单个 `app-bin/fastwrite`。Web 静态资源嵌入该二进制；外置的 `app-bin/skills/` 和 `app-bin/paperdata/` 与二进制并列，后者保存 Workspace、导入和编译缓存，重新打包不会删除它。根目录存在 `.env` 时会在首次打包时复制至 `app-bin/.env`，否则生成 `.env.example`；二进制会自动加载同级 `.env`。浏览器打开二进制输出的地址即可正常测试和编辑 Paper。
-在 `.env` 设置 `OPENAI_API_KEY`（兼容 `OPENAI_KEY`）以及可选的 `OPENAI_BASE_URL`（兼容 `OPENAI_API_BASE`）即可为全部 AI 工作流提供默认 Provider；`FASTWRITE_OPENAI_MODEL` 可显式选择默认模型。也可为 `COMPLETION`、`AGENT`、`REVISE`、`REVIEW`、`MEMORY` 分别设置 `FASTWRITE_<WORKFLOW>_API_KEY`、`FASTWRITE_<WORKFLOW>_BASE_URL` 和 `FASTWRITE_<WORKFLOW>_MODEL`，每个字段独立回退到全局值；兼容 OpenAI 命名的 `_OPENAI_API_KEY`、`_OPENAI_BASE_URL`、`_OPENAI_MODEL` 变体。这可直接用于为 Completion 配置 DeepSeek 等 OpenAI-compatible 端点。Agent 规划与普通 AI 操作默认超时 120 秒；`/draft`、`/continue`、`/revise` 的完整文件生成默认 300 秒，可用 `FASTWRITE_AGENT_TIMEOUT_MS` 覆盖。导入私有 GitHub Repository 时设置 `FASTWRITE_GITHUB_TOKEN`。
+在 `.env` 设置 `OPENAI_API_KEY`（兼容 `OPENAI_KEY`）以及可选的 `OPENAI_BASE_URL`（兼容 `OPENAI_API_BASE`）即可为全部 AI 工作流提供默认 Provider；`FASTWRITE_OPENAI_MODEL` 可显式选择默认模型，`FASTWRITE_OPENAI_WIRE_API` 可选择 `responses` 或 `chat`。也可为 `COMPLETION`、`AGENT`、`REVISE`、`REVIEW`、`MEMORY`、`RESEARCH` 分别设置 `FASTWRITE_<WORKFLOW>_API_KEY`、`FASTWRITE_<WORKFLOW>_BASE_URL`、`FASTWRITE_<WORKFLOW>_MODEL` 和 `FASTWRITE_<WORKFLOW>_WIRE_API`，每个字段独立回退到全局值；兼容现有 OpenAI 命名的配置别名。Project settings 也支持粘贴 Codex 风格 TOML 或等价 YAML provider 配置，并从 `model`、`base_url` 和 `wire_api` 填充设置；API key 仍单独输入且不会回传。Agent 规划、普通 AI 操作以及 `/draft`、`/continue`、`/revise` 的完整文件生成默认超时均为 300 秒，可用 `FASTWRITE_AGENT_TIMEOUT_MS` 覆盖（最大 600 秒）。导入私有 GitHub Repository 时设置 `FASTWRITE_GITHUB_TOKEN`。
 
 验证 `.env` 中的真实 LLM 配置：
 

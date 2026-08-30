@@ -18,6 +18,7 @@ import type {
   PublicationTarget,
   TargetVenue,
   UploadManifestEntry
+  ,AgentWireApi
 } from "@fastwrite/shared";
 import type { AgentProvider } from "./agent/provider";
 import { OpenAIAgentProvider } from "./agent/provider";
@@ -43,6 +44,7 @@ import { LatexTemplateService } from "./templates/latex-template-service";
 import { ResearchService } from "./research/research-service";
 import { ClaimService } from "./claims/claim-service";
 import { AlignmentService } from "./alignment/alignment-service";
+import { normalizePlaceholderFindings } from "./agent/citation-findings";
 
 interface Services {
   database: JsonDatabase;
@@ -81,13 +83,14 @@ export interface ApplicationOptions {
 }
 
 function providerFor(configuration: AgentProviderConfiguration): AgentProvider | undefined {
-  return configuration.apiKey ? new OpenAIAgentProvider(configuration.apiKey, configuration.model, configuration.baseURL) : undefined;
+  return configuration.apiKey ? new OpenAIAgentProvider(configuration.apiKey, configuration.model, configuration.baseURL, configuration.wireAPI) : undefined;
 }
 
 interface AgentSettingsInput {
   apiKey?: string;
   baseURL?: string;
   model?: string;
+  wireAPI?: AgentWireApi;
 }
 
 function boundedSetting(value: unknown, maximum: number): string | undefined {
@@ -137,7 +140,8 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
     if (baseURL) {
       try { new URL(baseURL); } catch { throw new ApiError(400, "agent_base_url_invalid", "Base URL must be a valid absolute URL"); }
     }
-    runtimeConfiguration = { apiKey, ...(baseURL ? { baseURL } : {}), ...(boundedSetting(input.model, 256) ? { model: boundedSetting(input.model, 256) } : {}) };
+    if (input.wireAPI !== undefined && input.wireAPI !== "chat" && input.wireAPI !== "responses") throw new ApiError(400, "agent_wire_api_invalid", "Wire API must be 'chat' or 'responses'");
+    runtimeConfiguration = { apiKey, ...(baseURL ? { baseURL } : {}), ...(boundedSetting(input.model, 256) ? { model: boundedSetting(input.model, 256) } : {}), wireAPI: input.wireAPI ?? (baseURL ? "chat" : "responses") };
     runtimeProvider = providerFor(runtimeConfiguration);
   };
   const skillRegistry = new SkillRegistry(config.skillsDirectory);
@@ -154,7 +158,10 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const completions = new CompletionService(workspaces, skillRegistry, providers.completion, memories);
   const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler: new LatexCompileService(dataDirectory, workspaces), skillRegistry, compliance, latexTemplates, research, claims, alignment };
   const routes = buildRoutes(services, {
-    status: () => ({ configured: Boolean(runtimeProvider ?? configuredProviders.agent), source: runtimeProvider ? "runtime" : configuredProviders.agent ? "environment" : "none", ...(runtimeConfiguration?.baseURL ? { baseURL: runtimeConfiguration.baseURL } : {}), ...(runtimeConfiguration?.model ? { model: runtimeConfiguration.model } : {}) }),
+    status: () => {
+      const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
+      return { configured: Boolean(runtimeProvider ?? configuredProviders.agent), source: runtimeProvider ? "runtime" : configuredProviders.agent ? "environment" : "none", ...(activeConfiguration.baseURL ? { baseURL: activeConfiguration.baseURL } : {}), ...(activeConfiguration.model ? { model: activeConfiguration.model } : {}), wireAPI: activeConfiguration.wireAPI ?? (activeConfiguration.baseURL ? "chat" : "responses") };
+    },
     configure: configureAgent
   });
 
@@ -175,7 +182,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
 }
 
-function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string }; configure: (input: AgentSettingsInput) => void }): Route[] {
+function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void }): Route[] {
   return [
     route("GET", "/api/health", async () => json({ status: "ok" })),
     route("GET", "/api/agent-settings", async () => json(agentSettings.status())),
@@ -376,7 +383,7 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
       const projectId = required(params, "projectId");
       const changeSet = database.snapshot().changeSets.find((candidate) => candidate.projectId === projectId && candidate.id === required(params, "changeSetId"));
       if (!changeSet) throw new ApiError(404, "changeset_not_found", "Change set not found");
-      return json(changeSet);
+      return json(normalizePlaceholderFindings(changeSet));
     }),
     route("PATCH", "/api/projects/:projectId/change-sets/:changeSetId", async (request, params) => {
       return json(await revisions.editProposal(required(params, "projectId"), required(params, "changeSetId"), await readJson<ChangeSetEditRequest>(request)));

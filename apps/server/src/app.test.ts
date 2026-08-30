@@ -32,12 +32,23 @@ describe("workspace API", () => {
     const configured = await request("/api/agent-settings", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ apiKey: "sk-test-private-key", baseURL: "https://api.example.test/v1", model: "test-model" })
+      body: JSON.stringify({ apiKey: "sk-test-private-key", baseURL: "https://api.example.test/v1", model: "test-model", wireAPI: "responses" })
     });
     expect(configured.status).toBe(200);
-    expect(await configured.json()).toEqual({ configured: true, source: "runtime", baseURL: "https://api.example.test/v1", model: "test-model" });
+    expect(await configured.json()).toEqual({ configured: true, source: "runtime", baseURL: "https://api.example.test/v1", model: "test-model", wireAPI: "responses" });
     const status = await request("/api/agent-settings");
     expect(JSON.stringify(await status.json())).not.toContain("sk-test-private-key");
+  });
+
+  test("rejects an unsupported runtime Agent wire API", async () => {
+    const request = await testApplication();
+    const response = await request("/api/agent-settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ apiKey: "sk-test", wireAPI: "websocket" })
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "agent_wire_api_invalid" } });
   });
 
   test("creates, reads and version-checks an empty project", async () => {
@@ -612,6 +623,7 @@ describe("workspace API", () => {
       async planAgentTask(input) { seenIntent = input.intent; visiblePlanDocuments.push(...input.documents.map((document) => document.content)); return { steps: ["Create the editable outline"], affectedFiles: ["main.tex", "sections/introduction.tex", "references.bib"], risks: [], validation: ["Compile"] }; },
       async generateAgentTask(input) {
         const target = input.targetPath;
+        expect(input.affectedFiles).toEqual([target]);
         generatedTargets.push(target);
         visibleGenerationDocuments.push(...input.documents.map((document) => document.content));
         const generated: Record<string, DraftGeneratedFile> = {
@@ -680,6 +692,7 @@ describe("workspace API", () => {
       },
       async generateAgentTask(input) {
         generatedTargets.push(input.targetPath);
+        expect(input.affectedFiles).toEqual([input.targetPath]);
         activeGenerations += 1;
         maxConcurrentGenerations = Math.max(maxConcurrentGenerations, activeGenerations);
         await Bun.sleep(30);
@@ -1188,6 +1201,30 @@ describe("workspace API", () => {
     expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toContain("author-refined result");
     const runs = await (await request(`/api/projects/${project.id}/agent-runs`)).json() as Array<{ auditTrail: Array<{ action: string }> }>;
     expect(runs[0]!.auditTrail.some((event) => event.action === "hunk-edited")).toBe(true);
+  });
+
+  test("recomputes blocking citation findings after a reviewed hunk is edited", async () => {
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async planAgentTask() { return { steps: ["Revise the claim"], affectedFiles: ["main.tex"], risks: [], validation: ["Compile"] }; },
+      async generateAgentTask(input) {
+        const document = input.documents.find((candidate) => candidate.path === "main.tex")!;
+        return { files: [{ path: "main.tex", content: document.content.replace("old claim", "new claim \\cite{unknown}"), rationale: "Adds a citation-dependent claim." }] };
+      }
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Citation finding edit" }) })).json() as PaperProject;
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "old claim\n", baseVersion: opened.file.version }) });
+    const planned = await (await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "Revise the claim", scope: { type: "project" } }) })).json() as { plan: { id: string } };
+    const generated = await (await request(`/api/projects/${project.id}/agent-tasks/${planned.plan.id}/confirm`, { method: "POST" })).json() as { changeSet: ChangeSet };
+    const hunk = generated.changeSet.changes[0]!.hunks![0]!;
+    expect(hunk.findings?.[0]?.status).toBe("blocking");
+    expect((await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: [{ path: "main.tex", hunkIds: [hunk.id], status: "accepted" }] }) })).status).toBe(409);
+
+    const edited = await (await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ hunks: [{ path: "main.tex", hunkId: hunk.id, after: "new claim; TODO: add a verified citation" }] }) })).json() as ChangeSet;
+    expect(edited.changes[0]!.hunks![0]!.findings).toBeUndefined();
+    expect((await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: [{ path: "main.tex", hunkIds: [hunk.id], status: "accepted" }] }) })).status).toBe(200);
   });
 
   test("previews external Agent conflicts and requires the latest version token before overwrite", async () => {

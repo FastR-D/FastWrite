@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { ComplianceFinding, DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection, EvidenceDependency } from "@fastwrite/shared";
+import type { AgentWireApi, ComplianceFinding, DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection, EvidenceDependency } from "@fastwrite/shared";
 
 export interface ReviseAgentInput {
   instruction: string;
@@ -23,6 +23,7 @@ export interface ReviseAgentOutput {
 }
 
 export interface AgentProvider {
+  fileGenerationConcurrency?(): number;
   revise(input: ReviseAgentInput, signal?: AbortSignal): Promise<ReviseAgentOutput>;
   planDraft?(input: DraftAgentInput, signal?: AbortSignal): Promise<{ outline: DraftOutlineSection[] }>;
   generateDraft?(input: DraftAgentInput & { outline: DraftOutlineSection[]; mainDocument: string }, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }>;
@@ -134,23 +135,134 @@ export interface DraftGeneratedFile {
   rationale: string;
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function finalText(value: unknown): string {
+  const item = record(value);
+  if (!item) return typeof value === "string" ? value : "";
+  if (typeof item.output_text === "string" && item.output_text) return item.output_text;
+  if ((item.type === "output_text" || item.type === "text") && typeof item.text === "string") return item.text;
+  if (item.type === "response.output_text.done" && typeof item.text === "string") return item.text;
+  for (const key of ["response", "item", "part"]) {
+    const nested = finalText(item[key]);
+    if (nested) return nested;
+  }
+  if (Array.isArray(item.output)) {
+    const text = item.output.map(finalText).join("");
+    if (text) return text;
+  }
+  if (Array.isArray(item.content)) {
+    const text = item.content.map(finalText).join("");
+    if (text) return text;
+  }
+  if (typeof item.content === "string") return item.content;
+  if (Array.isArray(item.choices)) {
+    const text = item.choices.map((choice) => {
+      const candidate = record(choice);
+      return finalText(candidate?.message) || (typeof candidate?.text === "string" ? candidate.text : "");
+    }).join("");
+    if (text) return text;
+  }
+  return "";
+}
+
+function responseShape(payloads: unknown[], contentType: string, byteLength: number, declaredEvents: string[] = [], parseFailures = 0, sawDone = false): string {
+  const objects = payloads.map(record).filter((item): item is Record<string, unknown> => Boolean(item));
+  const eventTypes = [...new Set([...declaredEvents, ...objects.map((item) => typeof item.type === "string" ? item.type : undefined).filter((type): type is string => Boolean(type))])];
+  const statuses = [...new Set(objects.flatMap((item) => {
+    const nested = record(item.response);
+    return [item.status, nested?.status].filter((status): status is string => typeof status === "string");
+  }))];
+  const outputTypes = [...new Set(objects.flatMap((item) => {
+    const source = record(item.response) ?? item;
+    return Array.isArray(source.output) ? source.output.map((output) => record(output)?.type).filter((type): type is string => typeof type === "string") : [];
+  }))];
+  return [`content-type=${contentType || "missing"}`, `bytes=${byteLength}`, eventTypes.length ? `events=${eventTypes.join(",")}` : "events=none", `parsed=${payloads.length}`, `parse-failures=${parseFailures}`, `done=${sawDone ? "yes" : "no"}`, statuses.length ? `status=${statuses.join(",")}` : "status=missing", outputTypes.length ? `output=${outputTypes.join(",")}` : "output=none"].join("; ");
+}
+
+async function compatibleResponseText(response: Response): Promise<{ content: string; shape: string }> {
+  const body = await response.text();
+  const contentType = response.headers.get("content-type") ?? "";
+  const looksLikeSSE = contentType.toLowerCase().includes("text/event-stream") || /(?:^|\n)\s*(?:event|data):/.test(body);
+  const payloads: unknown[] = [];
+  const declaredEvents: string[] = [];
+  let parseFailures = 0;
+  let sawDone = false;
+  if (looksLikeSSE) {
+    let eventType = "";
+    let dataLines: string[] = [];
+    const flush = () => {
+      const withNewlines = dataLines.join("\n").trim();
+      const compact = dataLines.join("").trim();
+      if (withNewlines && withNewlines !== "[DONE]") {
+        let parsed: unknown;
+        let parsedSuccessfully = false;
+        for (const candidate of [...new Set([withNewlines, compact])]) {
+          try { parsed = JSON.parse(candidate); parsedSuccessfully = true; break; } catch { /* Try the mirror's alternate multi-data framing. */ }
+        }
+        if (parsedSuccessfully) {
+          const item = record(parsed);
+          if (item) payloads.push(typeof item.type !== "string" && eventType ? { ...item, type: eventType } : item);
+          else if (typeof parsed === "string" && eventType === "response.output_text.delta") payloads.push({ type: eventType, delta: parsed });
+          else if (typeof parsed === "string" && eventType === "response.output_text.done") payloads.push({ type: eventType, text: parsed });
+          else payloads.push(parsed);
+        } else if (eventType === "response.output_text.delta" && !/^[{[]/.test(compact)) {
+          payloads.push({ type: eventType, delta: withNewlines });
+        } else if (eventType === "response.output_text.done" && !/^[{[]/.test(compact)) {
+          payloads.push({ type: eventType, text: withNewlines });
+        } else {
+          parseFailures += 1;
+        }
+      }
+      eventType = "";
+      dataLines = [];
+    };
+    for (const line of body.replace(/\r\n?/g, "\n").split("\n")) {
+      if (!line) { flush(); continue; }
+      if (line.startsWith("event:")) {
+        if (dataLines.length) flush();
+        eventType = line.slice(6).trim();
+        if (eventType) declaredEvents.push(eventType);
+      } else if (line.startsWith("data:")) {
+        const data = line.slice(5).trimStart();
+        if (data.trim() === "[DONE]") { flush(); sawDone = true; }
+        else dataLines.push(data);
+      }
+    }
+    flush();
+  } else if (body.trim()) {
+    try { payloads.push(JSON.parse(body)); } catch { parseFailures += 1; }
+  }
+  const deltas = payloads.map(record).filter((item): item is Record<string, unknown> => item?.type === "response.output_text.delta" && typeof item.delta === "string").map((item) => item.delta as string).join("");
+  const completed = [...payloads].reverse().map(finalText).find(Boolean) ?? "";
+  return { content: deltas || completed, shape: responseShape(payloads, contentType, body.length, declaredEvents, parseFailures, sawDone) };
+}
+
 export class OpenAIAgentProvider implements AgentProvider {
   private readonly client: OpenAI;
   private readonly configuredModel: string | undefined;
   private readonly customBaseURL: boolean;
+  private readonly wireAPI: AgentWireApi;
   private modelPromise?: Promise<string>;
 
-  constructor(apiKey: string, model?: string, baseURL?: string) {
+  constructor(apiKey: string, model?: string, baseURL?: string, wireAPI?: AgentWireApi) {
     this.configuredModel = model?.trim() || undefined;
     this.customBaseURL = Boolean(baseURL?.trim());
+    this.wireAPI = wireAPI ?? (this.customBaseURL ? "chat" : "responses");
     this.client = new OpenAI({ apiKey, ...(baseURL?.trim() ? { baseURL: baseURL.trim().replace(/\/$/, "") } : {}) });
+  }
+
+  fileGenerationConcurrency(): number {
+    return this.customBaseURL && this.wireAPI === "responses" ? 1 : 4;
   }
 
   async revise(input: ReviseAgentInput, signal?: AbortSignal): Promise<ReviseAgentOutput> {
     return this.structured<ReviseAgentOutput>(
       `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
       {
-        task: "Revise only the selected span and return its complete replacement. When selectionIsSectionScaffold is true, preserve the LaTeX section heading and draft concrete section prose from Reviewed Local Paper Context and adjacent manuscript context. Prefer supplied terminology, contributions, findings, and limitations over generic bracketed placeholders. Use an explicit placeholder only when neither source contains enough evidence; never invent evidence, citations, or results.",
+        task: "Revise only the selected span and return its complete replacement. When selectionIsSectionScaffold is true, preserve the LaTeX section heading and draft concrete section prose from Reviewed Local Paper Context and adjacent manuscript context. Prefer supplied terminology, contributions, findings, and limitations over generic bracketed placeholders. Use an explicit plain-text TODO only when neither source contains enough evidence; never put a placeholder inside a LaTeX citation command, and never invent evidence, citations, or results.",
         instruction: input.instruction,
         venue: input.skill.venue,
         section: input.sectionTitle ?? "unknown",
@@ -336,8 +448,8 @@ export class OpenAIAgentProvider implements AgentProvider {
   }
 
   async generateAgentTask(input: AgentTaskExecutionInput, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }> {
-    return this.structured(`${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`, { task: `Execute the approved ${input.intent} paper plan for targetPath. Return targetPath's complete content. Satisfy the approved venue checks that apply to this file without inventing compliance evidence. If targetPath is tightly coupled to companion files already listed in affectedFiles (for example while splitting main.tex into chapter files), you may include those additional planned files too. Do not return paths outside affectedFiles. LaTeX comments are intentionally omitted from Agent context and restored by FastWrite; do not invent or act on hidden comment lines. Preserve unsupported claims and LaTeX syntax.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, targetPath: input.targetPath, plan: { steps: input.steps, affectedFiles: input.affectedFiles, risks: input.risks, validation: input.validation, sectionBudget: input.sectionBudget ?? [], venueChecks: input.venueChecks ?? [] }, documents: input.documents }, "fastwrite_agent_files", {
-      type: "object", additionalProperties: false, properties: { files: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, properties: { path: { type: "string" }, content: { type: "string" }, rationale: { type: "string" } }, required: ["path", "content", "rationale"] } } }, required: ["files"]
+    return this.structured(`${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`, { task: `Execute the approved ${input.intent} paper plan for targetPath. Return exactly one non-empty file whose path is exactly targetPath, containing that file's complete content. Do not return companion files; FastWrite generates each planned file separately. Satisfy the approved venue checks that apply to this file without inventing compliance evidence. When evidence is missing, use a plain-text TODO and never put placeholders such as [EVIDENCE REQUIRED] inside a LaTeX citation command. LaTeX comments are intentionally omitted from Agent context and restored by FastWrite; do not invent or act on hidden comment lines. Preserve unsupported claims and LaTeX syntax.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, targetPath: input.targetPath, plan: { steps: input.steps, affectedFiles: input.affectedFiles, risks: input.risks, validation: input.validation, sectionBudget: input.sectionBudget ?? [], venueChecks: input.venueChecks ?? [] }, documents: input.documents }, "fastwrite_agent_files", {
+      type: "object", additionalProperties: false, properties: { files: { type: "array", minItems: 1, maxItems: 1, items: { type: "object", additionalProperties: false, properties: { path: { type: "string", const: input.targetPath }, content: { type: "string", minLength: 1 }, rationale: { type: "string" } }, required: ["path", "content", "rationale"] } } }, required: ["files"]
     }, signal);
   }
 
@@ -356,30 +468,58 @@ export class OpenAIAgentProvider implements AgentProvider {
 
   private async structured<T>(instructions: string, input: unknown, name: string, schema: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     const model = await this.resolveModel();
+    const jsonInstructions = `${instructions}\n\nReturn only one valid JSON object matching the supplied JSON schema. JSON-escape every backslash in string values, especially LaTeX commands.`;
+    // Some Responses-compatible gateways validate only input/user messages for the
+    // literal word "json" and do not count top-level instructions.
+    const jsonInput = `Return the result as JSON.\n\nInput data:\n${JSON.stringify(input)}`;
+    if (this.wireAPI === "chat") {
+      return JSON.parse(await this.chatStructured(model, jsonInstructions, jsonInput, name, schema, signal)) as T;
+    }
     if (this.customBaseURL) {
-      const response = await this.client.chat.completions.create({
+      // Inspect the raw response because Codex mirrors vary between standard SSE,
+      // a completed-event-only stream, and a one-shot JSON body even with stream=true.
+      const request = this.client.responses.create({
         model,
-        messages: [
-          {
-            role: "system",
-            content: `${instructions}\n\nReturn only one valid JSON object matching the following schema. JSON-escape every backslash in string values, especially LaTeX commands.\n\nSchema (${name}):\n${JSON.stringify(schema)}`
-          },
-          { role: "user", content: JSON.stringify(input) }
-        ],
-        response_format: { type: "json_object" }
+        store: false,
+        stream: true,
+        instructions: `${jsonInstructions}\n\nSchema (${name}):\n${JSON.stringify(schema)}`,
+        input: [{ role: "user", content: [{ type: "input_text", text: jsonInput }] }],
+        text: { format: { type: "json_object" } }
       }, signal ? { signal } : undefined);
-      const content = response.choices[0]?.message.content;
-      if (!content) throw new Error("The configured model returned no structured output");
+      const { content, shape } = await compatibleResponseText(await request.asResponse());
+      if (!content) {
+        try {
+          return JSON.parse(await this.chatStructured(model, jsonInstructions, jsonInput, name, schema, signal)) as T;
+        } catch (error) {
+          const status = record(error)?.status;
+          const fallback = typeof status === "number" ? `HTTP ${status}` : error instanceof SyntaxError ? "invalid JSON" : "no compatible output";
+          throw new Error(`The configured Responses endpoint returned no structured output (${shape}); Chat Completions fallback failed (${fallback})`);
+        }
+      }
       return JSON.parse(content) as T;
     }
     const response = await this.client.responses.create({
       model,
       store: false,
-      instructions,
-      input: JSON.stringify(input),
+      instructions: jsonInstructions,
+      input: jsonInput,
       text: { verbosity: "low", format: { type: "json_schema", name, strict: true, schema } }
     }, signal ? { signal } : undefined);
     return JSON.parse(response.output_text) as T;
+  }
+
+  private async chatStructured(model: string, jsonInstructions: string, jsonInput: string, name: string, schema: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+    const response = await this.client.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: `${jsonInstructions}\n\nSchema (${name}):\n${JSON.stringify(schema)}` },
+        { role: "user", content: jsonInput }
+      ],
+      response_format: { type: "json_object" }
+    }, signal ? { signal } : undefined);
+    const content = response.choices[0]?.message.content;
+    if (!content) throw new Error("The configured model returned no structured output");
+    return content;
   }
 
   private resolveModel(): Promise<string> {

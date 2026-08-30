@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { runAgentOperation } from "./agent-operation";
+import { DEFAULT_AGENT_TIMEOUT_MS, runAgentOperation } from "./agent-operation";
 
 const originalTimeout = process.env.FASTWRITE_AGENT_TIMEOUT_MS;
 
@@ -9,6 +9,10 @@ afterEach(() => {
 });
 
 describe("Agent operation boundary", () => {
+  test("allows five minutes by default for slow planning providers", () => {
+    expect(DEFAULT_AGENT_TIMEOUT_MS).toBe(300_000);
+  });
+
   test("rejects an already-cancelled request before accepting late output", async () => {
     const controller = new AbortController();
     controller.abort();

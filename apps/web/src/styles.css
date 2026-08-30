@@ -593,6 +593,12 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .hunk-evidence article header code { margin-left: auto; color: var(--blue-700); }
 .hunk-evidence article header span { padding: 1px 4px; border-radius: 999px; background: var(--amber-50); color: var(--amber-700); text-transform: uppercase; }
 .hunk-evidence blockquote { margin: 5px 0 0; color: var(--slate-600); font: 9px/1.45 Georgia, serif; }
+.hunk-findings { display: grid; gap: 4px; padding: 7px 9px; border-top: 1px solid var(--slate-100); background: var(--surface); }
+.hunk-findings p { display: flex; gap: 7px; margin: 0; font-size: 9px; line-height: 1.4; color: var(--slate-600); }
+.hunk-findings strong { min-width: 48px; text-transform: uppercase; }
+.hunk-findings .is-blocking strong { color: var(--red-600); }
+.hunk-findings .is-warning strong { color: var(--amber-700); }
+.hunk-findings .is-pass strong { color: var(--green-600); }
 .hunk-card > footer { display: flex; justify-content: flex-end; gap: 5px; padding: 5px 7px; border-top: 1px solid var(--border); background: var(--slate-25); }
 .hunk-card--accepted { border-color: #a9dfbf; }
 .hunk-card--accepted > header strong { background: var(--green-50); color: var(--green-600); }

@@ -10,6 +10,7 @@ import { createFileChange, replaceFileChange } from "./change-set";
 import { preserveLatexComments, stripLatexComments } from "./latex-comments";
 import { isAgentCancellation, runAgentOperation } from "./agent-operation";
 import type { ComplianceService } from "../compliance/compliance-service";
+import { citationFindings } from "./citation-findings";
 
 function now() { return new Date().toISOString(); }
 function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }
@@ -46,7 +47,7 @@ export class AgentTaskService {
       const rawOutput: unknown = await runAgentOperation((signal) => this.provider!.planAgentTask!(input, signal), { signal: requestSignal, label: "Agent planning" });
       const available = new Set(documents.map((document) => document.path));
       const permitsNewFiles = intent === "draft" || intent === "continue" || isStructuralFileOrganizationObjective(objective);
-      const allowedPath = (path: string) => available.has(path) || (permitsNewFiles && request.scope.type === "project" && isNewDraftPath(path));
+      const allowedPath = (path: string) => (request.scope.type !== "project" || isProjectWritingSource(path)) && (available.has(path) || (permitsNewFiles && request.scope.type === "project" && isNewDraftPath(path)));
       const output = normalizeAgentPlanOutput(rawOutput, request.scope.path ?? project.mainDocument, allowedPath, intent);
       output.venueChecks = mergeComplianceChecks(output.venueChecks ?? [], complianceFindings);
       const affectedFiles = output.affectedFiles;
@@ -82,6 +83,8 @@ export class AgentTaskService {
     if (!this.provider?.generateAgentTask) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable Agent tasks");
     const plan = this.getPlan(projectId, planId);
     if (plan.status !== "proposed") throw new ApiError(409, "agent_plan_not_proposed", "This plan is no longer awaiting confirmation");
+    if (plan.request.scope.type === "project") plan.affectedFiles = plan.affectedFiles.filter(isProjectWritingSource);
+    if (!plan.affectedFiles.length) throw new ApiError(502, "agent_plan_invalid", "Agent plan does not contain any writable paper source files");
     const project = this.workspaces.getProject(projectId);
     const documents = await this.documents(projectId);
     for (const path of plan.affectedFiles) {
@@ -97,13 +100,14 @@ export class AgentTaskService {
     const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };
     const visibleDocuments = agentVisibleDocuments(documents);
     const input = this.input(plan.request, visibleDocuments, issues, plannedSkill, withMemory(skill.instructions, memory.content), skill.venueInstructions);
-    await this.database.mutate((state) => { const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "generating"; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "running"; delete run.error; run.steps = plan.affectedFiles.map((path, index) => ({ id: `generate-file-${index + 1}`, label: executionStepLabel(path), status: "running" })); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "execution-started", summary: `Started checking scoped context and updating ${plan.affectedFiles.length} planned files in parallel`, paths: plan.affectedFiles, createdAt: now() }); for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "in_revision"); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.status = "in-revision"; resolution.updatedAt = now(); } });
+    const generationConcurrency = this.provider.fileGenerationConcurrency?.() ?? plan.affectedFiles.length;
+    const generationMode = generationConcurrency <= 1 ? "sequentially" : "in parallel";
+    await this.database.mutate((state) => { const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "generating"; stored.affectedFiles = [...plan.affectedFiles]; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "running"; delete run.error; run.steps = plan.affectedFiles.map((path, index) => ({ id: `generate-file-${index + 1}`, label: executionStepLabel(path), status: "running" })); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "execution-started", summary: `Started checking scoped context and updating ${plan.affectedFiles.length} planned files ${generationMode}`, paths: plan.affectedFiles, createdAt: now() }); for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "in_revision"); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.status = "in-revision"; resolution.updatedAt = now(); } });
     try {
-      const allowedOutputPaths = new Set(plan.affectedFiles);
-      const generated = await Promise.all(plan.affectedFiles.map(async (path, index) => {
+      const generated = await mapWithConcurrency(plan.affectedFiles, generationConcurrency, async (path, index) => {
         const scopedDocuments = generationDocuments(visibleDocuments, path, project.mainDocument, issues, plan.request.objective);
-        const output = await runAgentOperation<{ files?: DraftGeneratedFile[] }>((signal) => this.provider!.generateAgentTask!({ ...input, documents: scopedDocuments, steps: plan.steps, affectedFiles: plan.affectedFiles, targetPath: path, risks: plan.risks, validation: plan.validation, sectionBudget: plan.sectionBudget ?? [], venueChecks: plan.venueChecks ?? [], evidenceDependencies: plan.evidenceDependencies ?? [], missingEvidence: plan.missingEvidence ?? [] }, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: `Agent execution for ${path}` });
-        const files = this.validateGeneratedFiles(Array.isArray(output?.files) ? output.files : [], path, allowedOutputPaths);
+        const output = await runAgentOperation<{ files?: DraftGeneratedFile[] }>((signal) => this.provider!.generateAgentTask!({ ...input, documents: scopedDocuments, steps: plan.steps, affectedFiles: [path], targetPath: path, risks: plan.risks, validation: plan.validation, sectionBudget: plan.sectionBudget ?? [], venueChecks: plan.venueChecks ?? [], evidenceDependencies: plan.evidenceDependencies ?? [], missingEvidence: plan.missingEvidence ?? [] }, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: `Agent execution for ${path}` });
+        const files = this.validateGeneratedFiles(Array.isArray(output?.files) ? output.files : [], path);
         await this.database.mutate((state) => {
           const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!;
           const current = run.steps?.[index];
@@ -113,7 +117,7 @@ export class AgentTaskService {
           run.updatedAt = now();
         });
         return { targetPath: path, files };
-      }));
+      });
       const files = mergeGeneratedFiles(generated, plan.affectedFiles);
       const changes: TextChange[] = [];
       for (const file of files) {
@@ -143,11 +147,9 @@ export class AgentTaskService {
             inferred: item.inferred
           })));
           if (evidence.length) hunk.evidence = evidence;
-          const citationKeys = [...hunk.after.matchAll(/\\(?:cite|citep|citet|parencite|textcite|autocite)\*?(?:\[[^\]]*\]){0,2}\{([^}]+)\}/g)].flatMap((match) => (match[1] ?? "").split(",").map((key) => key.trim()).filter(Boolean));
-          if (citationKeys.length) {
-            const approved = new Set(this.database.snapshot().projectResearchWorks.filter((item) => item.projectId === projectId && item.status === "saved" && item.citationKey).map((item) => item.citationKey!));
-            hunk.findings = citationKeys.map((key) => ({ id: `citation:${key}`, source: "citation" as const, referenceId: key, status: approved.has(key) ? "pass" as const : "blocking" as const, message: approved.has(key) ? `Citation '${key}' is approved for this project.` : `Citation '${key}' has not been approved in Research; verify it before accepting this hunk.` }));
-          }
+          const approved = new Set(this.database.snapshot().projectResearchWorks.filter((item) => item.projectId === projectId && item.status === "saved" && item.citationKey).map((item) => item.citationKey!));
+          const findings = citationFindings(hunk.after, approved);
+          if (findings.length) hunk.findings = findings;
         }
       }
       const effectiveChanges = changes.filter((change) => change.hunks?.length);
@@ -224,16 +226,16 @@ export class AgentTaskService {
   private issues(projectId: string, ids: string[]): ReviewIssue[] { const all = this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).flatMap((report) => report.issues); const issues = ids.map((id) => all.find((issue) => issue.id === id)).filter((issue): issue is ReviewIssue => Boolean(issue)); if (issues.length !== new Set(ids).size) throw new ApiError(404, "review_issue_not_found", "One or more review issues were not found"); return issues; }
   private input(request: AgentTaskRequest, documents: Array<{ path: string; content: string; version: number }>, issues: ReviewIssue[], skill: AgentTaskInput["skill"], skillInstructions: string, venueInstructions: string, complianceFindings: ComplianceFinding[] = []): AgentTaskInput { return { objective: request.objective.trim(), intent: request.intent ?? "revise", scope: request.scope, issues: issues.map(toAgentIssue), documents, skill, skillInstructions, venueInstructions, ...(complianceFindings.length ? { complianceFindings } : {}) }; }
   private getPlan(projectId: string, id: string) { const plan = this.database.snapshot().agentTaskPlans.find((item) => item.id === id && item.projectId === projectId); if (!plan) throw new ApiError(404, "agent_plan_not_found", "Agent plan not found"); return plan; }
-  private validateGeneratedFiles(files: DraftGeneratedFile[], targetPath: string, allowedPaths: Set<string>) {
+  private validateGeneratedFiles(files: DraftGeneratedFile[], targetPath: string) {
     const normalized = files.flatMap((file) => {
       try {
         const path = normalizeWorkspacePath(file.path);
-        return allowedPaths.has(path) && isTextFile(path) && file.content.trim() ? [{ ...file, path }] : [];
+        return path === targetPath && isTextFile(path) && file.content.trim() ? [{ ...file, path }] : [];
       } catch {
         return [];
       }
     });
-    if (!normalized.some((file) => file.path === targetPath)) throw new ApiError(502, "agent_files_invalid", `Agent must return exactly one non-empty file for '${targetPath}'`);
+    if (normalized.length !== 1) throw new ApiError(502, "agent_files_invalid", `Agent must return exactly one non-empty file for '${targetPath}'`);
     return normalized;
   }
   private mutateIssue(issues: ReviewIssue[], id: string, status: ReviewIssue["status"]) { const issue = issues.find((item) => item.id === id); if (issue) { issue.status = status; issue.updatedAt = now(); } }
@@ -264,6 +266,20 @@ function agentVisibleDocuments<T extends { path: string; content: string }>(docu
 
 function executionStepLabel(path: string): string {
   return `Process ${path}`;
+}
+
+async function mapWithConcurrency<T, R>(items: T[], requestedConcurrency: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  if (!items.length) return [];
+  const concurrency = Math.max(1, Math.min(items.length, Number.isFinite(requestedConcurrency) ? Math.floor(requestedConcurrency) : 1));
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index]!, index);
+    }
+  }));
+  return results;
 }
 
 function mergeGeneratedFiles(generated: Array<{ targetPath: string; files: DraftGeneratedFile[] }>, affectedFiles: string[]): DraftGeneratedFile[] {
@@ -334,6 +350,10 @@ function classifyAgentIntent(objective: string, documents: Array<{ path: string;
 
 function isNewDraftPath(path: string): boolean {
   return /^(?!\.)(?!.*(?:^|\/)\.\.\/)[a-zA-Z0-9_./-]+\.(?:tex|bib)$/.test(path);
+}
+
+function isProjectWritingSource(path: string): boolean {
+  return /\.(?:tex|bib)$/i.test(path);
 }
 
 function isStructuralFileOrganizationObjective(objective: string): boolean {

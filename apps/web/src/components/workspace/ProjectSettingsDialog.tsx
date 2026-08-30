@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Save } from "lucide-react";
-import { isIgnoredWorkspacePath, WRITING_PROFILES, type PaperProject, type PublicationTarget, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
+import { isIgnoredWorkspacePath, WRITING_PROFILES, type AgentWireApi, type PaperProject, type PublicationTarget, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
 import { PublicationTargetFields } from "../ui/PublicationTargetFields";
+import { agentSettingsSaveDecision, parseCodexProviderConfig, type AgentSettingsBaseline, type AgentSettingsDraft } from "./projectSettingsAgent";
 
 interface ProjectSettingsDialogProps {
   open: boolean;
@@ -26,6 +27,9 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
   const [apiKey, setApiKey] = useState("");
   const [baseURL, setBaseURL] = useState("");
   const [model, setModel] = useState("");
+  const [wireAPI, setWireAPI] = useState<AgentWireApi>("chat");
+  const [providerConfig, setProviderConfig] = useState("");
+  const [agentBaseline, setAgentBaseline] = useState<AgentSettingsBaseline>({ configured: null, baseURL: "", model: "", wireAPI: "chat" });
   const [savingAgent, setSavingAgent] = useState(false);
   const [agentError, setAgentError] = useState("");
   const texFiles = useMemo(() => flattenFiles(tree).filter((path) => path.toLowerCase().endsWith(".tex") && !isIgnoredWorkspacePath(path)), [tree]);
@@ -37,20 +41,53 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     setProfile(project.skill.venue);
     setPublicationTarget(project.publicationTarget);
     setError("");
+    setAgentConfigured(null);
+    setAgentSource("none");
     setApiKey("");
+    setBaseURL("");
+    setModel("");
+    setWireAPI("chat");
+    setProviderConfig("");
+    setAgentBaseline({ configured: null, baseURL: "", model: "", wireAPI: "chat" });
     setAgentError("");
     void api.agentSettings.get().then((settings) => {
       setAgentConfigured(settings.configured);
       setAgentSource(settings.source);
       setBaseURL(settings.baseURL ?? "");
       setModel(settings.model ?? "");
-    }).catch(() => setAgentConfigured(false));
+      setWireAPI(settings.wireAPI);
+      setAgentBaseline({ configured: settings.configured, baseURL: settings.baseURL ?? "", model: settings.model ?? "", wireAPI: settings.wireAPI });
+    }).catch(() => { setAgentConfigured(false); setAgentBaseline({ configured: false, baseURL: "", model: "", wireAPI: "chat" }); });
   }, [open, project, texFiles]);
 
+  const resolvedAgentDraft = (): { ok: true; draft: AgentSettingsDraft } | { ok: false; message: string } => {
+    const draft: AgentSettingsDraft = { apiKey, baseURL, model, wireAPI };
+    if (!providerConfig.trim()) return { ok: true, draft };
+    const parsed = parseCodexProviderConfig(providerConfig);
+    if (!parsed.ok) return parsed;
+    return { ok: true, draft: { ...draft, baseURL: parsed.value.baseURL, model: parsed.value.model, wireAPI: parsed.value.wireAPI } };
+  };
+
+  const applyProviderConfig = () => {
+    setAgentError("");
+    const parsed = parseCodexProviderConfig(providerConfig);
+    if (!parsed.ok) { setAgentError(parsed.message); return; }
+    setBaseURL(parsed.value.baseURL);
+    setModel(parsed.value.model);
+    setWireAPI(parsed.value.wireAPI);
+    setProviderConfig("");
+  };
+
   const save = async () => {
-    setLoading(true);
     setError("");
+    setAgentError("");
+    const resolved = resolvedAgentDraft();
+    if (!resolved.ok) { setAgentError(resolved.message); return; }
+    const agentDecision = agentSettingsSaveDecision(resolved.draft, agentBaseline);
+    if (agentDecision.kind === "invalid") { setAgentError(agentDecision.message); return; }
+    setLoading(true);
     try {
+      if (agentDecision.kind === "save") await persistAgentSettings(agentDecision.body);
       const updated = await api.projects.update(project.id, { name: name.trim(), mainDocument, venue: profile, publicationTarget: publicationTarget ?? null });
       await onSaved(updated);
     } catch (saveError) {
@@ -61,18 +98,34 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
   };
 
   const saveAgentSettings = async () => {
-    setSavingAgent(true);
     setAgentError("");
+    const resolved = resolvedAgentDraft();
+    if (!resolved.ok) { setAgentError(resolved.message); return; }
+    const decision = agentSettingsSaveDecision(resolved.draft, agentBaseline);
+    if (decision.kind === "invalid") { setAgentError(decision.message); return; }
+    if (decision.kind === "unchanged") return;
+    setSavingAgent(true);
     try {
-      const settings = await api.agentSettings.save({ apiKey, ...(baseURL.trim() ? { baseURL: baseURL.trim() } : {}), ...(model.trim() ? { model: model.trim() } : {}) });
-      setAgentConfigured(settings.configured);
-      setAgentSource(settings.source);
-      setApiKey("");
+      await persistAgentSettings(decision.body);
     } catch (saveError) {
       setAgentError(saveError instanceof Error ? saveError.message : "Could not save Agent settings");
     } finally {
       setSavingAgent(false);
     }
+  };
+
+  const persistAgentSettings = async (body: { apiKey: string; baseURL?: string; model?: string; wireAPI: AgentWireApi }) => {
+    const settings = await api.agentSettings.save(body);
+    const nextBaseURL = settings.baseURL ?? "";
+    const nextModel = settings.model ?? "";
+    setAgentConfigured(settings.configured);
+    setAgentSource(settings.source);
+    setApiKey("");
+    setBaseURL(nextBaseURL);
+    setModel(nextModel);
+    setWireAPI(settings.wireAPI);
+    setProviderConfig("");
+    setAgentBaseline({ configured: settings.configured, baseURL: nextBaseURL, model: nextModel, wireAPI: settings.wireAPI });
   };
 
   return (
@@ -82,7 +135,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
       description="Configure the paper entry point and the Writing Skill used by Agent, Revise, and Review."
       width="small"
       onClose={onClose}
-      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon={<Save />} loading={loading} disabled={!name.trim() || !mainDocument} onClick={() => void save()}>Save changes</Button></>}
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon={<Save />} loading={loading} disabled={!name.trim() || !mainDocument || savingAgent} onClick={() => void save()}>Save changes</Button></>}
     >
       <div className="settings-fields">
         <label className="field"><span>Project name</span><input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label>
@@ -94,7 +147,10 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
           <label className="field"><span>API key</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={agentConfigured ? "Enter a replacement key" : "sk-…"} autoComplete="off" /></label>
           <label className="field"><span>Base URL <small>optional</small></span><input type="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder="https://api.openai.com/v1" autoComplete="off" /></label>
           <label className="field"><span>Model <small>optional</small></span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Use provider default" autoComplete="off" /></label>
-          <div className="settings-agent__actions"><Button size="small" variant="secondary" loading={savingAgent} disabled={!apiKey.trim()} onClick={() => void saveAgentSettings()}>{agentConfigured ? "Replace API key" : "Enable Agent"}</Button><small>The key is never returned or written to project files; it is cleared when the server restarts.</small></div>
+          <label className="field"><span>Wire API</span><select value={wireAPI} onChange={(event) => setWireAPI(event.target.value as AgentWireApi)}><option value="chat">Chat Completions</option><option value="responses">Responses</option></select></label>
+          <label className="field"><span>Codex-style provider config <small>optional · TOML or YAML</small></span><textarea value={providerConfig} onChange={(event) => setProviderConfig(event.target.value)} placeholder={'model = "gpt-5.5"\nmodel_provider = "mirror"\n\n[model_providers.mirror]\nbase_url = "https://example.com/api/codex"\nwire_api = "responses"\nrequires_openai_auth = true'} /><small>Paste a Codex provider block. It fills Base URL, Model, and Wire API; enter the API key separately.</small></label>
+          <div className="settings-agent__actions"><Button size="small" variant="secondary" disabled={!providerConfig.trim() || loading || savingAgent} onClick={applyProviderConfig}>Apply provider config</Button></div>
+          <div className="settings-agent__actions"><Button size="small" variant="secondary" loading={savingAgent} disabled={!apiKey.trim() || loading} onClick={() => void saveAgentSettings()}>{agentConfigured ? "Replace API key" : "Enable Agent"}</Button><small>The key is never returned or written to project files; it is cleared when the server restarts.</small></div>
           {agentError ? <div className="form-error" role="alert">{agentError}</div> : null}
         </section>
         <div className="settings-export"><div><strong>Automatic Git history</strong><span>Accepted saves create local Git checkpoints in the FastWrite project history.</span></div></div>

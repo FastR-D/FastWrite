@@ -10,6 +10,8 @@ export type ResearchDomainId =
   | "human-computer-interaction"
   | "interdisciplinary-emerging";
 
+export type AgentWireApi = "chat" | "responses";
+
 /** @deprecated Compatibility name. Values identify research domains. */
 export type WritingProfile = ResearchDomainId;
 export type PublicationVenueId = string;

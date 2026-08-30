@@ -1,5 +1,7 @@
 import { ApiError } from "../http";
 
+export const DEFAULT_AGENT_TIMEOUT_MS = 300_000;
+
 interface AgentOperationOptions {
   signal?: AbortSignal | undefined;
   timeoutEnv?: string;
@@ -12,7 +14,7 @@ interface AgentOperationOptions {
 
 export async function runAgentOperation<T>(operation: (signal: AbortSignal) => Promise<T>, options: AgentOperationOptions): Promise<T> {
   const controller = new AbortController();
-  const fallback = options.defaultTimeoutMs ?? 120_000;
+  const fallback = options.defaultTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
   const configured = Number.parseInt(process.env[options.timeoutEnv ?? "FASTWRITE_AGENT_TIMEOUT_MS"] ?? String(fallback), 10);
   const timeoutMs = Number.isFinite(configured) ? Math.min(600_000, Math.max(1_000, configured)) : fallback;
   const prefix = options.codePrefix ?? "agent";

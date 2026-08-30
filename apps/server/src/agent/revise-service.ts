@@ -19,6 +19,7 @@ import type { AgentProvider, ReviseAgentInput } from "./provider";
 import type { SkillRegistry } from "./skill-registry";
 import type { MemoryService } from "./memory-service";
 import { replaceSelectionChange } from "./change-set";
+import { citationFindings, normalizePlaceholderFindings } from "./citation-findings";
 
 const COMMANDS: Record<ReviseCommandId, string> = {
   "academic-polish": "Polish this selection into precise, fluent academic prose without strengthening its claims.",
@@ -124,10 +125,10 @@ export class ReviseService {
         createdAt,
         updatedAt: timestamp()
       };
+      const approved = new Set(this.database.snapshot().projectResearchWorks.filter((item) => item.projectId === projectId && item.status === "saved" && item.citationKey).map((item) => item.citationKey!));
       for (const hunk of changeSet.changes[0]?.hunks ?? []) {
-        const citationKeys = [...hunk.after.matchAll(/\\(?:cite|citep|citet|parencite|textcite|autocite)\*?(?:\[[^\]]*\]){0,2}\{([^}]+)\}/g)].flatMap((match) => (match[1] ?? "").split(",").map((key) => key.trim()).filter(Boolean));
-        const approved = new Set(this.database.snapshot().projectResearchWorks.filter((item) => item.projectId === projectId && item.status === "saved" && item.citationKey).map((item) => item.citationKey!));
-        if (citationKeys.length) hunk.findings = citationKeys.map((key) => ({ id: `citation:${key}`, source: "citation" as const, referenceId: key, status: approved.has(key) ? "pass" as const : "blocking" as const, message: approved.has(key) ? `Citation '${key}' is approved.` : `Citation '${key}' requires Research approval before acceptance.` }));
+        const findings = citationFindings(hunk.after, approved);
+        if (findings.length) hunk.findings = findings;
       }
       const updatedRun = await this.database.mutate((state) => {
         state.changeSets.push(changeSet);
@@ -178,6 +179,7 @@ export class ReviseService {
     if (changeSet.status !== "proposed" && !(changeSet.approvalMode === "explicit-finish" && changeSet.status === "partially-accepted")) throw new ApiError(409, "changeset_not_editable", "Only a proposal still under review can be edited");
     const requestedFiles = request.changes ?? [];
     const requestedHunks = request.hunks ?? [];
+    const approvedCitationKeys = new Set(this.database.snapshot().projectResearchWorks.filter((item) => item.projectId === projectId && item.status === "saved" && item.citationKey).map((item) => item.citationKey!));
     if (!requestedFiles.length && !requestedHunks.length) throw new ApiError(400, "changeset_edit_empty", "Edit at least one proposed file or hunk");
     if (requestedFiles.length && requestedHunks.length) throw new ApiError(400, "changeset_edit_mixed", "Edit files or hunks in one request, not both");
 
@@ -201,6 +203,8 @@ export class ReviseService {
           const change = stored.changes.find((candidate) => candidate.path === edit.path)!;
           const hunk = change.hunks!.find((candidate) => candidate.id === edit.hunkId)!;
           hunk.after = edit.after;
+          const findings = citationFindings(edit.after, approvedCitationKeys);
+          if (findings.length) hunk.findings = findings; else delete hunk.findings;
           change.after = materializeProposedText(change.before, change.hunks!);
         }
         stored.updatedAt = timestamp();
@@ -241,6 +245,10 @@ export class ReviseService {
         if (after === undefined) continue;
         change.after = after;
         change.hunks = buildTextHunks(change.before, after);
+        for (const hunk of change.hunks) {
+          const findings = citationFindings(hunk.after, approvedCitationKeys);
+          if (findings.length) hunk.findings = findings;
+        }
       }
       stored.updatedAt = timestamp();
       const run = state.agentRuns.find((candidate) => candidate.id === stored.agentRunId);
@@ -511,7 +519,7 @@ export class ReviseService {
   private getChangeSet(projectId: string, id: string): ChangeSet {
     const changeSet = this.database.snapshot().changeSets.find((candidate) => candidate.id === id && candidate.projectId === projectId);
     if (!changeSet) throw new ApiError(404, "changeset_not_found", "Change set not found");
-    return changeSet;
+    return normalizePlaceholderFindings(changeSet);
   }
 
   private async markConflict(id: string): Promise<ChangeSet> {

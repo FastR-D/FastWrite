@@ -38,6 +38,7 @@ import type {
   ComplianceReport,
   TargetVenue,
   WorkspaceTreeNode
+  ,AgentWireApi
   ,ResearchWork, ResearchRun, ProjectResearchWork, PaperClaim, SourceEvidence
   ,AlignmentFinding
 } from "@fastwrite/shared";
@@ -74,8 +75,8 @@ function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestI
 
 export const api = {
   agentSettings: {
-    get: (signal?: AbortSignal) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string }>("/api/agent-settings", signal ? { signal } : undefined),
-    save: (body: { apiKey: string; baseURL?: string; model?: string }) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string }>("/api/agent-settings", jsonInit("PUT", body))
+    get: (signal?: AbortSignal) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/agent-settings", signal ? { signal } : undefined),
+    save: (body: { apiKey: string; baseURL?: string; model?: string; wireAPI: AgentWireApi }) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/agent-settings", jsonInit("PUT", body))
   },
   venues: {
     list: (signal?: AbortSignal) => request<PublicationVenueOption[]>("/api/venues", signal ? { signal } : undefined)

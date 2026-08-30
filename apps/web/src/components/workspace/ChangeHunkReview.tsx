@@ -8,6 +8,7 @@ import { hunkCounts } from "./agentReview";
 export function ChangeHunkReview({ change, busy, readOnly = false, showToolbar = true, onDecide, onEditHunk }: { change: TextChange; busy: boolean; readOnly?: boolean; showToolbar?: boolean; onDecide: (hunkIds: string[], status: "accepted" | "rejected") => void; onEditHunk?: (hunkId: string, after: string) => Promise<void> }) {
   const hunks = change.hunks ?? [];
   const pending = hunks.filter((hunk) => hunk.status === "pending");
+  const pendingHasBlocking = pending.some((hunk) => hunk.findings?.some((finding) => finding.status === "blocking"));
   const counts = hunkCounts(change);
   const [editingHunk, setEditingHunk] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -23,7 +24,7 @@ export function ChangeHunkReview({ change, busy, readOnly = false, showToolbar =
   };
   if (!hunks.length) return <div className="revision-diff">{diffWords(change.before, change.after).map((part, index) => part.type === "delete" ? <del key={index}>{part.value}</del> : part.type === "insert" ? <ins key={index}>{part.value}</ins> : <span key={index}>{part.value}</span>)}</div>;
   return <div className="hunk-review">
-    {showToolbar ? <div className="hunk-review__toolbar"><span className="review-counts"><b className="is-pending">Pending {counts.pending}/{counts.total}</b><b className="is-accepted">Accepted {counts.accepted}/{counts.total}</b><b className="is-rejected">Rejected {counts.rejected}/{counts.total}</b></span>{!readOnly ? <><Button size="small" variant="ghost" disabled={busy || !pending.length} onClick={() => onDecide(pending.map((hunk) => hunk.id), "rejected")}>Reject pending file hunks</Button><Button size="small" variant="secondary" disabled={busy || !pending.length} onClick={() => onDecide(pending.map((hunk) => hunk.id), "accepted")}>Accept pending file hunks</Button></> : null}</div> : null}
+    {showToolbar ? <div className="hunk-review__toolbar"><span className="review-counts"><b className="is-pending">Pending {counts.pending}/{counts.total}</b><b className="is-accepted">Accepted {counts.accepted}/{counts.total}</b><b className="is-rejected">Rejected {counts.rejected}/{counts.total}</b></span>{!readOnly ? <><Button size="small" variant="ghost" disabled={busy || !pending.length} onClick={() => onDecide(pending.map((hunk) => hunk.id), "rejected")}>Reject pending file hunks</Button><Button size="small" variant="secondary" disabled={busy || !pending.length || pendingHasBlocking} title={pendingHasBlocking ? "Edit or reject hunks with blocking evidence findings first" : undefined} onClick={() => onDecide(pending.map((hunk) => hunk.id), "accepted")}>Accept pending file hunks</Button></> : null}</div> : null}
     <div className="hunk-review__list">{hunks.map((hunk, index) => {
       const parts = diffWords(hunk.before, hunk.after);
       const editing = editingHunk === hunk.id;
@@ -37,7 +38,8 @@ export function ChangeHunkReview({ change, busy, readOnly = false, showToolbar =
             <blockquote>{evidence.excerpt}</blockquote>
           </article>)}
         </div> : null}
-        {!readOnly && !editing ? <footer>{onEditHunk ? <Button size="small" variant="secondary" icon={<Pencil />} disabled={busy || hunk.status === "accepted"} title={hunk.status === "accepted" ? "Change to reject before editing this hunk" : "Edit only this hunk"} onClick={() => { setEditingHunk(hunk.id); setDraft(hunk.after); setError(""); }}>Edit hunk</Button> : null}{hunk.status !== "rejected" ? <Button size="small" variant="ghost" icon={<X />} disabled={busy} onClick={() => onDecide([hunk.id], "rejected")}>{hunk.status === "accepted" ? "Change to reject" : "Reject"}</Button> : null}{hunk.status !== "accepted" ? <Button size="small" variant={hunk.status === "pending" ? "primary" : "secondary"} icon={<Check />} disabled={busy} onClick={() => onDecide([hunk.id], "accepted")}>{hunk.status === "rejected" ? "Change to accept" : "Accept"}</Button> : null}</footer> : null}
+        {hunk.findings?.length ? <div className="hunk-findings">{hunk.findings.map((finding) => <p className={`is-${finding.status}`} key={finding.id}><strong>{finding.status}</strong><span>{finding.message}</span></p>)}</div> : null}
+        {!readOnly && !editing ? <footer>{onEditHunk ? <Button size="small" variant="secondary" icon={<Pencil />} disabled={busy || hunk.status === "accepted"} title={hunk.status === "accepted" ? "Change to reject before editing this hunk" : "Edit only this hunk"} onClick={() => { setEditingHunk(hunk.id); setDraft(hunk.after); setError(""); }}>Edit hunk</Button> : null}{hunk.status !== "rejected" ? <Button size="small" variant="ghost" icon={<X />} disabled={busy} onClick={() => onDecide([hunk.id], "rejected")}>{hunk.status === "accepted" ? "Change to reject" : "Reject"}</Button> : null}{hunk.status !== "accepted" ? <Button size="small" variant={hunk.status === "pending" ? "primary" : "secondary"} icon={<Check />} disabled={busy || hunk.findings?.some((finding) => finding.status === "blocking")} title={hunk.findings?.some((finding) => finding.status === "blocking") ? "Edit or reject this hunk to resolve its blocking finding" : undefined} onClick={() => onDecide([hunk.id], "accepted")}>{hunk.status === "rejected" ? "Change to accept" : "Accept"}</Button> : null}</footer> : null}
       </article>;
     })}</div>
   </div>;
