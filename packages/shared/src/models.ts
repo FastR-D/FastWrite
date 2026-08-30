@@ -350,10 +350,13 @@ export interface TextHunk {
 
 export interface HunkFinding {
   id: string;
-  source: "claim" | "citation" | "review" | "compliance";
+  source: "claim" | "citation" | "numeric" | "structure" | "review" | "compliance" | "style";
   referenceId: string;
-  status: "pass" | "warning" | "blocking";
+  status: "pass" | "warning" | "blocking" | "unresolved";
   message: string;
+  anchors?: ClaimAnchor[];
+  confidence?: "high" | "medium" | "low";
+  suggestedAction?: string;
 }
 
 export interface TextHunkEvidence {
@@ -531,7 +534,7 @@ export interface ReviewReport {
   inputType?: "source" | "pdf-preview";
   createdFromProjectVersion?: number;
   stale?: boolean;
-  passes?: Array<{ id: "mechanical" | "evidence" | "domain" | "venue" | "synthesis"; status: "completed" | "failed" | "skipped"; issues: string[]; error?: string }>;
+  passes?: Array<{ id: "mechanical" | "evidence" | "argument" | "domain" | "venue" | "adversarial" | "synthesis"; status: "completed" | "failed" | "skipped"; issues: string[]; error?: string; provider?: string; model?: string; inputBoundary?: string; unavailableReason?: string }>;
   createdAt: string;
 }
 
@@ -648,6 +651,7 @@ export interface AgentTaskPlan {
   }>;
   evidenceDependencies?: EvidenceDependency[];
   missingEvidence?: string[];
+  sectionContracts?: SectionContract[];
   changeSetId?: string;
   acceptedProjectVersion?: number;
   compileRecordId?: string;
@@ -726,6 +730,7 @@ export interface SourceEvidence {
   approvedAt?: string;
   createdAt: string;
   updatedAt: string;
+  citationKey?: string;
 }
 
 export interface ClaimAnchor {
@@ -748,11 +753,26 @@ export interface PaperClaim {
   createdBy: "user" | "agent" | "scanner";
   createdAt: string;
   updatedAt: string;
+  surface?: "number" | "scope" | "citation" | "caption" | "table-cell" | "artifact-reference" | "text";
+  semanticType?: "background" | "contribution" | "method" | "result" | "comparison" | "limitation";
+  normalizedText?: string;
+  numbers?: Array<{ raw: string; normalized: number; unit?: string; metric?: string; direction?: "higher" | "lower"; aggregation?: string }> | undefined;
+}
+
+export interface SectionContract {
+  path: string; purpose: string; requiredClaimIds: string[]; allowedEvidenceIds: string[];
+  requiredTablesOrFigures: string[]; terminology: string[]; openQuestions: string[]; targetWords?: number;
+}
+
+export interface ClaimRelation {
+  id: string; projectId: string; fromClaimId: string; toClaimId: string;
+  type: "motivates" | "addresses" | "implements" | "evaluates" | "supports" | "limits";
+  status: "candidate" | "confirmed" | "stale"; origin: "scanner" | "agent" | "user";
 }
 
 export type ClaimEvidenceLink =
   | { id: string; claimId: string; kind: "literature"; evidenceId: string; citationKey?: string }
-  | { id: string; claimId: string; kind: "workspace"; path: string; anchor: ClaimAnchor }
+  | { id: string; claimId: string; kind: "workspace"; path: string; anchor: ClaimAnchor; stale?: boolean }
   | { id: string; claimId: string; kind: "review-waiver"; reason: string; approvedByUser: true };
 
 export interface AlignmentFinding {

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type CompileRecord, type DraftPlan, type GithubSyncRun, type IssueResolution, type PaperMemory, type PaperProject, type ReviewReport, type ReviewSnapshot, type UploadSession, type ResearchWork, type ProjectResearchWork, type ResearchIdentifier, type MetadataObservation, type SourceEvidence, type PaperClaim, type ClaimEvidenceLink, type ResearchRun } from "@fastwrite/shared";
+import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type CompileRecord, type DraftPlan, type GithubSyncRun, type IssueResolution, type PaperMemory, type PaperProject, type ReviewReport, type ReviewSnapshot, type UploadSession, type ResearchWork, type ProjectResearchWork, type ResearchIdentifier, type MetadataObservation, type SourceEvidence, type PaperClaim, type ClaimEvidenceLink, type ResearchRun, type ClaimRelation } from "@fastwrite/shared";
 
 export interface FileVersionRecord {
   version: number;
@@ -30,10 +30,11 @@ export interface DatabaseState {
   paperClaims: PaperClaim[];
   claimEvidenceLinks: ClaimEvidenceLink[];
   researchRuns: ResearchRun[];
+  claimRelations: ClaimRelation[];
 }
 
 export const CURRENT_SCHEMA_VERSION = 2;
-const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [] };
+const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], claimRelations: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
@@ -71,7 +72,8 @@ export class JsonDatabase {
         sourceEvidence: parsed.sourceEvidence ?? [],
         paperClaims: parsed.paperClaims ?? [],
         claimEvidenceLinks: parsed.claimEvidenceLinks ?? [],
-        researchRuns: parsed.researchRuns ?? []
+        researchRuns: parsed.researchRuns ?? [],
+        claimRelations: parsed.claimRelations ?? []
       };
       this.state = migrate(migratedState);
       let migrated = false;

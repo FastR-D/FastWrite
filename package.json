@@ -13,6 +13,7 @@
     "package:app": "bun scripts/package-app.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test apps/server/src apps/web/src packages/shared/src",
+    "writing:eval": "bun scripts/writing-eval.ts",
     "e2e:smoke": "sh scripts/e2e-smoke.sh",
     "e2e:cross-browser": "sh scripts/e2e-cross-browser.sh",
     "llm:smoke": "bun scripts/llm-smoke.ts",

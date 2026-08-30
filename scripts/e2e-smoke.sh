@@ -6,16 +6,22 @@ QA_DATA=$(mktemp -d "${TMPDIR:-/tmp}/fastwrite-e2e.XXXXXX")
 E2E_BROWSER=${FASTWRITE_E2E_BROWSER:-chrome}
 E2E_PORT=${FASTWRITE_E2E_PORT:-3213}
 E2E_SERVER_BIN=${FASTWRITE_E2E_SERVER_BIN:-}
+E2E_PLAYWRIGHT_CLI_VERSION=${FASTWRITE_E2E_PLAYWRIGHT_CLI_VERSION:-0.1.18}
 QA_SESSION="fastwrite-e2e-${E2E_BROWSER}-$$"
 SERVER_PID=""
 
 pw() {
-  npx --yes --package @playwright/cli playwright-cli --session "$QA_SESSION" "$@"
+  npx --yes --package "@playwright/cli@$E2E_PLAYWRIGHT_CLI_VERSION" playwright-cli --session "$QA_SESSION" "$@"
 }
 
 run_code() {
-  output=$(pw run-code "$1")
+  if output=$(pw run-code "$1" 2>&1); then
+    status=0
+  else
+    status=$?
+  fi
   printf '%s\n' "$output"
+  if [ "$status" -ne 0 ]; then return "$status"; fi
   case "$output" in
     *"### Error"*) return 1 ;;
   esac
@@ -737,6 +743,16 @@ async (page) => {
     reviewRunning = false;
     await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ run: reviewRun, snapshot, report }) });
   });
+  await page.route("**/api/projects/*/review-issues/issue-e2e", async route => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    const updates = route.request().postDataJSON();
+    const issue = report?.issues.find(candidate => candidate.id === "issue-e2e");
+    if (!issue) throw new Error("Review Issue update ran before the Review fixture existed");
+    if (updates.status) issue.status = updates.status;
+    if (updates.priority !== undefined) issue.priority = updates.priority;
+    issue.updatedAt = new Date().toISOString();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(issue) });
+  });
 
   await page.route("**/api/projects/*/agent-runs", async route => {
     const progressRun = { id: "review-run-e2e", projectId, type: "review", status: "running", objective: "Review paper", skill: project.skill, createdAt: timestamp, updatedAt: timestamp, steps: [{ id: "snapshot", label: "Freeze paper snapshot", status: "completed" }, { id: "evidence", label: "Collect section evidence", status: "running" }, { id: "synthesis", label: "Synthesize and deduplicate issues", status: "pending" }] };
@@ -861,6 +877,7 @@ async (page) => {
 
   await page.unroute("**/api/projects/*/memory**");
   await page.unroute("**/api/projects/*/reviews");
+  await page.unroute("**/api/projects/*/review-issues/issue-e2e");
   await page.unroute("**/api/projects/*/agent-runs");
   await page.unroute("**/api/projects/*/issue-resolutions");
   await page.unroute("**/api/projects/*/agent-tasks");

@@ -11,9 +11,10 @@ export function ComplianceDialog({ open, project, renderedPages, onClose }: { op
   const [mainBodyPages, setMainBodyPages] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [writingFindings, setWritingFindings] = useState<Array<{ id: string; status: string; source: string; message: string }>>([]);
   const run = useCallback(async (signal?: AbortSignal) => {
     setLoading(true); setError("");
-    try { const parsedMainPages = Number(mainBodyPages); setReport(await api.compliance.check(project.id, { ...(renderedPages ? { renderedPages } : {}), ...(Number.isSafeInteger(parsedMainPages) && parsedMainPages > 0 ? { mainBodyPages: parsedMainPages } : {}), verifyCitationsOnline: online }, signal)); }
+    try { const parsedMainPages = Number(mainBodyPages); const [compliance, writing] = await Promise.all([api.compliance.check(project.id, { ...(renderedPages ? { renderedPages } : {}), ...(Number.isSafeInteger(parsedMainPages) && parsedMainPages > 0 ? { mainBodyPages: parsedMainPages } : {}), verifyCitationsOnline: online }, signal), api.claims.writingChecks(project.id, signal)]); setReport(compliance); setWritingFindings(writing.findings as Array<{ id: string; status: string; source: string; message: string }>); }
     catch (failure) { if ((failure as DOMException).name !== "AbortError") setError(failure instanceof Error ? failure.message : "Compliance check failed"); }
     finally { setLoading(false); }
   }, [mainBodyPages, online, project.id, renderedPages]);
@@ -27,6 +28,7 @@ export function ComplianceDialog({ open, project, renderedPages, onClose }: { op
         <div className="agent-resolution"><ShieldCheck /><span><strong>{report.submissionBlocked ? "SUBMISSION BLOCKED" : "READY"} · {report.summary.errors} errors · {report.summary.warnings} warnings · {report.summary.unresolved} unresolved · {report.summary.passed} passed</strong>{report.renderedPages ? `Rendered PDF: ${report.renderedPages} pages.` : "Compile the PDF to enforce page limits."}</span></div>
         <div className="agent-plan"><section><h3>Checks</h3><ul>{report.findings.map((finding) => <li key={finding.id}><strong>{finding.status.toUpperCase()} · {finding.category}</strong> — {finding.message}{finding.path ? ` (${finding.path}${finding.line ? `:${finding.line}` : ""})` : ""}</li>)}</ul></section>
         <section><h3>Citation authenticity</h3>{report.citations.length ? <ul>{report.citations.map((citation) => <li key={citation.key}><strong>{citation.status.toUpperCase()} · {citation.key}</strong> — {citation.message}</li>)}</ul> : <p><CheckCircle2 /> No citation commands were found.</p>}</section></div>
+        <section><h3>Writing quality preflight</h3>{writingFindings.length ? <ul>{writingFindings.map((finding) => <li key={finding.id}><strong className={finding.status === "blocking" ? "text-danger" : finding.status === "warning" ? "text-warning" : ""}>{finding.status.toUpperCase()} · {finding.source}</strong> — {finding.message}</li>)}</ul> : <p><CheckCircle2 /> No deterministic writing findings.</p>}</section>
       </> : null}
       {error ? <div className="form-error" role="alert">{error}</div> : null}
     </div>

@@ -1,4 +1,4 @@
-import type { AgentRun, AgentTaskIntent, AgentTaskPlan, AgentTaskPlanResponse, AgentTaskRequest, ChangeSet, ComplianceFinding, IssueResolution, ReviewIssue, TextChange, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { AgentRun, AgentTaskIntent, AgentTaskPlan, AgentTaskPlanResponse, AgentTaskRequest, ChangeSet, ComplianceFinding, IssueResolution, PaperClaim, ReviewIssue, TextChange, WorkspaceTreeNode } from "@fastwrite/shared";
 import { isTextFile, normalizeWorkspacePath } from "@fastwrite/shared";
 import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
@@ -11,8 +11,16 @@ import { preserveLatexComments, stripLatexComments } from "./latex-comments";
 import { isAgentCancellation, runAgentOperation } from "./agent-operation";
 import type { ComplianceService } from "../compliance/compliance-service";
 import { citationFindings } from "./citation-findings";
+import { writingGuard } from "../writing/writing-guard";
 
 function now() { return new Date().toISOString(); }
+function prioritizeContinueFiles(paths: string[], documents: Array<{ path: string; content: string }>, claims: PaperClaim[], issues: ReviewIssue[]): string[] {
+  const scores = new Map(paths.map((path) => [path, 0]));
+  for (const claim of claims) if (claim.reviewStatus !== "supported" || claim.anchorStatus !== "current") scores.set(claim.anchor.path, (scores.get(claim.anchor.path) ?? 0) + (claim.reviewStatus === "unsupported" ? 30 : 20));
+  for (const issue of issues) for (const evidence of issue.evidence) if (evidence.path) scores.set(evidence.path, (scores.get(evidence.path) ?? 0) + 15);
+  for (const document of documents) if (/\b(?:TODO|TBD|FIXME|to be completed)\b/i.test(document.content)) scores.set(document.path, (scores.get(document.path) ?? 0) + 25);
+  return [...paths].sort((left, right) => (scores.get(right) ?? 0) - (scores.get(left) ?? 0));
+}
 function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }
 
 export class AgentTaskService {
@@ -50,9 +58,10 @@ export class AgentTaskService {
       const allowedPath = (path: string) => (request.scope.type !== "project" || isProjectWritingSource(path)) && (available.has(path) || (permitsNewFiles && request.scope.type === "project" && isNewDraftPath(path)));
       const output = normalizeAgentPlanOutput(rawOutput, request.scope.path ?? project.mainDocument, allowedPath, intent);
       output.venueChecks = mergeComplianceChecks(output.venueChecks ?? [], complianceFindings);
-      const affectedFiles = output.affectedFiles;
+      const affectedFiles = intent === "continue" ? prioritizeContinueFiles(output.affectedFiles, documents, this.database.snapshot().paperClaims.filter((claim) => claim.projectId === projectId), this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).flatMap((report) => report.issues.filter((issue) => issue.status !== "resolved" && issue.status !== "dismissed"))) : output.affectedFiles;
       if (!affectedFiles.length || affectedFiles.some((path) => !allowedPath(path)) || (request.scope.type === "file" && affectedFiles.some((path) => path !== request.scope.path))) throw new ApiError(502, "agent_plan_invalid", "Agent returned files outside the requested scope");
-      const plan: AgentTaskPlan = { id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { objective, scope: request.scope, intent, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, intent, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, ...(output.sectionBudget ? { sectionBudget: output.sectionBudget } : {}), ...(output.venueChecks ? { venueChecks: output.venueChecks } : {}), ...(output.evidenceDependencies ? { evidenceDependencies: output.evidenceDependencies } : {}), ...(output.missingEvidence ? { missingEvidence: output.missingEvidence } : {}), createdAt, updatedAt: now() };
+      const sectionContracts = request.scope.path ? [{ path: request.scope.path, purpose: objective, requiredClaimIds: (output.evidenceDependencies ?? []).flatMap((item) => item.requiredClaimIds), allowedEvidenceIds: [], requiredTablesOrFigures: [], terminology: [], openQuestions: output.missingEvidence ?? [] }] : undefined;
+      const plan: AgentTaskPlan = { id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { objective, scope: request.scope, intent, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, intent, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, ...(sectionContracts ? { sectionContracts } : {}), ...(output.sectionBudget ? { sectionBudget: output.sectionBudget } : {}), ...(output.venueChecks ? { venueChecks: output.venueChecks } : {}), ...(output.evidenceDependencies ? { evidenceDependencies: output.evidenceDependencies } : {}), ...(output.missingEvidence ? { missingEvidence: output.missingEvidence } : {}), createdAt, updatedAt: now() };
       const reports = this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId);
       const reviewSnapshotIds = [...new Set(issues.flatMap((issue) => reports.find((report) => report.issues.some((candidate) => candidate.id === issue.id))?.snapshotId ?? []))];
       const resolution: IssueResolution | undefined = issues.length ? {
@@ -149,7 +158,17 @@ export class AgentTaskService {
           if (evidence.length) hunk.evidence = evidence;
           const approved = new Set(this.database.snapshot().projectResearchWorks.filter((item) => item.projectId === projectId && item.status === "saved" && item.citationKey).map((item) => item.citationKey!));
           const findings = citationFindings(hunk.after, approved);
-          if (findings.length) hunk.findings = findings;
+          const qualityFindings = writingGuard({ path: change.path, content: hunk.after, approvedCitationKeys: approved });
+          if (findings.length || qualityFindings.length) hunk.findings = [...findings, ...qualityFindings];
+        }
+      }
+      const claimById = new Map(this.database.snapshot().paperClaims.filter((claim) => claim.projectId === projectId).map((claim) => [claim.id, claim]));
+      const generatedText = files.map((file) => file.content).join("\n");
+      for (const dependency of plan.evidenceDependencies ?? []) for (const claimId of dependency.requiredClaimIds ?? []) {
+        const claim = claimById.get(claimId);
+        if (!claim || !generatedText.includes(claim.anchor.exactText)) {
+          const target = changes.flatMap((change) => change.hunks ?? [])[0];
+          if (target) { target.findings ??= []; target.findings.push({ id: `evidence_dependency_${claimId}`, source: "claim", status: "unresolved", referenceId: claimId, message: `Required claim '${claim?.anchor.exactText.slice(0, 80) ?? claimId}' was not verified in generated output.` }); }
         }
       }
       const effectiveChanges = changes.filter((change) => change.hunks?.length);

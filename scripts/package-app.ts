@@ -3,6 +3,12 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 
 const projectRoot = resolve(import.meta.dir, "..");
 const output = resolve(projectRoot, "app-bin");
+const supportedCompileTargets = new Set(["bun", "bun-linux-x64", "bun-windows-x64", "bun-darwin-x64", "bun-darwin-arm64"]);
+const compileTarget = process.env.FASTWRITE_COMPILE_TARGET?.trim() || "bun";
+if (!supportedCompileTargets.has(compileTarget)) throw new Error(`Unsupported FASTWRITE_COMPILE_TARGET: ${compileTarget}`);
+const windowsTarget = compileTarget.includes("-windows-") || (compileTarget === "bun" && process.platform === "win32");
+const executableName = windowsTarget ? "fastwrite.exe" : "fastwrite";
+const executablePath = join(output, executableName);
 const sourceEnvironment = join(projectRoot, ".env");
 const releaseEnvironment = join(output, ".env");
 const releaseData = join(output, "paperdata");
@@ -17,6 +23,7 @@ await mkdir(output, { recursive: true });
 if (!await exists(releaseData) && await exists(legacyData)) await rename(legacyData, releaseData);
 await Promise.all([
   rm(join(output, "fastwrite"), { force: true }),
+  rm(join(output, "fastwrite.exe"), { force: true }),
   rm(join(output, "skills"), { recursive: true, force: true }),
   rm(join(output, "web"), { recursive: true, force: true }),
   rm(join(output, "start.sh"), { force: true })
@@ -24,7 +31,7 @@ await Promise.all([
 
 await Bun.write(standaloneEntry, await standaloneEntrySource());
 try {
-  await run(["bun", "build", "--compile", "--target=bun", "--asset-naming=[dir]/[name].[ext]", "scripts/.standalone-entry.ts", "--outfile", "app-bin/fastwrite"], projectRoot);
+  await run(["bun", "build", "--compile", `--target=${compileTarget}`, "--asset-naming=[dir]/[name].[ext]", "scripts/.standalone-entry.ts", "--outfile", `app-bin/${executableName}`], projectRoot);
 } finally {
   await rm(standaloneEntry, { force: true });
 }
@@ -36,15 +43,15 @@ await Bun.write(join(output, "README.md"), `# FastWrite
 
 Start the application from this directory:
 
-\`\`\`bash
-./fastwrite
+\`\`\`${windowsTarget ? "powershell" : "bash"}
+${windowsTarget ? ".\\fastwrite.exe" : "./fastwrite"}
 \`\`\`
 
 Open the local address printed in the terminal. Your papers and compiler cache are stored in \`paperdata/\` beside the binary.
 
 ## Configure AI
 
-Create \`.env\` beside \`fastwrite\` (or copy \`.env.example\` when present):
+Create \`.env\` beside \`${executableName}\` (or copy \`.env.example\` when present):
 
 \`\`\`dotenv
 OPENAI_API_KEY=...
@@ -58,9 +65,9 @@ The API base URL and model are optional. The \`skills/\` directory must remain b
 if (await exists(sourceEnvironment) && !await exists(releaseEnvironment)) await cp(sourceEnvironment, releaseEnvironment);
 else if (!await exists(releaseEnvironment)) await Bun.write(join(output, ".env.example"), "# Copy to .env and configure your AI provider.\n# OPENAI_API_KEY=...\n# OPENAI_BASE_URL=https://api.openai.com/v1\n# FASTWRITE_OPENAI_MODEL=gpt-5.6\n");
 
-await Bun.spawn(["chmod", "+x", join(output, "fastwrite")]).exited;
+if (!windowsTarget) await Bun.spawn(["chmod", "+x", executablePath]).exited;
 
-console.log(`Packaged standalone FastWrite binary into ${output}`);
+console.log(`Packaged standalone FastWrite binary for ${compileTarget} into ${output}`);
 
 async function exists(path: string): Promise<boolean> {
   try { await stat(path); return true; } catch { return false; }

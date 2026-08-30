@@ -31,6 +31,8 @@ import type {
   CompileRecord,
   CompletionRequest,
   CompletionResponse,
+  HunkFinding,
+  ClaimRelation,
   UploadManifestEntry,
   UploadSession,
   PublicationTarget,
@@ -189,8 +191,15 @@ export const api = {
   claims: {
     scan: (projectId: string) => request<PaperClaim[]>(`/api/projects/${projectId}/claim-scans`, { method: "POST" }),
     list: (projectId: string) => request<PaperClaim[]>(`/api/projects/${projectId}/claims`),
+    links: (projectId: string, claimId: string) => request<unknown[]>(`/api/projects/${projectId}/claims/${claimId}/links`),
+    reanchor: (projectId: string, claimId: string) => request<PaperClaim>(`/api/projects/${projectId}/claims/${claimId}/reanchor`, { method: "POST" }),
+    update: (projectId: string, claimId: string, body: { reviewStatus?: PaperClaim["reviewStatus"]; anchorStatus?: PaperClaim["anchorStatus"] }) => request<PaperClaim>(`/api/projects/${projectId}/claims/${claimId}`, jsonInit("PATCH", body)),
     evidence: (projectId: string) => request<SourceEvidence[]>(`/api/projects/${projectId}/evidence`),
-    addEvidence: (projectId: string, body: { workId: string; content: string; kind?: string; locator: string; locatorType?: string; origin?: string; representation?: string }) => request<SourceEvidence>(`/api/projects/${projectId}/evidence`, jsonInit("POST", body))
+    addEvidence: (projectId: string, body: { workId: string; content: string; kind?: string; locator: string; locatorType?: string; origin?: string; representation?: string }) => request<SourceEvidence>(`/api/projects/${projectId}/evidence`, jsonInit("POST", body)),
+    writingChecks: (projectId: string, signal?: AbortSignal) => request<{ projectId: string; projectVersion: number; findings: HunkFinding[] }>(`/api/projects/${projectId}/writing-checks`, { method: "POST", ...(signal ? { signal } : {}) }),
+    argumentGraph: (projectId: string, signal?: AbortSignal) => request<{ projectId: string; relations: ClaimRelation[] }>(`/api/projects/${projectId}/argument-graph`, signal ? { signal } : undefined),
+    confirmRelation: (projectId: string, body: { fromClaimId: string; toClaimId: string; type: ClaimRelation["type"] }) => request<ClaimRelation>(`/api/projects/${projectId}/argument-graph/confirm`, jsonInit("POST", body)),
+    adversarialMemo: (projectId: string, signal?: AbortSignal) => request<{ id: string; projectId: string; advisory: true; strongestRejection: string; objections: Array<{ id: string; kind: string; message: string; claimIds: string[]; anchorPaths: string[]; selectable: true }>; createdAt: string }>(`/api/projects/${projectId}/adversarial-memo`, { method: "POST", ...(signal ? { signal } : {}) })
   },
   alignment: {
     check: (projectId: string) => request<{ projectId: string; findings: AlignmentFinding[] }>(`/api/projects/${projectId}/alignment-checks`, { method: "POST" })

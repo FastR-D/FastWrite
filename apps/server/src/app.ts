@@ -44,6 +44,9 @@ import { LatexTemplateService } from "./templates/latex-template-service";
 import { ResearchService } from "./research/research-service";
 import { ClaimService } from "./claims/claim-service";
 import { AlignmentService } from "./alignment/alignment-service";
+import { writingGuardMany } from "./writing/writing-guard";
+import { deriveArgumentGraph } from "./claims/argument-graph";
+import { buildAdversarialMemo } from "./claims/adversarial-memo";
 import { normalizePlaceholderFindings } from "./agent/citation-findings";
 
 interface Services {
@@ -209,7 +212,18 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
     route("POST", "/api/projects/:projectId/research-works/:workId/pdf-evidence", async (request, params) => { const body = await readJson<{ pdfBase64?: string; authorized?: boolean }>(request); if (!body.pdfBase64 || body.authorized !== true) throw new ApiError(403, "pdf_authorization_required", "Provide bounded PDF data with explicit authorization"); return json(await research.extractPdfEvidence(required(params, "projectId"), required(params, "workId"), body.pdfBase64, body.authorized === true), 201); }),
     route("POST", "/api/projects/:projectId/claim-scans", async (_request, params) => json(await claims.scan(required(params, "projectId")), 201)),
     route("POST", "/api/projects/:projectId/alignment-checks", async (_request, params) => json(await alignment.check(required(params, "projectId")), 201)),
+    route("POST", "/api/projects/:projectId/writing-checks", async (_request, params) => {
+      const projectId = required(params, "projectId"); const project = workspaces.getProject(projectId); const tree = await workspaces.tree(projectId);
+      const paths = textPaths(tree).filter((path) => /\.(?:tex|bib)$/i.test(path));
+      const documents = await Promise.all(paths.map(async (path) => { const file = await workspaces.readTextFile(projectId, path); return { path, content: file.content, fileVersion: file.file.version }; }));
+      const approved = new Set(database.snapshot().sourceEvidence.filter((item) => item.projectId === projectId && item.status === "approved").map((item) => item.citationKey).filter((key): key is string => Boolean(key)));
+      return json({ projectId, projectVersion: project.version, findings: writingGuardMany(documents.map((document) => ({ ...document, approvedCitationKeys: approved }))) }, 201);
+    }),
     route("GET", "/api/projects/:projectId/claims", async (_request, params) => json(claims.list(required(params, "projectId")))),
+    route("GET", "/api/projects/:projectId/claims/:claimId/links", async (_request, params) => { const projectId = required(params, "projectId"); const claimId = required(params, "claimId"); if (!claims.list(projectId).some((item) => item.id === claimId)) throw new ApiError(404, "claim_not_found", "Claim not found"); return json(database.snapshot().claimEvidenceLinks.filter((link) => link.claimId === claimId)); }),
+    route("GET", "/api/projects/:projectId/argument-graph", async (_request, params) => { const projectId = required(params, "projectId"); const persisted = database.snapshot().claimRelations.filter((item) => item.projectId === projectId); const generated = deriveArgumentGraph(projectId, claims.list(projectId)).filter((item) => !persisted.some((saved) => saved.fromClaimId === item.fromClaimId && saved.toClaimId === item.toClaimId)); return json({ projectId, relations: [...persisted, ...generated] }); }),
+    route("POST", "/api/projects/:projectId/adversarial-memo", async (_request, params) => { const projectId = required(params, "projectId"); const ledger = claims.list(projectId); return json(buildAdversarialMemo(projectId, ledger, deriveArgumentGraph(projectId, ledger)), 201); }),
+    route("POST", "/api/projects/:projectId/argument-graph/confirm", async (request, params) => { const projectId = required(params, "projectId"); const body = await readJson<{ fromClaimId: string; toClaimId: string; type: "motivates" | "addresses" | "implements" | "evaluates" | "supports" | "limits" }>(request); const projectClaims = claims.list(projectId); if (!projectClaims.some((item) => item.id === body.fromClaimId) || !projectClaims.some((item) => item.id === body.toClaimId)) throw new ApiError(404, "claim_not_found", "Both claims must belong to the project"); const relation = { id: `relation_${crypto.randomUUID()}`, projectId, fromClaimId: body.fromClaimId, toClaimId: body.toClaimId, type: body.type, status: "confirmed" as const, origin: "user" as const }; await database.mutate((state) => { state.claimRelations.push(relation); }); return json(relation, 201); }),
     route("POST", "/api/projects/:projectId/claims/:claimId/reanchor", async (_request, params) => json(await claims.reanchor(required(params, "projectId"), required(params, "claimId")))),
     route("PATCH", "/api/projects/:projectId/claims/:claimId", async (request, params) => json(await claims.update(required(params, "projectId"), required(params, "claimId"), await readJson<{ reviewStatus?: "detected" | "needs-review" | "supported" | "partial" | "unsupported"; anchorStatus?: "current" | "stale" | "reanchored" | "orphaned" }>(request)))),
     route("POST", "/api/projects/:projectId/claims/:claimId/links", async (request, params) => json(await claims.link(required(params, "projectId"), required(params, "claimId"), await readJson<any>(request)), 201)),
@@ -452,6 +466,8 @@ function required(params: Record<string, string>, key: string): string {
   if (!value) throw new ApiError(400, "missing_parameter", `Missing route parameter '${key}'`);
   return value;
 }
+
+function textPaths(nodes: any[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }
 
 function requiredQuery(url: URL, key: string): string {
   const value = url.searchParams.get(key);

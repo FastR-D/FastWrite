@@ -1,0 +1,191 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          package_version="$(bun -p 'require("./package.json").version')"
+          if [[ "${GITHUB_REF_NAME}" != "v${package_version}" ]]; then
+            echo "Release tag ${GITHUB_REF_NAME} does not match package.json version ${package_version}." >&2
+            exit 1
+          fi
+
+      - name: Run release checks
+        run: bun run release:check
+
+      - name: Upload E2E diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-e2e-diagnostics-${{ github.run_id }}
+          path: output/playwright/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            target: bun-linux-x64
+            executable: fastwrite
+            format: tar.gz
+          - platform: windows-x64
+            target: bun-windows-x64
+            executable: fastwrite.exe
+            format: zip
+          - platform: macos-x64
+            target: bun-darwin-x64
+            executable: fastwrite
+            format: tar.gz
+          - platform: macos-arm64
+            target: bun-darwin-arm64
+            executable: fastwrite
+            format: tar.gz
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build standalone package
+        env:
+          FASTWRITE_COMPILE_TARGET: ${{ matrix.target }}
+        run: bun run package:app
+
+      - name: Verify executable format
+        shell: bash
+        run: |
+          file "app-bin/${{ matrix.executable }}"
+          case "${{ matrix.platform }}" in
+            linux-*) file "app-bin/${{ matrix.executable }}" | grep -q "ELF 64-bit" ;;
+            windows-*) file "app-bin/${{ matrix.executable }}" | grep -Eq "PE32\+|PE32 executable" ;;
+            macos-*) file "app-bin/${{ matrix.executable }}" | grep -q "Mach-O 64-bit" ;;
+          esac
+
+      - name: Smoke test packaged Linux binary
+        if: matrix.platform == 'linux-x64'
+        shell: bash
+        run: |
+          smoke_data="$(mktemp -d /tmp/fastwrite-release-smoke.XXXXXX)"
+          FASTWRITE_DATA_DIR="${smoke_data}" FASTWRITE_PORT=3214 ./app-bin/fastwrite >"${smoke_data}/server.log" 2>&1 &
+          smoke_pid=$!
+          cleanup() {
+            kill "${smoke_pid}" >/dev/null 2>&1 || true
+            wait "${smoke_pid}" >/dev/null 2>&1 || true
+            rm -rf "${smoke_data}"
+          }
+          trap cleanup EXIT
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:3214/projects >/dev/null; then exit 0; fi
+            if ! kill -0 "${smoke_pid}" >/dev/null 2>&1; then
+              cat "${smoke_data}/server.log" >&2
+              exit 1
+            fi
+            sleep 0.25
+          done
+          cat "${smoke_data}/server.log" >&2
+          exit 1
+
+      - name: Assemble release archive
+        shell: bash
+        run: |
+          package_name="FastWrite-${GITHUB_REF_NAME}-${{ matrix.platform }}"
+          stage="release-dist/${package_name}"
+          mkdir -p "${stage}"
+          cp -a app-bin/. "${stage}/"
+          cp LICENSE "${stage}/LICENSE"
+          if [[ "${{ matrix.format }}" == "zip" ]]; then
+            (cd release-dist && zip -qr "${package_name}.zip" "${package_name}")
+            archive="${package_name}.zip"
+          else
+            tar -czf "release-dist/${package_name}.tar.gz" -C release-dist "${package_name}"
+            archive="${package_name}.tar.gz"
+          fi
+          (cd release-dist && sha256sum "${archive}" > "${archive}.sha256")
+          rm -rf "${stage}"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.platform }}
+          path: release-dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: release-dist
+          merge-multiple: true
+
+      - name: Publish or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          mapfile -t files < <(find release-dist -maxdepth 1 -type f -print | sort)
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "No release files were downloaded." >&2
+            exit 1
+          fi
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
+          else
+            prerelease=()
+            if [[ "${GITHUB_REF_NAME}" == *-* ]]; then prerelease+=(--prerelease); fi
+            gh release create "${GITHUB_REF_NAME}" "${files[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --title "FastWrite ${GITHUB_REF_NAME}" \
+              "${prerelease[@]}" \
+              --repo "${GITHUB_REPOSITORY}"
+          fi

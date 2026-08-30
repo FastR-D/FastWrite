@@ -5,6 +5,9 @@ import type { WorkspaceService } from "../workspace/workspace-service";
 import type { AgentProvider, ReviewAgentOutput } from "./provider";
 import type { SkillRegistry } from "./skill-registry";
 import { isAgentCancellation, runAgentOperation } from "./agent-operation";
+import { writingGuardMany } from "../writing/writing-guard";
+import { deriveArgumentGraph } from "../claims/argument-graph";
+import { buildAdversarialMemo } from "../claims/adversarial-memo";
 
 function now() { return new Date().toISOString(); }
 function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }
@@ -62,13 +65,16 @@ export class ReviewService {
       ],
     };
     await this.database.mutate((state) => { state.agentRuns.push(run); });
+    const providerPasses: Record<string, { status: "completed" | "failed"; error?: string }> = {};
     try {
       const [outline, skill] = await Promise.all([this.workspaces.outline(projectId), this.skills.load(project.skill, project.publicationTarget)]);
       const result = await runAgentOperation<ReviewAgentOutput>(
         async (signal) => {
           const input = { documents: documents.map(({ path, content }) => ({ path, content })), outline: flattenOutline(outline).map(({ path, title, line }) => ({ path, title, line })), skill: project.skill, skillInstructions: skill.instructions, venueInstructions: skill.venueInstructions, ...(boundedPageText.length ? { pdfPageText: boundedPageText } : {}) };
-          if (!this.provider!.reviewPass) return this.provider!.review!(input, signal);
+          if (!this.provider!.reviewPass) { providerPasses.domain = { status: "completed" }; providerPasses.venue = { status: "completed" }; return this.provider!.review!(input, signal); }
           const results = await Promise.allSettled([this.provider!.reviewPass({ ...input, pass: "domain" }, signal), this.provider!.reviewPass({ ...input, pass: "venue" }, signal)]);
+          providerPasses.domain = results[0]?.status === "fulfilled" ? { status: "completed" } : { status: "failed", error: results[0]?.reason instanceof Error ? results[0].reason.message : "Domain pass failed" };
+          providerPasses.venue = results[1]?.status === "fulfilled" ? { status: "completed" } : { status: "failed", error: results[1]?.reason instanceof Error ? results[1].reason.message : "Venue pass failed" };
           const successful = results.filter((item): item is PromiseFulfilledResult<ReviewAgentOutput> => item.status === "fulfilled").map((item) => item.value);
           if (!successful.length) throw new Error("All Review provider passes failed");
           return { ...successful[0]!, issues: successful.flatMap((item) => item.issues), weaknesses: successful.flatMap((item) => item.weaknesses), nextSteps: successful.flatMap((item) => item.nextSteps) };
@@ -101,8 +107,22 @@ export class ReviewService {
         history: [{ id: `history_${crypto.randomUUID()}`, action: "created", reason: `Created by ${project.skill.name} Review Agent`, actor: "agent", createdAt: now() }]
       }));
       const evidenceIssues = citationEvidenceIssues(documents, reportId);
-      const synthesizedIssues = dedupeIssues([...evidenceIssues, ...issues]);
-      const report: ReviewReport = { id: reportId, projectId, agentRunId: run.id, snapshotId: snapshot.id, overallAssessment: result.overallAssessment, recommendation: result.recommendation, strengths: result.strengths, weaknesses: result.weaknesses, nextSteps: result.nextSteps, issues: synthesizedIssues, passes: [{ id: "mechanical", status: "completed", issues: [] }, { id: "evidence", status: "completed", issues: evidenceIssues.map((issue) => issue.id) }, { id: "domain", status: "completed", issues: issues.map((issue) => issue.id) }, { id: "venue", status: "completed", issues: [] }, { id: "synthesis", status: "completed", issues: synthesizedIssues.map((issue) => issue.id) }], inputType: boundedPageText.length ? "pdf-preview" : "source", createdFromProjectVersion: project.version, createdAt: now() };
+      const guardFindings = writingGuardMany(documents);
+      const guardIssues: ReviewIssue[] = guardFindings.map((finding) => ({ id: `issue_${crypto.randomUUID()}`, reportId, category: "clarity" as const, severity: finding.status === "blocking" ? "blocking" as const : "minor" as const, priority: finding.status === "blocking" ? 100 : 300, title: finding.message, rationale: "Deterministic writing guard finding.", impact: "The manuscript may contain unverifiable or unresolved content.", suggestion: "Resolve the finding and rerun review.", evidence: [{ path: project.mainDocument, excerpt: finding.message, inferred: false }], status: "open" as const, createdAt: now(), updatedAt: now(), source: "agent" as const, history: [{ id: `history_${crypto.randomUUID()}`, action: "created" as const, reason: "Detected by deterministic writing guard", actor: "system" as const, createdAt: now() }] }));
+      const ledger = this.database.snapshot().paperClaims.filter((claim) => claim.projectId === projectId);
+      const memo = buildAdversarialMemo(projectId, ledger, deriveArgumentGraph(projectId, ledger));
+      const adversarialIssues: ReviewIssue[] = memo.objections.map((objection) => ({ id: `issue_${crypto.randomUUID()}`, reportId, category: "clarity", severity: "minor", priority: 350, title: `Adversarial: ${objection.message}`, rationale: "Advisory objection generated from the current claim argument graph.", impact: "A reviewer may challenge this claim or relation.", suggestion: "Confirm the relation, add supporting evidence, or narrow the claim.", evidence: objection.anchorPaths.map((path) => ({ path, excerpt: "Claim anchor", inferred: false })), status: "open", createdAt: now(), updatedAt: now(), source: "agent", history: [{ id: `history_${crypto.randomUUID()}`, action: "created", reason: "Generated by adversarial preflight", actor: "system", createdAt: now() }] }));
+      const synthesizedIssues = dedupeIssues([...evidenceIssues, ...guardIssues, ...adversarialIssues, ...issues]);
+      const boundary = `${documents.length} files/${contextBytes} bytes${boundedPageText.length ? "+pdf-preview" : ""}`;
+      const report: ReviewReport = { id: reportId, projectId, agentRunId: run.id, snapshotId: snapshot.id, overallAssessment: result.overallAssessment, recommendation: result.recommendation, strengths: result.strengths, weaknesses: result.weaknesses, nextSteps: result.nextSteps, issues: synthesizedIssues, passes: [
+        { id: "mechanical", status: "completed", issues: guardIssues.map((issue) => issue.id), provider: "writing-guard", inputBoundary: boundary },
+        { id: "evidence", status: "completed", issues: evidenceIssues.map((issue) => issue.id), provider: "evidence-check", inputBoundary: boundary },
+        { id: "argument", status: "completed", issues: [], provider: "argument-check", inputBoundary: boundary },
+        { id: "domain", status: providerPasses.domain?.status ?? "failed", issues: issues.map((issue) => issue.id), provider: "review-agent", inputBoundary: boundary, ...(providerPasses.domain?.error ? { error: providerPasses.domain.error } : {}) },
+        { id: "venue", status: providerPasses.venue?.status ?? "failed", issues: [], provider: "review-agent", inputBoundary: boundary, ...(providerPasses.venue?.error ? { error: providerPasses.venue.error } : {}) },
+        { id: "adversarial", status: "completed", issues: adversarialIssues.map((issue) => issue.id), provider: "claim-adversary", inputBoundary: boundary },
+        { id: "synthesis", status: "completed", issues: synthesizedIssues.map((issue) => issue.id), provider: "review-synthesis", inputBoundary: boundary }
+      ], inputType: boundedPageText.length ? "pdf-preview" : "source", createdFromProjectVersion: project.version, createdAt: now() };
       const updatedRun = await this.database.mutate((state) => {
         state.reviewReports.push(report);
         const stored = state.agentRuns.find((item) => item.id === run.id)!;

@@ -17,7 +17,7 @@ import {
   Trash2,
   Upload
 } from "lucide-react";
-import type { FileContentResponse, OutlineItem, PaperProject, ReviewIssue, SourceLocation, TextSelection, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { FileContentResponse, OutlineItem, PaperClaim, PaperProject, ReviewIssue, SourceLocation, TextSelection, WorkspaceTreeNode } from "@fastwrite/shared";
 import { api } from "../api/client";
 import { Button, IconButton } from "../components/ui/Button";
 import { Dialog } from "../components/ui/Dialog";
@@ -52,6 +52,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [project, setProject] = useState<PaperProject | null>(null);
   const [tree, setTree] = useState<WorkspaceTreeNode[]>([]);
   const [outline, setOutline] = useState<OutlineItem[]>([]);
+  const [claims, setClaims] = useState<PaperClaim[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [fileDocument, setFileDocument] = useState<FileContentResponse | null>(null);
   const [targetLine, setTargetLine] = useState<number | null>(null);
@@ -117,12 +118,13 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    Promise.all([api.projects.get(projectId, controller.signal), api.projects.treeLevel(projectId, "", controller.signal), api.projects.outline(projectId, controller.signal), api.compileResults.latest(projectId, controller.signal)])
-      .then(async ([nextProject, rootTree, nextOutline, latestCompile]) => {
+    Promise.all([api.projects.get(projectId, controller.signal), api.projects.treeLevel(projectId, "", controller.signal), api.projects.outline(projectId, controller.signal), api.compileResults.latest(projectId, controller.signal), api.claims.list(projectId)])
+      .then(async ([nextProject, rootTree, nextOutline, latestCompile, nextClaims]) => {
         const nextTree = await hydrateTreePath(projectId, rootTree, nextProject.mainDocument, controller.signal);
         setProject(nextProject);
         commitTree(nextTree);
         setOutline(nextOutline);
+        setClaims(nextClaims);
         setSelectedPath(nextProject.mainDocument);
         if (latestCompile) setCompileState({ state: latestCompile.status === "success" ? "success" : "error", compiledVersion: latestCompile.projectVersion });
       })
@@ -312,6 +314,10 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             <section className={`sidebar-section sidebar-section--outline${outlineCollapsed ? " is-collapsed" : ""}`} style={{ height: outlineCollapsed ? 35 : outlineHeight }}>
               <header className="panel-heading panel-heading--plain"><span>Document outline</span><IconButton label={outlineCollapsed ? "Expand document outline" : "Collapse document outline"} icon={outlineCollapsed ? <ChevronUp /> : <ChevronDown />} onClick={() => setOutlineCollapsed(!outlineCollapsed)} /></header>
               {!outlineCollapsed ? <OutlineTree items={outline} onSelect={selectOutline} /> : null}
+            </section>
+            <section className="sidebar-section sidebar-section--claims">
+              <header className="panel-heading panel-heading--plain"><span>Claims & evidence</span><IconButton label="Rescan claims" icon={<RefreshCw />} onClick={async () => { try { setClaims(await api.claims.scan(projectId)); } catch { /* keep the last ledger visible */ } }} /></header>
+              {claims.length ? <div className="claim-ledger-list">{(["supported", "partial", "unsupported", "needs-review", "detected"] as const).map((status) => { const items = claims.filter((claim) => claim.reviewStatus === status || (status === "needs-review" && claim.anchorStatus === "stale")); return items.length ? <div className="claim-ledger-group" key={status}><small>{status === "needs-review" ? "stale / needs review" : status} · {items.length}</small>{items.map((claim) => <button className="claim-ledger-item" key={claim.id} onClick={async () => { const refreshed = claim.anchorStatus === "stale" ? await api.claims.reanchor(projectId, claim.id).catch(() => claim) : claim; setClaims((current) => current.map((item) => item.id === refreshed.id ? refreshed : item)); setSelectedPath(refreshed.anchor.path); setTargetLine(1); }} title={claim.anchorStatus === "stale" ? "Reanchor claim and open source" : claim.anchor.exactText}><span>{claim.semanticType ?? "claim"}</span><em>{claim.anchor.exactText.slice(0, 72)}{claim.anchorStatus === "stale" ? " · reanchor" : ""}</em></button>)}</div> : null; })}</div> : <p className="sidebar-empty">Scan the workspace to build the claim ledger.</p>}
             </section>
           </aside>
         ) : (
