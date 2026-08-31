@@ -13,9 +13,10 @@ interface EditableChangeReviewProps {
   onDecide: (hunkIds: string[], status: "accepted" | "rejected") => void;
   onSave?: (after: string) => Promise<void>;
   onEditHunk?: (hunkId: string, after: string) => Promise<void>;
+  onNavigate?: (path: string, line?: number) => void;
 }
 
-export function EditableChangeReview({ change, busy, readOnly = false, editingDisabled = false, showHunkToolbar = true, onDecide, onSave, onEditHunk }: EditableChangeReviewProps) {
+export function EditableChangeReview({ change, busy, readOnly = false, editingDisabled = false, showHunkToolbar = true, onDecide, onSave, onEditHunk, onNavigate }: EditableChangeReviewProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(change.after);
   const [saving, setSaving] = useState(false);
@@ -42,7 +43,7 @@ export function EditableChangeReview({ change, busy, readOnly = false, editingDi
 
   if (!editing) return <div className="editable-change-review">
     {!readOnly && onSave ? <div className="editable-change-review__bar"><span>{editingDisabled ? "This file has decided hunks; continue reviewing them below." : "Review the generated Diff, or edit the proposed text before accepting."}</span>{!editingDisabled ? <Button size="small" variant="secondary" icon={<Pencil />} disabled={busy} onClick={() => setEditing(true)}>Edit proposal</Button> : null}</div> : null}
-    <ChangeHunkReview change={change} busy={busy} readOnly={readOnly} showToolbar={showHunkToolbar} onDecide={onDecide} {...(onEditHunk ? { onEditHunk } : {})} />
+    <ChangeHunkReview change={change} busy={busy} readOnly={readOnly} showToolbar={showHunkToolbar} onDecide={onDecide} {...(onEditHunk ? { onEditHunk } : {})} {...(onNavigate ? { onNavigate } : {})} />
   </div>;
 
   return <div className="proposal-editor">

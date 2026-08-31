@@ -24,7 +24,7 @@ export class LatexCompileService {
     const project = this.workspaces.getProject(projectId);
     const mainDocument = normalizeWorkspacePath(project.mainDocument);
     const executable = Bun.which("latexmk") ?? Bun.which("pdflatex");
-    if (!executable) throw new ApiError(503, "latex_unavailable", "Server LaTeX compilation is unavailable: install latexmk or pdflatex on the server, or choose the browser engine.");
+    if (!executable) throw new ApiError(503, "latex_unavailable", "Local LaTeX compilation is unavailable: install latexmk or pdflatex on this machine.");
 
     const root = this.workspaces.workspaceRoot(projectId);
     const temporary = join(this.dataDirectory, "compile", crypto.randomUUID());
@@ -58,7 +58,7 @@ export class LatexCompileService {
 
 function describeLatexFailure(exitCode: number, log: string): string {
   const missingPackage = /File [`']([^`']+\.sty)[`'] not found\./.exec(log)?.[1];
-  if (missingPackage) return `Local LaTeX is missing ${missingPackage}. Install that TeX package on this machine, then recompile, or switch to Browser WASM.`;
+  if (missingPackage) return `Local LaTeX is missing ${missingPackage}. Install that TeX package on this machine, then recompile.`;
   return `Local LaTeX exited with status ${exitCode}. See the compiler log for details.`;
 }
 

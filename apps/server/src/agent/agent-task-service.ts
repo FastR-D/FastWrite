@@ -16,11 +16,24 @@ import { writingGuard } from "../writing/writing-guard";
 function now() { return new Date().toISOString(); }
 function prioritizeContinueFiles(paths: string[], documents: Array<{ path: string; content: string }>, claims: PaperClaim[], issues: ReviewIssue[]): string[] {
   const scores = new Map(paths.map((path) => [path, 0]));
-  for (const claim of claims) if (claim.reviewStatus !== "supported" || claim.anchorStatus !== "current") scores.set(claim.anchor.path, (scores.get(claim.anchor.path) ?? 0) + (claim.reviewStatus === "unsupported" ? 30 : 20));
-  for (const issue of issues) for (const evidence of issue.evidence) if (evidence.path) scores.set(evidence.path, (scores.get(evidence.path) ?? 0) + 15);
-  for (const document of documents) if (/\b(?:TODO|TBD|FIXME|to be completed)\b/i.test(document.content)) scores.set(document.path, (scores.get(document.path) ?? 0) + 25);
+  for (const claim of claims) {
+    const document = documents.find((item) => item.path === claim.anchor.path)?.content ?? "";
+    const written = document.includes(claim.anchor.exactText);
+    if (claim.reviewStatus === "supported" && claim.anchorStatus === "current" && !written) scores.set(claim.anchor.path, (scores.get(claim.anchor.path) ?? 0) + 100);
+    else if (claim.reviewStatus === "unsupported" || claim.reviewStatus === "partial") scores.set(claim.anchor.path, (scores.get(claim.anchor.path) ?? 0) + 80);
+    if (claim.type === "result" && claim.reviewStatus === "supported" && !written) scores.set(claim.anchor.path, (scores.get(claim.anchor.path) ?? 0) + 70);
+  }
+  for (const issue of issues) for (const evidence of issue.evidence) if (evidence.path) scores.set(evidence.path, (scores.get(evidence.path) ?? 0) + 40);
+  const introduction = documents.find((item) => /(?:^|\/)intro(?:duction)?\.tex$/i.test(item.path)); const conclusion = documents.find((item) => /(?:^|\/)conclusion\.tex$/i.test(item.path));
+  if (introduction && conclusion && scopeTerms(introduction.content).some((term) => !scopeTerms(conclusion.content).includes(term))) scores.set(conclusion.path, (scores.get(conclusion.path) ?? 0) + 30);
+  for (const document of documents) {
+    const relationGap = /\b(?:motivation|gap|method|experiment|result|conclusion)\b/i.test(document.content) && !/\b(?:therefore|because|motivates|addresses|evaluates|supports|leads to)\b/i.test(document.content);
+    if (relationGap) scores.set(document.path, (scores.get(document.path) ?? 0) + 35);
+    if (/\b(?:TODO|TBD|FIXME|to be completed)\b/i.test(document.content)) scores.set(document.path, (scores.get(document.path) ?? 0) + 10);
+  }
   return [...paths].sort((left, right) => (scores.get(right) ?? 0) - (scores.get(left) ?? 0));
 }
+function scopeTerms(content: string): string[] { return [...new Set((content.toLowerCase().match(/\b(?:all|any|general|real-world|large-scale|robust|secure|efficient|state-of-the-art)\b/g) ?? []))]; }
 function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }
 
 export class AgentTaskService {

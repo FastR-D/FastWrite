@@ -76,6 +76,11 @@ function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestI
 }
 
 export const api = {
+  shared: {
+    get: (token: string) => request<{ project: { id: string; name: string; mainDocument: string; version: number }; permission: "read" | "comment"; tree: WorkspaceTreeNode[]; comments: Array<{ id: string; path: string; line?: number; author: string; body: string; status: "open" | "resolved"; createdAt: string }> }>(`/api/shared/${encodeURIComponent(token)}`),
+    file: (token: string, path: string) => request<{ path: string; content: string; version: number }>(`/api/shared/${encodeURIComponent(token)}/file?path=${encodeURIComponent(path)}`),
+    comment: (token: string, body: { path: string; line?: number; author: string; body: string }) => request<{ id: string }>(`/api/shared/${encodeURIComponent(token)}/comments`, jsonInit("POST", body))
+  },
   agentSettings: {
     get: (signal?: AbortSignal) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/agent-settings", signal ? { signal } : undefined),
     save: (body: { apiKey: string; baseURL?: string; model?: string; wireAPI: AgentWireApi }) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/agent-settings", jsonInit("PUT", body))
@@ -90,6 +95,17 @@ export const api = {
     update: (id: string, body: Partial<Pick<PaperProject, "name" | "mainDocument">> & { venue?: TargetVenue; publicationTarget?: PublicationTarget | null }) => request<PaperProject>(`/api/projects/${id}`, jsonInit("PATCH", body)),
     exportUrl: (id: string) => `/api/projects/${id}/export`,
     checkpoint: (id: string) => request<{ createdAt: string }>(`/api/projects/${id}/history/checkpoint`, { method: "POST" }),
+    history: (id: string, limit = 50, signal?: AbortSignal) => request<Array<{ oid: string; message: string; createdAt: string }>>(`/api/projects/${id}/history?limit=${limit}`, signal ? { signal } : undefined),
+    historySummary: (id: string, oid: string, signal?: AbortSignal) => request<{ oid: string; message: string; createdAt: string; paths: string[] }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}`, signal ? { signal } : undefined),
+    historyFile: (id: string, oid: string, path: string, signal?: AbortSignal) => request<{ path: string; content: string }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/file?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined),
+    restoreHistory: (id: string, oid: string, paths: string[]) => request<{ oid?: string; restored: string[] }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/restore`, jsonInit("POST", { paths })),
+    provenance: (id: string, signal?: AbortSignal) => request<unknown>(`/api/projects/${id}/provenance`, signal ? { signal } : undefined),
+    createShare: (id: string, permission: "read" | "comment") => request<{ id: string; token: string; permission: "read" | "comment"; createdAt: string }>(`/api/projects/${id}/shares`, jsonInit("POST", { permission })),
+    shares: (id: string) => request<Array<{ id: string; permission: "read" | "comment"; label?: string; expiresAt?: string; revokedAt?: string; createdAt: string }>>(`/api/projects/${id}/shares`),
+    revokeShare: (id: string, shareId: string) => request<void>(`/api/projects/${id}/shares/${shareId}`, { method: "DELETE" }),
+    collaboration: (id: string, path: string) => request<{ path: string; fileVersion: number; update: string; presence: Array<{ clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }> }>(`/api/projects/${id}/collaboration?path=${encodeURIComponent(path)}`),
+    collaborationUpdate: (id: string, body: { path: string; update: string; baseVersion: number; clientId: string; name: string; color?: string; line?: number }) => request<{ path: string; fileVersion: number; update: string; presence: Array<{ clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }> }>(`/api/projects/${id}/collaboration`, jsonInit("POST", body)),
+    collaborationPresence: (id: string, body: { clientId: string; name: string; path: string; line?: number; color?: string }) => request<Array<{ clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>(`/api/projects/${id}/collaboration/presence`, jsonInit("POST", body)),
     tree: (id: string, signal?: AbortSignal) => request<WorkspaceTreeNode[]>(`/api/projects/${id}/files`, signal ? { signal } : undefined),
     treeLevel: (id: string, directory = "", signal?: AbortSignal) => request<WorkspaceTreeNode[]>(`/api/projects/${id}/files?directory=${encodeURIComponent(directory)}`, signal ? { signal } : undefined),
     outline: (id: string, signal?: AbortSignal) => request<OutlineItem[]>(`/api/projects/${id}/outline`, signal ? { signal } : undefined),
@@ -122,7 +138,7 @@ export const api = {
     propose: (projectId: string, body: ReviseRequest, signal?: AbortSignal) => request<ReviseResponse>(`/api/projects/${projectId}/revisions`, jsonInit("POST", body, signal)),
     accept: (projectId: string, changeSetId: string) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/accept`, { method: "POST" }),
     reject: (projectId: string, changeSetId: string) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/reject`, { method: "POST" }),
-    rollback: (projectId: string, changeSetId: string) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/rollback`, { method: "POST" }),
+    rollback: (projectId: string, changeSetId: string, resolutions?: Array<{ path: string; currentVersion: number; content: string }>) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/rollback`, resolutions?.length ? jsonInit("POST", { resolutions }) : { method: "POST" }),
     get: (projectId: string, changeSetId: string, signal?: AbortSignal) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}`, signal ? { signal } : undefined),
     edit: (projectId: string, changeSetId: string, body: ChangeSetEditRequest) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}`, jsonInit("PATCH", body)),
     decide: (projectId: string, changeSetId: string, body: ChangeSetDecisionRequest) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/decide`, jsonInit("POST", body)),
@@ -184,6 +200,7 @@ export const api = {
     works: (projectId: string, signal?: AbortSignal) => request<Array<ResearchWork & { project: ProjectResearchWork }>>(`/api/projects/${projectId}/research-works`, signal ? { signal } : undefined),
     import: (projectId: string, body: { title: string; authors?: string[]; year?: number; venue?: string; doi?: string; arxiv?: string; citationKey?: string }) => request<ResearchWork>(`/api/projects/${projectId}/research-works/import`, jsonInit("POST", body)),
     approve: (projectId: string, workId: string, body: { status?: "candidate" | "saved" | "rejected"; citationKey?: string }) => request<ProjectResearchWork>(`/api/projects/${projectId}/research-works/${workId}`, jsonInit("PATCH", body)),
+    verifyMetadata: (projectId: string, workId: string) => request<ResearchWork>(`/api/projects/${projectId}/research-works/${workId}/verify-metadata`, { method: "POST" }),
     citationContext: (projectId: string, key: string) => request<{ key: string; contexts: Array<{ path: string; line: number; excerpt: string }> }>(`/api/projects/${projectId}/research-citations/${encodeURIComponent(key)}`),
     bibtexChange: (projectId: string, workId: string, targetBibPath: string) => request<ChangeSet>(`/api/projects/${projectId}/research-works/${workId}/bibtex-changes`, jsonInit("POST", { targetBibPath }))
     ,pdfEvidence: (projectId: string, workId: string, pdfBase64: string) => request<SourceEvidence[]>(`/api/projects/${projectId}/research-works/${workId}/pdf-evidence`, jsonInit("POST", { pdfBase64, authorized: true }))

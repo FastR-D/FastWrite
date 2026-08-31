@@ -286,7 +286,7 @@ export class ReviseService {
       for (const id of ids) {
         const hunk = hunks.find((candidate) => candidate.id === id);
         if (!hunk) throw new ApiError(409, "changeset_hunk_decided", `Hunk '${id}' is missing`);
-        if (decision.status === "accepted" && hunk.findings?.some((finding) => finding.status === "blocking")) throw new ApiError(409, "changeset_blocked", "This hunk has blocking evidence findings");
+        if (decision.status === "accepted" && !request.overrideBlockingFindings && hunk.findings?.some((finding) => finding.status === "blocking")) throw new ApiError(409, "changeset_blocked", "This hunk has blocking evidence findings");
         if (hunk.status === decision.status) throw new ApiError(409, "changeset_hunk_unchanged", `Hunk '${id}' is already ${decision.status}`);
         if (!explicitFinish && hunk.status !== "pending") throw new ApiError(409, "changeset_hunk_decided", `Hunk '${id}' is already decided`);
         hunk.status = decision.status;
@@ -305,6 +305,7 @@ export class ReviseService {
     }
     if (conflicts.length) throw new ApiError(409, "changeset_conflict_review_required", "The workspace changed during review. Compare the current files with the reviewed result before overwriting.", { changeSetId, conflicts });
 
+    const baseCheckpointOid = await this.workspaces.commitHistory(projectId, `Pre-accept ChangeSet ${changeSetId}`);
     const appliedVersions = new Map<string, number | null>();
     for (const item of prepared) {
       if (item.action === "create") appliedVersions.set(item.path, (await this.workspaces.createFile(projectId, item.path, item.nextContent)).version);
@@ -312,9 +313,12 @@ export class ReviseService {
       else if (item.action === "delete") { await this.workspaces.deletePath(projectId, item.path); appliedVersions.set(item.path, null); }
       else if (item.resolvedVersion !== undefined) appliedVersions.set(item.path, item.resolvedVersion);
     }
+    const appliedCheckpointOid = await this.workspaces.commitHistory(projectId, `Apply ChangeSet ${changeSetId}`);
     const projectVersion = this.workspaces.getProject(projectId).version;
     return this.database.mutate((state) => {
       const stored = state.changeSets.find((candidate) => candidate.id === changeSetId)!;
+      if (baseCheckpointOid) stored.baseCheckpointOid ??= baseCheckpointOid;
+      if (appliedCheckpointOid) stored.appliedCheckpointOids = [...new Set([...(stored.appliedCheckpointOids ?? []), appliedCheckpointOid])];
       for (const change of stored.changes) {
         change.hunks = nextHunks.get(change.path)!;
         const version = appliedVersions.get(change.path);
@@ -327,6 +331,7 @@ export class ReviseService {
       const accepted = hunks.some((hunk) => hunk.status === "accepted");
       const hasDecision = hunks.some((hunk) => hunk.status !== "pending");
       stored.status = explicitFinish ? hasDecision ? "partially-accepted" : "proposed" : pending ? "partially-accepted" : accepted ? "accepted" : "rejected";
+      if (request.overrideBlockingFindings) stored.blockingFindingsOverridden = true;
       if (stored.changes.length === 1 && stored.changes[0]!.appliedVersion !== undefined) stored.appliedFileVersion = stored.changes[0]!.appliedVersion;
       else delete stored.appliedFileVersion;
       stored.updatedAt = timestamp();
@@ -386,7 +391,7 @@ export class ReviseService {
     if (!new Set(["proposed", "partially-accepted"]).has(changeSet.status)) throw new ApiError(409, "changeset_not_proposed", "This change is no longer awaiting approval");
     const hunks = changeSet.changes.flatMap((change) => change.hunks ?? []);
     if (!hunks.length || hunks.some((hunk) => hunk.status === "pending")) throw new ApiError(409, "changeset_review_incomplete", "Accept or reject every hunk before finishing the review");
-    if (hunks.some((hunk) => hunk.status === "accepted" && hunk.findings?.some((finding) => finding.status === "blocking"))) throw new ApiError(409, "changeset_blocked", "Resolve blocking evidence findings or explicitly override them before accepting this ChangeSet");
+    if (!changeSet.blockingFindingsOverridden && hunks.some((hunk) => hunk.status === "accepted" && hunk.findings?.some((finding) => finding.status === "blocking"))) throw new ApiError(409, "changeset_blocked", "Resolve blocking evidence findings or explicitly override them before accepting this ChangeSet");
     const accepted = hunks.some((hunk) => hunk.status === "accepted");
     const projectVersion = this.workspaces.getProject(projectId).version;
     const finishedAt = timestamp();
@@ -410,29 +415,46 @@ export class ReviseService {
     });
   }
 
-  async rollback(projectId: string, changeSetId: string): Promise<ChangeSet> {
+  async rollback(projectId: string, changeSetId: string, resolutions: Array<{ path: string; currentVersion: number; content: string }> = []): Promise<ChangeSet> {
     const changeSet = this.getChangeSet(projectId, changeSetId);
     if (changeSet.changes.some((change) => !change.hunks?.length)) return this.rollbackLegacy(projectId, changeSetId);
     if (changeSet.status !== "accepted" || !changeSet.changes.some((change) => change.hunks?.some((hunk) => hunk.status === "accepted"))) {
       throw new ApiError(409, "changeset_not_rollbackable", "Only an accepted change can be rolled back once");
     }
     const openedFiles = new Map<string, Awaited<ReturnType<WorkspaceService["readTextFile"]>>>();
+    const rollbackContents = new Map<string, string>();
+    const resolved = new Map(resolutions.map((item) => [item.path, item]));
+    const conflicts: Array<{ path: string; currentVersion: number; baseContent: string; appliedContent: string; currentContent: string }> = [];
     for (const change of changeSet.changes) {
       if (!change.hunks?.some((hunk) => hunk.status === "accepted")) continue;
       const opened = await this.workspaces.readTextFile(projectId, change.path);
       openedFiles.set(change.path, opened);
-      const matches = opened.file.version === change.currentVersion && opened.content === materializeChange(change, change.hunks);
-      if (!matches) throw new ApiError(409, "version_conflict", "A file changed after this revision; rollback is no longer safe");
+      let content = opened.content;
+      const acceptedHunks = [...change.hunks].filter((hunk) => hunk.status === "accepted").sort((a, b) => b.from - a.from);
+      for (const hunk of acceptedHunks) {
+        const marker = hunk.after;
+        const offset = marker ? nearestOccurrence(content, marker, hunk.from) : hunk.from;
+        if (offset < 0 || (!marker && content.slice(offset, offset + hunk.after.length) !== marker)) {
+          const resolution = resolved.get(change.path);
+          if (resolution && resolution.currentVersion === opened.file.version) { content = resolution.content; break; }
+          conflicts.push({ path: change.path, currentVersion: opened.file.version, baseContent: change.baseContent ?? change.before, appliedContent: materializeChange(change, change.hunks), currentContent: opened.content });
+          break;
+        }
+        content = content.slice(0, offset) + hunk.before + content.slice(offset + marker.length);
+      }
+      rollbackContents.set(change.path, content);
     }
+    if (conflicts.length) throw new ApiError(409, "rollback_conflict_review_required", "The accepted AI edit overlaps later changes. Edit the desired final content before rollback.", { changeSetId, conflicts });
     for (const change of [...changeSet.changes].reverse()) {
       const opened = openedFiles.get(change.path);
       if (!opened) continue;
       if (change.operation === "create") {
         await this.workspaces.deletePath(projectId, change.path);
       } else {
-        await this.workspaces.saveTextFile(projectId, change.path, { content: change.baseContent!, baseVersion: opened.file.version });
+        await this.workspaces.saveTextFile(projectId, change.path, { content: rollbackContents.get(change.path)!, baseVersion: opened.file.version });
       }
     }
+    await this.workspaces.commitHistory(projectId, `Rollback ChangeSet ${changeSetId}`);
     return this.database.mutate((state) => {
       const stored = state.changeSets.find((candidate) => candidate.id === changeSetId)!;
       stored.status = "rolled-back";
@@ -461,14 +483,16 @@ export class ReviseService {
       const opened = await this.workspaces.readTextFile(projectId, change.path); openedFiles.set(change.path, opened);
       if (opened.file.version !== change.baseVersion || opened.content.slice(change.from, change.to) !== change.before) return this.markConflict(changeSetId);
     }
+    const baseCheckpointOid = await this.workspaces.commitHistory(projectId, `Pre-accept ChangeSet ${changeSetId}`);
     const appliedVersions: number[] = [];
     for (const change of changeSet.changes) {
       if (change.operation === "create") appliedVersions.push((await this.workspaces.createFile(projectId, change.path, change.after)).version);
       else { const opened = openedFiles.get(change.path)!; appliedVersions.push((await this.workspaces.saveTextFile(projectId, change.path, { content: opened.content.slice(0, change.from) + change.after + opened.content.slice(change.to), baseVersion: change.baseVersion })).file.version); }
     }
+    const appliedCheckpointOid = await this.workspaces.commitHistory(projectId, `Apply ChangeSet ${changeSetId}`);
     const projectVersion = this.workspaces.getProject(projectId).version;
     return this.database.mutate((state) => {
-      const stored = state.changeSets.find((candidate) => candidate.id === changeSetId)!; stored.status = "accepted"; stored.changes.forEach((change, index) => { change.appliedVersion = appliedVersions[index]!; }); stored.updatedAt = timestamp();
+      const stored = state.changeSets.find((candidate) => candidate.id === changeSetId)!; stored.status = "accepted"; stored.changes.forEach((change, index) => { change.appliedVersion = appliedVersions[index]!; }); if (baseCheckpointOid) stored.baseCheckpointOid ??= baseCheckpointOid; if (appliedCheckpointOid) stored.appliedCheckpointOids = [...new Set([...(stored.appliedCheckpointOids ?? []), appliedCheckpointOid])]; stored.updatedAt = timestamp();
       const run = state.agentRuns.find((candidate) => candidate.id === stored.agentRunId); if (run) { run.status = "completed"; run.updatedAt = timestamp(); }
       const draft = state.draftPlans.find((candidate) => candidate.changeSetId === stored.id); if (draft) { draft.status = "accepted"; draft.updatedAt = timestamp(); }
       const plan = state.agentTaskPlans.find((candidate) => candidate.changeSetId === stored.id); if (plan) { plan.status = "accepted"; plan.acceptedProjectVersion = projectVersion; plan.updatedAt = timestamp(); }
@@ -602,6 +626,18 @@ function materializeChange(change: TextChange, hunks: TextHunk[]): string {
   if (change.operation === "create") return segment;
   if (change.baseContent === undefined) throw new ApiError(409, "changeset_hunks_unavailable", "This ChangeSet does not contain a complete base snapshot");
   return change.baseContent.slice(0, change.from) + segment + change.baseContent.slice(change.to);
+}
+
+function nearestOccurrence(content: string, needle: string, expected: number): number {
+  let cursor = content.indexOf(needle);
+  let nearest = -1;
+  let distance = Number.POSITIVE_INFINITY;
+  while (cursor >= 0) {
+    const currentDistance = Math.abs(cursor - expected);
+    if (currentDistance < distance) { nearest = cursor; distance = currentDistance; }
+    cursor = content.indexOf(needle, cursor + 1);
+  }
+  return nearest;
 }
 
 function materializeProposedText(before: string, hunks: TextHunk[]): string {

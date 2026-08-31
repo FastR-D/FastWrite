@@ -385,6 +385,7 @@ export interface TextChange {
 export interface ChangeSetDecisionRequest {
   decisions: Array<{ path: string; hunkIds: string[]; status: "accepted" | "rejected" }>;
   overwriteConflicts?: Array<{ path: string; currentVersion: number | null }>;
+  overrideBlockingFindings?: boolean;
 }
 
 export interface ChangeSetEditRequest {
@@ -413,8 +414,11 @@ export interface ChangeSet {
   rationale: string;
   changes: TextChange[];
   approvalMode?: "explicit-finish";
+  blockingFindingsOverridden?: boolean;
   reviewFinishedAt?: string;
   appliedFileVersion?: number;
+  baseCheckpointOid?: string;
+  appliedCheckpointOids?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -783,6 +787,30 @@ export interface AlignmentFinding {
   path?: string;
   line?: number;
   evidence?: string;
+}
+
+export interface ProjectShare {
+  id: string;
+  projectId: string;
+  tokenHash: string;
+  permission: "read" | "comment";
+  label?: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+}
+
+export interface ShareComment {
+  id: string;
+  shareId: string;
+  projectId: string;
+  path: string;
+  line?: number;
+  author: string;
+  body: string;
+  status: "open" | "resolved";
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AgentTaskPlanResponse {

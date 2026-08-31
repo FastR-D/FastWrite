@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, CompletionResponse, ComplianceReport, FileContentResponse, PaperMemory, PaperProject, ReviseResponse, SaveFileResponse, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
 import type { AgentProvider, AgentTaskPlanOutput, CompletionAgentInput, DraftGeneratedFile, ReviseAgentInput } from "./agent/provider";
 import { createApplication, mimeType } from "./app";
+import * as Y from "yjs";
 
 const temporaryDirectories: string[] = [];
 
@@ -38,6 +39,63 @@ describe("workspace API", () => {
     expect(await configured.json()).toEqual({ configured: true, source: "runtime", baseURL: "https://api.example.test/v1", model: "test-model", wireAPI: "responses" });
     const status = await request("/api/agent-settings");
     expect(JSON.stringify(await status.json())).not.toContain("sk-test-private-key");
+  });
+
+  test("exports a bounded provenance dossier without manuscript or secret content", async () => {
+    const request = await testApplication();
+    const created = await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Provenance paper", mainDocument: "main.tex", venue: "sp" }) });
+    const project = await created.json() as { id: string };
+    const response = await request(`/api/projects/${project.id}/provenance`);
+    expect(response.status).toBe(200);
+    const dossier = await response.json() as { project: { id: string }; runs: unknown[]; changeSets: unknown[]; disclosureDraft: string };
+    expect(dossier.project.id).toBe(project.id);
+    expect(dossier.runs).toEqual([]);
+    expect(dossier.changeSets).toEqual([]);
+    expect(dossier.disclosureDraft).toContain("No AI-assisted");
+    expect(dossier.disclosureDraft).not.toContain("main.tex");
+    expect(JSON.stringify(dossier)).not.toContain("documentclass");
+  });
+
+  test("lists bounded internal history checkpoints", async () => {
+    const request = await testApplication();
+    const created = await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "History paper", mainDocument: "main.tex", venue: "sp" }) });
+    const project = await created.json() as { id: string };
+    await request(`/api/projects/${project.id}/history/checkpoint`, { method: "POST" });
+    const response = await request(`/api/projects/${project.id}/history?limit=1`);
+    expect(response.status).toBe(200);
+    const history = await response.json() as Array<{ oid: string; message: string; createdAt: string }>;
+    expect(history.length).toBeLessThanOrEqual(1);
+    expect(history[0]).toMatchObject({ oid: expect.any(String), message: expect.any(String), createdAt: expect.any(String) });
+  });
+
+  test("creates revocable read-only and comment share links without exposing stored tokens", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Shared paper", mainDocument: "main.tex", venue: "sp" }) })).json() as PaperProject;
+    const readShare = await (await request(`/api/projects/${project.id}/shares`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ permission: "read" }) })).json() as { id: string; token: string };
+    expect((await request(`/api/shared/${readShare.token}`)).status).toBe(200);
+    expect((await request(`/api/shared/${readShare.token}/file?path=main.tex`)).status).toBe(200);
+    const denied = await request(`/api/shared/${readShare.token}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "main.tex", author: "Reviewer", body: "Comment" }) });
+    expect(denied.status).toBe(403);
+    const commentShare = await (await request(`/api/projects/${project.id}/shares`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ permission: "comment" }) })).json() as { id: string; token: string };
+    expect((await request(`/api/shared/${commentShare.token}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "main.tex", line: 2, author: "Reviewer", body: "Please clarify." }) })).status).toBe(201);
+    const listed = JSON.stringify(await (await request(`/api/projects/${project.id}/shares`)).json());
+    expect(listed).not.toContain(readShare.token);
+    await request(`/api/projects/${project.id}/shares/${readShare.id}`, { method: "DELETE" });
+    expect((await request(`/api/shared/${readShare.token}`)).status).toBe(404);
+  });
+
+  test("merges Yjs collaboration updates through PaperFile versions", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Collaborative paper", mainDocument: "main.tex", venue: "sp" }) })).json() as PaperProject;
+    const initial = await (await request(`/api/projects/${project.id}/collaboration?path=main.tex`)).json() as { fileVersion: number; update: string };
+    const document = new Y.Doc(); Y.applyUpdate(document, Buffer.from(initial.update, "base64")); document.getText("content").insert(document.getText("content").length, "\n% collaborative edit");
+    const response = await request(`/api/projects/${project.id}/collaboration`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "main.tex", baseVersion: initial.fileVersion, update: Buffer.from(Y.encodeStateAsUpdate(document)).toString("base64"), clientId: "client-a", name: "Author", line: 2 }) });
+    expect(response.status).toBe(200);
+    const merged = await response.json() as { fileVersion: number; presence: Array<{ name: string }> };
+    expect(merged.fileVersion).toBeGreaterThan(initial.fileVersion);
+    expect(merged.presence).toContainEqual(expect.objectContaining({ name: "Author" }));
+    const file = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    expect(file.content).toContain("collaborative edit");
   });
 
   test("rejects an unsupported runtime Agent wire API", async () => {
@@ -305,6 +363,19 @@ describe("workspace API", () => {
     const accepted = (await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json()) as FileContentResponse;
     expect(accepted.content).toContain(manuallyEdited);
     expect(accepted.content).not.toContain("The generated revision.");
+  });
+
+  test("returns editable three-way rollback conflicts and applies an explicit resolution", async () => {
+    const request = await testApplication({ async revise() { return { replacement: "AI replacement.", rationale: "Rewrite." }; } });
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Rollback conflict", venue: "sp" }) })).json() as PaperProject;
+    const initial = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const content = `${initial.content}\nOriginal sentence.`; await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, baseVersion: initial.file.version }) });
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse; const from = opened.content.indexOf("Original sentence.");
+    const proposed = await (await request(`/api/projects/${project.id}/revisions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ instruction: "Rewrite", selection: { path: "main.tex", text: "Original sentence.", from, to: from + 18, startLine: 2, endLine: 2, fileVersion: opened.file.version } }) })).json() as ReviseResponse;
+    await request(`/api/projects/${project.id}/change-sets/${proposed.changeSet.id}/accept`, { method: "POST" }); const applied = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: applied.content.replace("AI replacement.", "Human follow-up."), baseVersion: applied.file.version }) });
+    const conflict = await request(`/api/projects/${project.id}/change-sets/${proposed.changeSet.id}/rollback`, { method: "POST" }); expect(conflict.status).toBe(409); const details = await conflict.json() as { error: { code: string; details: { conflicts: Array<{ path: string; currentVersion: number }> } } }; expect(details.error.code).toBe("rollback_conflict_review_required");
+    const item = details.error.details.conflicts[0]!; const resolved = await request(`/api/projects/${project.id}/change-sets/${proposed.changeSet.id}/rollback`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resolutions: [{ path: item.path, currentVersion: item.currentVersion, content: `${content}\n% retained human intent` }] }) }); expect(resolved.status).toBe(200); expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toContain("retained human intent");
   });
 
   test("continues a Revise conversation from the latest unaccepted candidate", async () => {

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type CompileRecord, type DraftPlan, type GithubSyncRun, type IssueResolution, type PaperMemory, type PaperProject, type ReviewReport, type ReviewSnapshot, type UploadSession, type ResearchWork, type ProjectResearchWork, type ResearchIdentifier, type MetadataObservation, type SourceEvidence, type PaperClaim, type ClaimEvidenceLink, type ResearchRun, type ClaimRelation } from "@fastwrite/shared";
+import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type CompileRecord, type DraftPlan, type GithubSyncRun, type IssueResolution, type PaperMemory, type PaperProject, type ReviewReport, type ReviewSnapshot, type UploadSession, type ResearchWork, type ProjectResearchWork, type ResearchIdentifier, type MetadataObservation, type SourceEvidence, type PaperClaim, type ClaimEvidenceLink, type ResearchRun, type ClaimRelation, type ProjectShare, type ShareComment } from "@fastwrite/shared";
 
 export interface FileVersionRecord {
   version: number;
@@ -31,10 +31,12 @@ export interface DatabaseState {
   claimEvidenceLinks: ClaimEvidenceLink[];
   researchRuns: ResearchRun[];
   claimRelations: ClaimRelation[];
+  projectShares: ProjectShare[];
+  shareComments: ShareComment[];
 }
 
 export const CURRENT_SCHEMA_VERSION = 2;
-const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], claimRelations: [] };
+const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], claimRelations: [], projectShares: [], shareComments: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
@@ -74,6 +76,7 @@ export class JsonDatabase {
         claimEvidenceLinks: parsed.claimEvidenceLinks ?? [],
         researchRuns: parsed.researchRuns ?? [],
         claimRelations: parsed.claimRelations ?? []
+        ,projectShares: parsed.projectShares ?? [], shareComments: parsed.shareComments ?? []
       };
       this.state = migrate(migratedState);
       let migrated = false;
@@ -138,6 +141,9 @@ export class JsonDatabase {
       state.claimEvidenceLinks = state.claimEvidenceLinks.filter((item) => !state.paperClaims.some((claim) => claim.id === item.claimId));
       state.researchRuns = state.researchRuns.filter((item) => item.projectId !== projectId);
       state.researchWorks = state.researchWorks.filter((item) => !workIds.has(item.id));
+      const shareIds = new Set(state.projectShares.filter((item) => item.projectId === projectId).map((item) => item.id));
+      state.projectShares = state.projectShares.filter((item) => item.projectId !== projectId);
+      state.shareComments = state.shareComments.filter((item) => item.projectId !== projectId && !shareIds.has(item.shareId));
       state.researchIdentifiers = state.researchIdentifiers.filter((item) => !workIds.has(item.workId));
       state.metadataObservations = state.metadataObservations.filter((item) => !workIds.has(item.workId));
       delete state.fileVersions[projectId];
@@ -156,6 +162,8 @@ export class JsonDatabase {
 }
 
 function migrate(state: DatabaseState): DatabaseState {
+  state.projectShares ??= [];
+  state.shareComments ??= [];
   if (state.schemaVersion < 2) {
     state.researchWorks ??= [];
     state.projectResearchWorks ??= [];

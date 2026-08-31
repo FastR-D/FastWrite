@@ -7,6 +7,7 @@ import type { CompletionKind, CompletionResponse, FileContentResponse, SourceLoc
 import { api, ApiClientError } from "../../api/client";
 import { completionSuffix } from "./completion";
 import { currentTheme, THEME_CHANGE_EVENT } from "../../lib/theme";
+import * as Y from "yjs";
 
 type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
 type CompletionMetricEvent = "suggested" | "cancelled" | "accepted" | "ignored" | "error";
@@ -153,6 +154,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
   const decorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   const completionDecorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
+  const collaboratorDecorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   const disposablesRef = useRef<monaco.IDisposable[]>([]);
   const applyingExternalRef = useRef(false);
   const currentPathRef = useRef("");
@@ -178,6 +180,10 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   const [completionError, setCompletionError] = useState("");
   const [acceptedCompletion, setAcceptedCompletion] = useState<{ from: number; text: string } | null>(null);
   const [completionEnabled, setCompletionEnabled] = useState(() => localStorage.getItem("fastwrite.completion.enabled") !== "false");
+  const [collaborationEnabled, setCollaborationEnabled] = useState(() => localStorage.getItem("fastwrite.collaboration.enabled") === "true");
+  const [collaborators, setCollaborators] = useState<Array<{ clientId: string; name: string; color?: string; path: string; line?: number }>>([]);
+  const collaborationClientRef = useRef(localStorage.getItem("fastwrite.collaboration.client") || crypto.randomUUID());
+  const collaborationSocketRef = useRef<WebSocket | null>(null);
   const completionKind: CompletionKind = "auto";
 
   documentRef.current = document;
@@ -206,7 +212,9 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     abortRef.current = controller;
     if (currentPathRef.current === target.path) setStatus("saving");
     try {
-      const result = await api.projects.saveFile(projectId, target.path, { content, baseVersion: target.baseVersion }, controller.signal);
+      const result = collaborationEnabled ? await saveCollaborative(projectId, target, content, collaborationClientRef.current, cursorRef.current) : await api.projects.saveFile(projectId, target.path, { content, baseVersion: target.baseVersion }, controller.signal);
+      if (collaborationEnabled && "presence" in result) setCollaborators(result.presence.filter((item) => item.clientId !== collaborationClientRef.current));
+      if (collaborationEnabled && collaborationSocketRef.current?.readyState === WebSocket.OPEN) collaborationSocketRef.current.send(JSON.stringify({ type: "document-updated", fileVersion: result.file.version }));
       if (currentPathRef.current === target.path) {
         versionRef.current = result.file.version;
         savedContentRef.current = content;
@@ -288,6 +296,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     editorRef.current = editor;
     decorationsRef.current = editor.createDecorationsCollection();
     completionDecorationsRef.current = editor.createDecorationsCollection();
+    collaboratorDecorationsRef.current = editor.createDecorationsCollection();
     disposablesRef.current = [
       editor.onDidChangeModelContent(() => {
         if (!applyingExternalRef.current) contentChangeRef.current(editor.getValue());
@@ -306,6 +315,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       disposablesRef.current.forEach((item) => item.dispose());
       decorationsRef.current?.clear();
       completionDecorationsRef.current?.clear();
+      collaboratorDecorationsRef.current?.clear();
       editor.setModel(null);
       modelRef.current?.dispose();
       editor.dispose();
@@ -372,6 +382,35 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       }
     }, 500);
   }, [completionEnabled, document.content, document.file.path, document.file.version, editorReady, projectId]);
+
+  useEffect(() => {
+    if (!collaborationEnabled || !editorReady) { setCollaborators([]); return; }
+    localStorage.setItem("fastwrite.collaboration.client", collaborationClientRef.current);
+    let active = true;
+    const poll = async () => { try { const state = await api.projects.collaboration(projectId, document.file.path); if (!active) return; setCollaborators(state.presence.filter((item) => item.clientId !== collaborationClientRef.current)); if (state.fileVersion > versionRef.current) { const remote = new Y.Doc(); Y.applyUpdate(remote, fromBase64(state.update)); const content = remote.getText("content").toString(); applyingExternalRef.current = true; modelRef.current?.setValue(content); applyingExternalRef.current = false; versionRef.current = state.fileVersion; savedContentRef.current = content; setStatus("saved"); } } catch { /* Existing save conflict UI remains authoritative. */ } };
+    void poll(); const interval = window.setInterval(() => void poll(), 3000); return () => { active = false; window.clearInterval(interval); };
+  }, [collaborationEnabled, document.file.path, editorReady, projectId]);
+
+  useEffect(() => {
+    if (!collaborationEnabled || !editorReady) return;
+    const heartbeat = async () => { try { const line = modelRef.current?.getPositionAt(cursorRef.current).lineNumber; const members = await api.projects.collaborationPresence(projectId, { clientId: collaborationClientRef.current, name: localStorage.getItem("fastwrite.collaboration.name") || "Author", path: document.file.path, ...(line ? { line } : {}) }); setCollaborators(members.filter((item) => item.clientId !== collaborationClientRef.current)); } catch { /* Presence is best-effort. */ } };
+    void heartbeat(); const interval = window.setInterval(() => void heartbeat(), 12_000); return () => window.clearInterval(interval);
+  }, [collaborationEnabled, document.file.path, editorReady, projectId]);
+
+  useEffect(() => {
+    if (!collaborationEnabled || !editorReady) return;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(`${protocol}//${window.location.host}/api/collaboration/socket?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(document.file.path)}&clientId=${encodeURIComponent(collaborationClientRef.current)}`);
+    collaborationSocketRef.current = socket;
+    socket.onmessage = (event) => { try { const message = JSON.parse(String(event.data)) as { type?: string }; if (message.type === "document-updated" || message.type === "presence") void api.projects.collaboration(projectId, document.file.path).then((state) => { setCollaborators(state.presence.filter((item) => item.clientId !== collaborationClientRef.current)); if (message.type === "document-updated" && state.fileVersion > versionRef.current) { const remote = new Y.Doc(); Y.applyUpdate(remote, fromBase64(state.update)); const content = remote.getText("content").toString(); applyingExternalRef.current = true; modelRef.current?.setValue(content); applyingExternalRef.current = false; versionRef.current = state.fileVersion; savedContentRef.current = content; } }); } catch { /* Ignore malformed collaboration broadcasts. */ } };
+    return () => { if (collaborationSocketRef.current === socket) collaborationSocketRef.current = null; socket.close(); };
+  }, [collaborationEnabled, document.file.path, editorReady, projectId]);
+
+  useEffect(() => {
+    const model = modelRef.current; const decorations = collaboratorDecorationsRef.current;
+    if (!model || !decorations || !collaborationEnabled) { decorations?.clear(); return; }
+    decorations.set(collaborators.filter((item) => item.path === document.file.path && item.line).map((item) => { const lineNumber = Math.max(1, Math.min(item.line!, model.getLineCount())); return { range: new monaco.Range(lineNumber, 1, lineNumber, 1), options: { isWholeLine: true, className: "fastwrite-remote-line", glyphMarginClassName: "fastwrite-remote-cursor", hoverMessage: { value: `${item.name} is editing here` }, before: { content: `${item.name} `, inlineClassName: "fastwrite-remote-label" } } }; }));
+  }, [collaborationEnabled, collaborators, document.file.path, document.file.version, editorReady]);
 
   useEffect(() => {
     const model = modelRef.current;
@@ -482,6 +521,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
             {completionLoading ? <LoaderCircle className="spin" /> : <Sparkles />}
             <span>Complete</span>
           </label>
+          <label className={`completion-switch${collaborationEnabled ? " is-on" : ""}`} title="Synchronize this file through Yjs collaboration"><input type="checkbox" checked={collaborationEnabled} onChange={(event) => { setCollaborationEnabled(event.target.checked); localStorage.setItem("fastwrite.collaboration.enabled", String(event.target.checked)); }} /><span>Collaborate{collaborators.length ? ` · ${collaborators.length}` : ""}</span></label>
           {acceptedCompletion ? <button className="editor-undo-completion" type="button" onClick={undoCompletion}><Undo2 /> Undo completion</button> : null}
           <SaveIndicator status={status} />
         </div>
@@ -543,3 +583,14 @@ function SaveIndicator({ status }: { status: SaveStatus }) {
   }[status];
   return <span className={`save-indicator save-indicator--${status}`}>{content}</span>;
 }
+
+async function saveCollaborative(projectId: string, target: SaveTarget, content: string, clientId: string, cursor: number) {
+  const state = await api.projects.collaboration(projectId, target.path);
+  if (state.fileVersion !== target.baseVersion) throw new ApiClientError(409, "collaboration_version_conflict", "This file changed elsewhere. Reload it before saving again.");
+  const document = new Y.Doc(); Y.applyUpdate(document, fromBase64(state.update)); const text = document.getText("content"); text.delete(0, text.length); text.insert(0, content);
+  const result = await api.projects.collaborationUpdate(projectId, { path: target.path, update: toBase64(Y.encodeStateAsUpdate(document)), baseVersion: target.baseVersion, clientId, name: localStorage.getItem("fastwrite.collaboration.name") || "Author", line: modelLineFromOffset(content, cursor) });
+  return { file: { path: target.path, name: target.path.split("/").pop() ?? target.path, kind: "text" as const, size: new Blob([content]).size, version: result.fileVersion, updatedAt: new Date().toISOString() }, presence: result.presence };
+}
+function modelLineFromOffset(content: string, offset: number): number { return content.slice(0, Math.max(0, offset)).split("\n").length; }
+function toBase64(update: Uint8Array): string { let value = ""; for (const byte of update) value += String.fromCharCode(byte); return btoa(value); }
+function fromBase64(value: string): Uint8Array { return Uint8Array.from(atob(value), (character) => character.charCodeAt(0)); }

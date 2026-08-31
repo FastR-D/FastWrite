@@ -5,7 +5,7 @@ import { diffWords } from "../../lib/wordDiff";
 import { Button } from "../ui/Button";
 import { hunkCounts } from "./agentReview";
 
-export function ChangeHunkReview({ change, busy, readOnly = false, showToolbar = true, onDecide, onEditHunk }: { change: TextChange; busy: boolean; readOnly?: boolean; showToolbar?: boolean; onDecide: (hunkIds: string[], status: "accepted" | "rejected") => void; onEditHunk?: (hunkId: string, after: string) => Promise<void> }) {
+export function ChangeHunkReview({ change, busy, readOnly = false, showToolbar = true, onDecide, onEditHunk, onNavigate }: { change: TextChange; busy: boolean; readOnly?: boolean; showToolbar?: boolean; onDecide: (hunkIds: string[], status: "accepted" | "rejected") => void; onEditHunk?: (hunkId: string, after: string) => Promise<void>; onNavigate?: (path: string, line?: number) => void }) {
   const hunks = change.hunks ?? [];
   const pending = hunks.filter((hunk) => hunk.status === "pending");
   const pendingHasBlocking = pending.some((hunk) => hunk.findings?.some((finding) => finding.status === "blocking"));
@@ -38,7 +38,7 @@ export function ChangeHunkReview({ change, busy, readOnly = false, showToolbar =
             <blockquote>{evidence.excerpt}</blockquote>
           </article>)}
         </div> : null}
-        {hunk.findings?.length ? <div className="hunk-findings">{hunk.findings.map((finding) => <p className={`is-${finding.status}`} key={finding.id}><strong>{finding.status}</strong><span>{finding.message}</span></p>)}</div> : null}
+        {hunk.findings?.length ? <div className="hunk-findings">{hunk.findings.map((finding) => { const anchor = finding.anchors?.[0]; return <p className={`is-${finding.status}`} key={finding.id}><strong>{finding.status} · {finding.source}</strong><span>{finding.message}</span>{anchor && onNavigate ? <button onClick={() => onNavigate(anchor.path, anchor.prefix.split("\n").length)}>Open evidence</button> : null}</p>; })}</div> : null}
         {!readOnly && !editing ? <footer>{onEditHunk ? <Button size="small" variant="secondary" icon={<Pencil />} disabled={busy || hunk.status === "accepted"} title={hunk.status === "accepted" ? "Change to reject before editing this hunk" : "Edit only this hunk"} onClick={() => { setEditingHunk(hunk.id); setDraft(hunk.after); setError(""); }}>Edit hunk</Button> : null}{hunk.status !== "rejected" ? <Button size="small" variant="ghost" icon={<X />} disabled={busy} onClick={() => onDecide([hunk.id], "rejected")}>{hunk.status === "accepted" ? "Change to reject" : "Reject"}</Button> : null}{hunk.status !== "accepted" ? <Button size="small" variant={hunk.status === "pending" ? "primary" : "secondary"} icon={<Check />} disabled={busy || hunk.findings?.some((finding) => finding.status === "blocking")} title={hunk.findings?.some((finding) => finding.status === "blocking") ? "Edit or reject this hunk to resolve its blocking finding" : undefined} onClick={() => onDecide([hunk.id], "accepted")}>{hunk.status === "rejected" ? "Change to accept" : "Accept"}</Button> : null}</footer> : null}
       </article>;
     })}</div>
