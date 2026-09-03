@@ -18,6 +18,20 @@ export function currentSectionSelection(document: FileContentResponse | null, ou
   } : null;
 }
 
+export function currentParagraphSelection(document: FileContentResponse | null, cursor: SourceLocation): TextSelection | null {
+  if (!document || cursor.path !== document.file.path) return null;
+  const lines = document.content.split("\n");
+  const index = Math.max(0, Math.min(lines.length - 1, cursor.line - 1));
+  if (!lines[index]?.trim()) return null;
+  let start = index;
+  let end = index;
+  while (start > 0 && lines[start - 1]!.trim()) start -= 1;
+  while (end + 1 < lines.length && lines[end + 1]!.trim()) end += 1;
+  const from = offsetAtLine(lines, start + 1);
+  const to = end + 1 < lines.length ? Math.max(from, offsetAtLine(lines, end + 2) - 1) : document.content.length;
+  return to > from ? { path: document.file.path, text: document.content.slice(from, to), from, to, startLine: start + 1, endLine: end + 1, fileVersion: document.file.version } : null;
+}
+
 function flattenOutline(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => [item, ...flattenOutline(item.children)]);
 }

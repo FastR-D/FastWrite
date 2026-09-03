@@ -3,6 +3,7 @@ import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
 import type { WorkspaceService } from "../workspace/workspace-service";
 import type { AgentProvider, ReviewAgentOutput } from "./provider";
+import type { AgentGateway } from "./agent-gateway";
 import type { SkillRegistry } from "./skill-registry";
 import { isAgentCancellation, runAgentOperation } from "./agent-operation";
 import { writingGuardMany } from "../writing/writing-guard";
@@ -14,10 +15,12 @@ function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap(
 function flattenOutline(items: OutlineItem[]): OutlineItem[] { return items.flatMap((item) => [item, ...flattenOutline(item.children)]); }
 
 export class ReviewService {
-  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider) {}
+  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider | AgentGateway) {}
+
+  private get agent(): AgentProvider | undefined { return this.provider && "provider" in this.provider ? this.provider.provider : this.provider; }
 
   async run(projectId: string, sourceOnly = false, requestSignal?: AbortSignal, pdfPageText: string[] = []): Promise<ReviewResponse> {
-    if (!this.provider?.review) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable Review Agent");
+    if (!this.agent?.review) throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable Review Agent");
     const project = this.workspaces.getProject(projectId);
     const compileRecord = this.database.snapshot().compileRecords.filter((record) => record.projectId === projectId && record.projectVersion === project.version && record.status === "success").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (!compileRecord && !sourceOnly) throw new ApiError(409, "compile_required", "Compile the current project version or explicitly continue with a source-only review");
@@ -67,12 +70,12 @@ export class ReviewService {
     await this.database.mutate((state) => { state.agentRuns.push(run); });
     const providerPasses: Record<string, { status: "completed" | "failed"; error?: string }> = {};
     try {
-      const [outline, skill] = await Promise.all([this.workspaces.outline(projectId), this.skills.load(project.skill, project.publicationTarget)]);
+      const [outline, skill, workflowInstructions] = await Promise.all([this.workspaces.outline(projectId), this.skills.load(project.skill, project.publicationTarget), this.skills.loadWorkflow("review")]);
       const result = await runAgentOperation<ReviewAgentOutput>(
         async (signal) => {
-          const input = { documents: documents.map(({ path, content }) => ({ path, content })), outline: flattenOutline(outline).map(({ path, title, line }) => ({ path, title, line })), skill: project.skill, skillInstructions: skill.instructions, venueInstructions: skill.venueInstructions, ...(boundedPageText.length ? { pdfPageText: boundedPageText } : {}) };
-          if (!this.provider!.reviewPass) { providerPasses.domain = { status: "completed" }; providerPasses.venue = { status: "completed" }; return this.provider!.review!(input, signal); }
-          const results = await Promise.allSettled([this.provider!.reviewPass({ ...input, pass: "domain" }, signal), this.provider!.reviewPass({ ...input, pass: "venue" }, signal)]);
+          const input = { documents: documents.map(({ path, content }) => ({ path, content })), outline: flattenOutline(outline).map(({ path, title, line }) => ({ path, title, line })), skill: project.skill, skillInstructions: `${workflowInstructions}\n\n${skill.instructions}`, venueInstructions: skill.venueInstructions, ...(boundedPageText.length ? { pdfPageText: boundedPageText } : {}) };
+          if (!this.agent!.reviewPass) { providerPasses.domain = { status: "completed" }; providerPasses.venue = { status: "completed" }; return this.agent!.review!(input, signal); }
+          const results = await Promise.allSettled([this.agent!.reviewPass({ ...input, pass: "domain" }, signal), this.agent!.reviewPass({ ...input, pass: "venue" }, signal)]);
           providerPasses.domain = results[0]?.status === "fulfilled" ? { status: "completed" } : { status: "failed", error: results[0]?.reason instanceof Error ? results[0].reason.message : "Domain pass failed" };
           providerPasses.venue = results[1]?.status === "fulfilled" ? { status: "completed" } : { status: "failed", error: results[1]?.reason instanceof Error ? results[1].reason.message : "Venue pass failed" };
           const successful = results.filter((item): item is PromiseFulfilledResult<ReviewAgentOutput> => item.status === "fulfilled").map((item) => item.value);

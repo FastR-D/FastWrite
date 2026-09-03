@@ -16,19 +16,24 @@ import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
 import type { WorkspaceService } from "../workspace/workspace-service";
 import type { AgentProvider, ReviseAgentInput } from "./provider";
+import type { AgentGateway } from "./agent-gateway";
 import type { SkillRegistry } from "./skill-registry";
 import type { MemoryService } from "./memory-service";
 import { replaceSelectionChange } from "./change-set";
 import { citationFindings, normalizePlaceholderFindings } from "./citation-findings";
 
 const COMMANDS: Record<ReviseCommandId, string> = {
-  "academic-polish": "Polish this selection into precise, fluent academic prose without strengthening its claims.",
-  "logic-check": "Repair local logical gaps and make the reasoning explicit while preserving the evidence and claim scope.",
-  condense: "Make this selection substantially more concise without losing technical meaning.",
-  "expand-argument": "Expand the argument only with implications supported by the supplied context; do not invent evidence.",
-  reorganize: "Reorganize this selection for a clearer argumentative flow.",
-  grammar: "Correct grammar, punctuation, and awkward phrasing with minimal rewriting.",
-  "citation-suggestion": "Improve how the selection signals where evidence or citations are needed. Do not invent citation keys."
+  "academic-polish": "Polish the selected manuscript text for precision, concision, formal academic tone, and smooth information flow. Preserve claim strength, technical terms, numbers, citations, equations, and LaTeX structure exactly.",
+  "logic-check": "Repair only local reasoning defects in the selection: make premises, inference, and conclusion explicit; remove unsupported leaps or qualify them. Do not add evidence or strengthen the conclusion.",
+  condense: "Reduce redundancy and wordiness in the selection while retaining every technical condition, qualification, result, number, citation, and logical dependency. Prefer tighter syntax over deleting substance.",
+  "expand-argument": "Expand the selection into a complete claim-evidence-reasoning paragraph using only supplied context. Explain mechanisms and implications already supported; mark a precise TODO only for genuinely missing evidence.",
+  reorganize: "Reorder sentences or clauses within the selection into motivation, claim, support, and implication order. Do not move content outside the selected span or change LaTeX hierarchy.",
+  grammar: "Correct grammar, punctuation, agreement, articles, tense, and awkward syntax with the smallest possible edit. Do not alter terminology, claims, citations, numbers, formulas, or sentence order unless grammar requires it.",
+  "citation-suggestion": "Identify assertions in the selected prose that require external support. Preserve existing verified citation keys; where support is missing, add a precise plain-text TODO adjacent to the assertion, never an invented citation key.",
+  "clarify-contribution": "Clarify the selected contribution statement by separating the research gap, proposed artifact or insight, and supported benefit. Preserve novelty and performance scope; do not turn an implementation detail into a claimed contribution.",
+  "strengthen-transition": "Improve the transition inside the selection by making its relationship to the preceding and following context explicit. Do not add new technical claims or summarize content outside the selection.",
+  "terminology-consistency": "Align terminology in the selection with the supplied paper context. Replace only inconsistent aliases, preserve mathematical symbols and capitalization, and do not redefine established terms.",
+  limitations: "Rewrite the selection as a precise limitations or scope statement: state the applicable assumptions, unsupported settings, and consequence for interpretation without inventing failure evidence or weakening unrelated claims."
 };
 
 function timestamp(): string {
@@ -60,13 +65,15 @@ export class ReviseService {
     private readonly database: JsonDatabase,
     private readonly workspaces: WorkspaceService,
     private readonly skills: SkillRegistry,
-    private readonly provider?: AgentProvider,
+    private readonly provider?: AgentProvider | AgentGateway,
     private readonly memories?: MemoryService
   ) {}
 
+  private get agent(): AgentProvider | undefined { return this.provider && "provider" in this.provider ? this.provider.provider : this.provider; }
+
   async propose(projectId: string, request: ReviseRequest): Promise<ReviseResponse> {
-    if (!this.provider) {
-      throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable AI revision");
+    if (!this.agent) {
+      throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable AI revision");
     }
     const instruction = this.resolveInstruction(request);
     const project = this.workspaces.getProject(projectId);
@@ -97,16 +104,17 @@ export class ReviseService {
     await this.database.mutate((state) => state.agentRuns.push(run));
 
     try {
-      const loadedSkill = await this.skills.load(project.skill, project.publicationTarget);
-      const output = await this.provider.revise({
+      const [loadedSkill, workflowInstructions] = await Promise.all([this.skills.load(project.skill, project.publicationTarget), this.skills.loadWorkflow("revise")]);
+      const output = await this.agent.revise({
         instruction,
         selection: request.selection,
         workingText,
         history,
         selectionIsSectionScaffold: isSectionScaffold(workingText, Boolean(context.sectionTitle)),
+        selectionKind: classifySelection(workingText, request.selection.startLine, request.selection.endLine),
         ...(memory.content ? { paperContext: memory.content } : {}),
         skill: project.skill,
-        skillInstructions: withMemory(loadedSkill.instructions, memory.content),
+        skillInstructions: withMemory(`${workflowInstructions}\n\n${loadedSkill.instructions}`, memory.content),
         venueInstructions: loadedSkill.venueInstructions,
         ...context
       });
@@ -621,6 +629,12 @@ function isSectionScaffold(value: string, hasSection: boolean): boolean {
   return body.length === 0;
 }
 
+function classifySelection(value: string, startLine: number, endLine: number): "sentence" | "paragraph" | "section" {
+  if (/\\(?:part|chapter|section|subsection|subsubsection)\*?(?:\[[^\]]*\])?\{/.test(value)) return "section";
+  if (endLine > startLine || /\n\s*\n/.test(value) || value.length > 360) return "paragraph";
+  return "sentence";
+}
+
 function materializeChange(change: TextChange, hunks: TextHunk[]): string {
   const segment = materializeTextHunks(change.before, hunks);
   if (change.operation === "create") return segment;
@@ -652,6 +666,10 @@ function commandLabel(command: ReviseCommandId): string {
     "expand-argument": "Expand argument",
     reorganize: "Reorganize",
     grammar: "Grammar",
-    "citation-suggestion": "Citation suggestion"
+    "citation-suggestion": "Citation suggestion",
+    "clarify-contribution": "Clarify contribution",
+    "strengthen-transition": "Strengthen transition",
+    "terminology-consistency": "Terminology consistency",
+    limitations: "Limitations"
   })[command];
 }

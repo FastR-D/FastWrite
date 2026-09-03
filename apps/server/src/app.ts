@@ -22,6 +22,7 @@ import type {
 } from "@fastwrite/shared";
 import type { AgentProvider } from "./agent/provider";
 import { OpenAIAgentProvider } from "./agent/provider";
+import { asGateway } from "./agent/agent-gateway";
 import { DraftService } from "./agent/draft-service";
 import { ReviseService } from "./agent/revise-service";
 import { ReviewService } from "./agent/review-service";
@@ -49,6 +50,12 @@ import { deriveArgumentGraph } from "./claims/argument-graph";
 import { buildAdversarialMemo } from "./claims/adversarial-memo";
 import { normalizePlaceholderFindings } from "./agent/citation-findings";
 import * as Y from "yjs";
+import { HarnessRegistry, McpRegistry, type McpServerDefinition } from "@fastwrite/harness-core";
+import { CodexHarnessAdapter } from "@fastwrite/harness-codex";
+import { ClaudeHarnessAdapter } from "@fastwrite/harness-claude";
+import { HarnessRunService } from "./agent/harness-run-service";
+import { HarnessSessionService } from "./agent/harness-session-service";
+import { McpToolService } from "./agent/mcp-tool-service";
 
 interface Services {
   database: JsonDatabase;
@@ -70,6 +77,11 @@ interface Services {
   research: ResearchService;
   claims: ClaimService;
   alignment: AlignmentService;
+  harnessRegistry: HarnessRegistry;
+  mcpRegistry: McpRegistry;
+  harnessRuns: HarnessRunService;
+  harnessSessions: HarnessSessionService;
+  mcpTools: McpToolService;
 }
 
 type Handler = (request: Request, params: Record<string, string>, url: URL) => Promise<Response> | Response;
@@ -99,6 +111,25 @@ interface AgentSettingsInput {
 
 function boundedSetting(value: unknown, maximum: number): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, maximum) : undefined;
+}
+
+function harnessAdapter(registry: HarnessRegistry, kind: string) {
+  if (kind !== "claude" && kind !== "codex" && kind !== "legacy") throw new ApiError(400, "harness_invalid", "Unsupported Harness");
+  const adapter = registry.get(kind);
+  if (!adapter) throw new ApiError(503, "harness_unavailable", `Harness '${kind}' is not configured`);
+  return adapter;
+}
+
+function defaultMcpServers(): McpServerDefinition[] {
+  return [
+    { id: "workspace", name: "FastWrite Workspace", version: "1.0.0", enabled: true, tools: [
+      { name: "read", description: "Read a workspace file", inputSchema: { type: "object", required: ["path"] } },
+      { name: "search", description: "Search workspace text", inputSchema: { type: "object", required: ["query"] } }
+    ] },
+    { id: "latex", name: "FastWrite LaTeX", version: "1.0.0", enabled: true, tools: [
+      { name: "compile", description: "Compile the current paper", inputSchema: { type: "object", required: [] } }
+    ] }
+  ];
 }
 
 function runtimeAgentProvider(getProvider: () => AgentProvider | undefined): AgentProvider {
@@ -149,22 +180,31 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
     runtimeProvider = providerFor(runtimeConfiguration);
   };
   const skillRegistry = new SkillRegistry(config.skillsDirectory);
+  const harnessRegistry = new HarnessRegistry();
+  harnessRegistry.register(new CodexHarnessAdapter());
+  harnessRegistry.register(new ClaudeHarnessAdapter());
+  const mcpRegistry = new McpRegistry();
+  for (const server of defaultMcpServers()) mcpRegistry.register(server);
+  const harnessRuns = new HarnessRunService(harnessRegistry, database);
+  const harnessSessions = new HarnessSessionService(database);
+  const latexCompiler = new LatexCompileService(dataDirectory, workspaces);
+  const mcpTools = new McpToolService(mcpRegistry, workspaces, latexCompiler, database);
   const latexTemplates = new LatexTemplateService(dataDirectory, fetch, config.templateDirectory);
-  const memories = new MemoryService(database, workspaces, skillRegistry, providers.memory);
-  const revisions = new ReviseService(database, workspaces, skillRegistry, providers.revise, memories);
-  const drafts = new DraftService(database, workspaces, skillRegistry, providers.agent);
-  const reviews = new ReviewService(database, workspaces, skillRegistry, providers.review);
+  const memories = new MemoryService(database, workspaces, skillRegistry, asGateway(providers.memory));
+  const revisions = new ReviseService(database, workspaces, skillRegistry, asGateway(providers.revise), memories);
+  const drafts = new DraftService(database, workspaces, skillRegistry, asGateway(providers.agent));
+  const reviews = new ReviewService(database, workspaces, skillRegistry, asGateway(providers.review));
   const compliance = new ComplianceService(workspaces, skillRegistry);
   const research = new ResearchService(database, workspaces);
   const claims = new ClaimService(database, workspaces);
   const alignment = new AlignmentService(workspaces);
-  const agentTasks = new AgentTaskService(database, workspaces, skillRegistry, providers.agent, memories, providers.review, compliance);
-  const completions = new CompletionService(workspaces, skillRegistry, providers.completion, memories);
-  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler: new LatexCompileService(dataDirectory, workspaces), skillRegistry, compliance, latexTemplates, research, claims, alignment };
+  const agentTasks = new AgentTaskService(database, workspaces, skillRegistry, asGateway(providers.agent), memories, asGateway(providers.review), compliance);
+  const completions = new CompletionService(workspaces, skillRegistry, asGateway(providers.completion), memories);
+  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools };
   const routes = buildRoutes(services, {
     status: () => {
       const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
-      return { configured: Boolean(runtimeProvider ?? configuredProviders.agent), source: runtimeProvider ? "runtime" : configuredProviders.agent ? "environment" : "none", ...(activeConfiguration.baseURL ? { baseURL: activeConfiguration.baseURL } : {}), ...(activeConfiguration.model ? { model: activeConfiguration.model } : {}), wireAPI: activeConfiguration.wireAPI ?? (activeConfiguration.baseURL ? "chat" : "responses") };
+      return { configured: Boolean(runtimeProvider ?? configuredProviders.agent), harness: config.harness, source: runtimeProvider ? "runtime" : configuredProviders.agent ? "environment" : "none", ...(activeConfiguration.baseURL ? { baseURL: activeConfiguration.baseURL } : {}), ...(activeConfiguration.model ? { model: activeConfiguration.model } : {}), wireAPI: activeConfiguration.wireAPI ?? (activeConfiguration.baseURL ? "chat" : "responses") };
     },
     configure: configureAgent
   });
@@ -186,7 +226,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
 }
 
-function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void }): Route[] {
+function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void }): Route[] {
   const collaborationDocuments = new Map<string, { document: Y.Doc; version: number }>();
   const presence = new Map<string, Map<string, { clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>();
   return [
@@ -194,6 +234,62 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
     route("GET", "/api/agent-settings", async () => json(agentSettings.status())),
     route("PUT", "/api/agent-settings", async (request) => { agentSettings.configure(await readJson<AgentSettingsInput>(request)); return json(agentSettings.status()); }),
     route("GET", "/api/venues", async () => json(await skillRegistry.catalog())),
+    route("GET", "/api/skills/workflows", async () => json((await skillRegistry.workflowCatalog()).map(({ instructions: _instructions, ...descriptor }) => descriptor))),
+    route("GET", "/api/harnesses", async () => json(await Promise.all(harnessRegistry.list().map(async (adapter) => ({ status: await adapter.getStatus(), capabilities: await adapter.getCapabilities() }))))),
+    route("GET", "/api/harness-sessions", async () => json(harnessSessions.list())),
+    route("GET", "/api/mcp", async () => json(mcpRegistry.list())),
+    route("GET", "/api/mcp/audit", async (_request, params, url) => json(mcpTools.audit(url.searchParams.get("projectId") ?? undefined))),
+    route("POST", "/api/projects/:projectId/mcp/call", async (request, params) => { const body = await readJson<{ name?: string; input?: unknown; allow?: string[]; deny?: string[] }>(request); if (!body.name) throw new ApiError(400, "mcp_tool_required", "name is required"); return json(await mcpTools.call(required(params, "projectId"), body.name, body.input ?? {}, { allow: body.allow ?? [], ...(body.deny ? { deny: body.deny } : {}) })); }),
+    route("GET", "/api/harness-runs", async () => json(harnessRuns.list())),
+    route("GET", "/api/harness-runs/:runId", async (_request, params) => {
+      const run = harnessRuns.get(required(params, "runId"));
+      if (!run) throw new ApiError(404, "harness_run_not_found", "Harness run not found");
+      return json(run);
+    }),
+    route("GET", "/api/harness-runs/:runId/events", async (_request, params, url) => {
+      const run = harnessRuns.get(required(params, "runId"));
+      if (!run) throw new ApiError(404, "harness_run_not_found", "Harness run not found");
+      const since = Math.max(0, Number.parseInt(url.searchParams.get("since") ?? "0", 10) || 0);
+      const limit = Math.min(2000, Math.max(1, Number.parseInt(url.searchParams.get("limit") ?? "2000", 10) || 2000));
+      return json(run.events.slice(since, since + limit));
+    }),
+    route("GET", "/api/harness-runs/:runId/approvals", async (_request, params) => json(harnessRuns.listApprovals(required(params, "runId")))),
+    route("POST", "/api/harness-approvals/:approvalId", async (request, params) => {
+      const body = await readJson<{ decision?: "approved" | "denied" }>(request);
+      if (body.decision !== "approved" && body.decision !== "denied") throw new ApiError(400, "approval_decision_invalid", "decision must be approved or denied");
+      let approval;
+      try { approval = await harnessRuns.resolveApproval(required(params, "approvalId"), body.decision); }
+      catch (error) { if (error instanceof Error && error.message === "approval_already_decided") throw new ApiError(409, "approval_already_decided", "Approval has already been decided"); throw error; }
+      if (!approval) throw new ApiError(404, "approval_not_found", "Approval not found");
+      return json(approval);
+    }),
+    route("POST", "/api/harness-runs", async (request) => {
+      const body = await readJson<{ kind?: "claude" | "codex" | "legacy"; sessionId?: string; cwd?: string; content?: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }>(request);
+      if (!body.kind || !body.sessionId || !body.cwd?.trim() || !body.content?.trim()) throw new ApiError(400, "harness_run_invalid", "kind, sessionId, cwd and content are required");
+      const events = [];
+      for await (const event of harnessRuns.send({ kind: body.kind, session: { harness: body.kind, sessionId: body.sessionId, cwd: body.cwd.trim() }, content: body.content.trim(), ...(body.skills ? { skills: body.skills } : {}), signal: request.signal })) events.push(event);
+      return json({ events }, 201);
+    }),
+    route("POST", "/api/harnesses/:kind/sessions", async (request, params) => {
+      const adapter = harnessAdapter(harnessRegistry, required(params, "kind"));
+      const body = await readJson<{ cwd?: string; title?: string }>(request);
+      if (!body.cwd?.trim()) throw new ApiError(400, "harness_cwd_required", "cwd is required");
+      return json(await harnessSessions.create(adapter, { cwd: body.cwd.trim(), ...(body.title?.trim() ? { title: body.title.trim().slice(0, 200) } : {}) }), 201);
+    }),
+    route("POST", "/api/harnesses/:kind/sessions/:sessionId/resume", async (request, params) => {
+      const adapter = harnessAdapter(harnessRegistry, required(params, "kind"));
+      const body = await readJson<{ cwd?: string }>(request);
+      if (!body.cwd?.trim()) throw new ApiError(400, "harness_cwd_required", "cwd is required");
+      return json(await harnessSessions.resume(adapter, { harness: adapter.kind, sessionId: required(params, "sessionId"), cwd: body.cwd.trim() }));
+    }),
+    route("POST", "/api/harnesses/:kind/sessions/:sessionId/messages", async (request, params) => {
+      const adapter = harnessAdapter(harnessRegistry, required(params, "kind"));
+      const body = await readJson<{ cwd?: string; content?: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }>(request);
+      if (!body.cwd?.trim() || !body.content?.trim()) throw new ApiError(400, "harness_message_invalid", "cwd and content are required");
+      const events = [];
+      for await (const event of adapter.sendMessage({ session: { harness: adapter.kind, sessionId: required(params, "sessionId"), cwd: body.cwd.trim() }, content: body.content.trim(), ...(body.skills ? { skills: body.skills } : {}), signal: request.signal })) events.push(event);
+      return json({ sessionId: required(params, "sessionId"), events });
+    }),
     route("GET", "/api/projects/:projectId/collaboration", async (_request, params, url) => {
       const projectId = required(params, "projectId"); const path = requiredQuery(url, "path"); const opened = await workspaces.readTextFile(projectId, path); const key = `${projectId}:${path}`;
       let entry = collaborationDocuments.get(key); if (!entry || entry.version !== opened.file.version) { const document = new Y.Doc(); document.getText("content").insert(0, opened.content); entry = { document, version: opened.file.version }; collaborationDocuments.set(key, entry); }

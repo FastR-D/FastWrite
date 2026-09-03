@@ -21,6 +21,43 @@ async function testApplication(agentProvider?: AgentProvider) {
 }
 
 describe("workspace API", () => {
+  test("reports configured Harness capabilities and rejects unknown Harnesses", async () => {
+    const request = await testApplication();
+    const response = await request("/api/harnesses");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: expect.objectContaining({ kind: "codex", state: "ready" }), capabilities: expect.objectContaining({ streaming: true, sessions: true, skills: true, mcp: true }) }),
+      expect.objectContaining({ status: expect.objectContaining({ kind: "claude", state: "ready" }) })
+    ]));
+    const invalid = await request("/api/harnesses/unknown/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: "/tmp" }) });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ error: { code: "harness_invalid" } });
+  });
+
+  test("returns a structured error for an unknown Harness run", async () => {
+    const request = await testApplication();
+    const response = await request("/api/harness-runs/run_missing");
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: "harness_run_not_found" } });
+  });
+
+  test("executes MCP workspace tools only when explicitly allowed", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "MCP tools" }) })).json() as PaperProject;
+    const denied = await request(`/api/projects/${project.id}/mcp/call`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "workspace.read", input: { path: "main.tex" }, allow: [] }) });
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ error: { code: "mcp_tool_denied" } });
+    const allowed = await request(`/api/projects/${project.id}/mcp/call`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "workspace.read", input: { path: "main.tex" }, allow: ["workspace.read"] }) });
+    expect(allowed.status).toBe(200);
+    expect(await allowed.json()).toMatchObject({ path: "main.tex", content: expect.stringContaining("\\documentclass") });
+    const audit = await request(`/api/mcp/audit?projectId=${encodeURIComponent(project.id)}`);
+    expect(audit.status).toBe(200);
+    expect(await audit.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ projectId: project.id, tool: "workspace.read", status: "denied" }),
+      expect.objectContaining({ projectId: project.id, tool: "workspace.read", status: "completed" })
+    ]));
+  });
+
   test("serves module workers with a browser-safe MIME type", () => {
     expect(mimeType(".mjs")).toBe("text/javascript; charset=utf-8");
     expect(mimeType(".wasm")).toBe("application/wasm");
@@ -36,7 +73,7 @@ describe("workspace API", () => {
       body: JSON.stringify({ apiKey: "sk-test-private-key", baseURL: "https://api.example.test/v1", model: "test-model", wireAPI: "responses" })
     });
     expect(configured.status).toBe(200);
-    expect(await configured.json()).toEqual({ configured: true, source: "runtime", baseURL: "https://api.example.test/v1", model: "test-model", wireAPI: "responses" });
+    expect(await configured.json()).toMatchObject({ configured: true, source: "runtime", baseURL: "https://api.example.test/v1", model: "test-model", wireAPI: "responses" });
     const status = await request("/api/agent-settings");
     expect(JSON.stringify(await status.json())).not.toContain("sk-test-private-key");
   });
@@ -309,6 +346,7 @@ describe("workspace API", () => {
     expect(proposed.run).toMatchObject({ status: "waiting-approval", skill: { id: "network-information-security", venue: "network-information-security" } });
     expect(proposed.changeSet).toMatchObject({ status: "proposed", summary: "Grammar" });
     expect(received?.sectionTitle).toBe("Introduction");
+    expect(received?.selectionKind).toBe("sentence");
     expect(received?.skillInstructions).toContain("# Network and information security");
     expect(received?.venueInstructions).toContain("# Network and information security");
     expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toContain(selectedText);
@@ -428,7 +466,7 @@ describe("workspace API", () => {
         return {
           files: [
             { path: input.mainDocument, content: `\\documentclass{article}\n\\begin{document}\n${includes}\n\\end{document}\n`, rationale: "Wire the confirmed sections." },
-            ...outline.map((section) => ({ path: section.path, content: `% ${section.title}\n\\section{${section.title}}\nTODO: ${section.purpose}\n`, rationale: section.purpose }))
+            ...outline.map((section) => ({ path: section.path, content: `% ${section.title}\n\\section{${section.title}}\nThis section develops ${section.purpose.toLowerCase()} It connects the stated research question to the proposed private telemetry protocol while preserving the evidence limits supplied in the research brief.\n`, rationale: section.purpose }))
           ]
         };
       }
@@ -457,8 +495,7 @@ describe("workspace API", () => {
     });
     expect(generatedResponse.status).toBe(201);
     const generated = await generatedResponse.json() as ReviseResponse & { changeSet: ChangeSet };
-    expect(generated.changeSet.changes).toHaveLength(7);
-    expect(generated.changeSet.changes.some((change) => change.path === "references.bib" && change.operation === "create")).toBe(true);
+    expect(generated.changeSet.changes).toHaveLength(6);
     expect((await request(`/api/projects/${project.id}/file?path=${encodeURIComponent(outline[0]!.path)}`)).status).toBe(404);
 
     const accepted = await request(`/api/projects/${project.id}/change-sets/${generated.changeSet.id}/accept`, { method: "POST" });
@@ -699,8 +736,8 @@ describe("workspace API", () => {
         visibleGenerationDocuments.push(...input.documents.map((document) => document.content));
         const generated: Record<string, DraftGeneratedFile> = {
           "main.tex": { path: "main.tex", content: "\\documentclass{article}\\begin{document}\\input{sections/introduction}\\end{document}", rationale: "Sets up the paper." },
-          "sections/introduction.tex": { path: "sections/introduction.tex", content: "\\section{Introduction}\nTODO: Add evidence.", rationale: "Creates an editable outline section." },
-          "references.bib": { path: "references.bib", content: "% Add verified references.", rationale: "Creates the bibliography placeholder." }
+          "sections/introduction.tex": { path: "sections/introduction.tex", content: "\\section{Introduction}\nThis paper studies robust authentication under the bounded assumptions supplied in the research brief.", rationale: "Creates an editable introduction section." },
+          "references.bib": { path: "references.bib", content: "% Bibliography intentionally contains no unverified entries.", rationale: "Creates the bibliography file without invented citations." }
         };
         return { files: [generated[target]!] };
       }
@@ -839,6 +876,21 @@ describe("workspace API", () => {
     const generated = await request(`/api/projects/${project.id}/agent-tasks/${plan.id}/confirm`, { method: "POST" });
     expect(generated.status).toBe(502);
     expect(await generated.json()).toMatchObject({ error: { code: "agent_files_invalid" } });
+  });
+
+  test("rejects placeholder content generated by the /draft command", async () => {
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async planAgentTask() { return { steps: ["Draft the paper"], affectedFiles: ["main.tex"], risks: [], validation: ["Compile"] }; },
+      async generateAgentTask(input) { return { files: [{ path: input.targetPath, content: "\\section{Introduction}\nTODO: Add evidence.", rationale: "Drafts the paper." }] }; }
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "No placeholder drafts" }) })).json() as PaperProject;
+    const planned = await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ objective: "/draft Write a complete paper", scope: { type: "project" } }) });
+    const plan = ((await planned.json()) as { plan: { id: string } }).plan;
+    const generated = await request(`/api/projects/${project.id}/agent-tasks/${plan.id}/confirm`, { method: "POST" });
+    expect(generated.status).toBe(502);
+    expect(await generated.json()).toMatchObject({ error: { code: "agent_draft_placeholder" } });
   });
 
   test("restores Review and IssueResolution state after a server restart", async () => {

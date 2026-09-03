@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type CompileRecord, type DraftPlan, type GithubSyncRun, type IssueResolution, type PaperMemory, type PaperProject, type ReviewReport, type ReviewSnapshot, type UploadSession, type ResearchWork, type ProjectResearchWork, type ResearchIdentifier, type MetadataObservation, type SourceEvidence, type PaperClaim, type ClaimEvidenceLink, type ResearchRun, type ClaimRelation, type ProjectShare, type ShareComment } from "@fastwrite/shared";
+import type { HarnessRun, HarnessSession, McpAuditRecord } from "@fastwrite/harness-protocol";
 
 export interface FileVersionRecord {
   version: number;
@@ -13,6 +14,9 @@ export interface DatabaseState {
   uploadSessions: UploadSession[];
   fileVersions: Record<string, Record<string, FileVersionRecord>>;
   agentRuns: AgentRun[];
+  harnessRuns: HarnessRun[];
+  harnessSessions: HarnessSession[];
+  mcpAudits: McpAuditRecord[];
   changeSets: ChangeSet[];
   draftPlans: DraftPlan[];
   reviewSnapshots: ReviewSnapshot[];
@@ -35,8 +39,8 @@ export interface DatabaseState {
   shareComments: ShareComment[];
 }
 
-export const CURRENT_SCHEMA_VERSION = 2;
-const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], claimRelations: [], projectShares: [], shareComments: [] };
+export const CURRENT_SCHEMA_VERSION = 3;
+const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], claimRelations: [], projectShares: [], shareComments: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
@@ -58,6 +62,9 @@ export class JsonDatabase {
         uploadSessions: parsed.uploadSessions ?? [],
         fileVersions: parsed.fileVersions ?? {},
         agentRuns: parsed.agentRuns ?? [],
+        harnessRuns: parsed.harnessRuns ?? [],
+        harnessSessions: parsed.harnessSessions ?? [],
+        mcpAudits: parsed.mcpAudits ?? [],
         changeSets: parsed.changeSets ?? [],
         draftPlans: parsed.draftPlans ?? [],
         reviewSnapshots: parsed.reviewSnapshots ?? [],
@@ -94,6 +101,10 @@ export class JsonDatabase {
       };
       for (const project of this.state.projects) normalizeSkill(project);
       for (const run of this.state.agentRuns) normalizeSkill(run);
+      for (const run of this.state.harnessRuns) {
+        if (!Array.isArray(run.events)) { run.events = []; migrated = true; }
+        if (!Array.isArray(run.approvals)) { run.approvals = []; migrated = true; }
+      }
       for (const snapshot of this.state.reviewSnapshots) normalizeSkill(snapshot);
       for (const resolution of this.state.issueResolutions) normalizeSkill(resolution);
       if (migrated || originalSchemaVersion !== CURRENT_SCHEMA_VERSION) await this.flush();

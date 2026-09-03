@@ -76,13 +76,29 @@ function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestI
 }
 
 export const api = {
+  harness: {
+    sessions: (signal?: AbortSignal) => request<Array<{ harness: string; sessionId: string; cwd: string; title?: string; createdAt: string; updatedAt: string }>>("/api/harness-sessions", signal ? { signal } : undefined),
+    createSession: (kind: string, body: { cwd: string; title?: string }) => request<{ harness: string; sessionId: string; cwd: string }>(`/api/harnesses/${encodeURIComponent(kind)}/sessions`, jsonInit("POST", body)),
+    resumeSession: (kind: string, sessionId: string, cwd: string) => request<{ harness: string; sessionId: string; cwd: string }>(`/api/harnesses/${encodeURIComponent(kind)}/sessions/${encodeURIComponent(sessionId)}/resume`, jsonInit("POST", { cwd })),
+    sendMessage: (kind: string, sessionId: string, body: { cwd: string; content: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }, signal?: AbortSignal) => request<{ sessionId: string; events: unknown[] }>(`/api/harnesses/${encodeURIComponent(kind)}/sessions/${encodeURIComponent(sessionId)}/messages`, jsonInit("POST", body, signal)),
+    list: (signal?: AbortSignal) => request<Array<{ status: { kind: string; state: string; message?: string }; capabilities: Record<string, boolean> }>>("/api/harnesses", signal ? { signal } : undefined),
+    runs: (signal?: AbortSignal) => request<Array<{ id: string; status: string; session: { harness: string; sessionId: string; cwd: string }; events: unknown[]; createdAt: string; updatedAt: string }>>("/api/harness-runs", signal ? { signal } : undefined),
+    createRun: (body: { kind: "claude" | "codex" | "legacy"; sessionId: string; cwd: string; content: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }, signal?: AbortSignal) => request<{ events: unknown[] }>("/api/harness-runs", jsonInit("POST", body, signal)),
+    getRun: (runId: string, signal?: AbortSignal) => request<{ id: string; status: string; events: unknown[] }>(`/api/harness-runs/${encodeURIComponent(runId)}`, signal ? { signal } : undefined),
+    events: (runId: string, since = 0, limit = 2000, signal?: AbortSignal) => request<unknown[]>(`/api/harness-runs/${encodeURIComponent(runId)}/events?since=${since}&limit=${limit}`, signal ? { signal } : undefined),
+    mcp: (signal?: AbortSignal) => request<Array<{ id: string; name: string; version: string; enabled: boolean; tools: Array<{ name: string; description: string }> }>>("/api/mcp", signal ? { signal } : undefined),
+    mcpAudit: (projectId?: string, signal?: AbortSignal) => request<Array<{ id: string; projectId: string; tool: string; status: string; durationMs: number; createdAt: string }>>(`/api/mcp/audit${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`, signal ? { signal } : undefined),
+    workflowSkills: (signal?: AbortSignal) => request<Array<{ id: string; version: string }>>("/api/skills/workflows", signal ? { signal } : undefined)
+    ,approvals: (runId: string, signal?: AbortSignal) => request<Array<{ id: string; status: string; reason: string }>>(`/api/harness-runs/${encodeURIComponent(runId)}/approvals`, signal ? { signal } : undefined),
+    decideApproval: (approvalId: string, decision: "approved" | "denied") => request<{ id: string; status: string }>(`/api/harness-approvals/${encodeURIComponent(approvalId)}`, jsonInit("POST", { decision }))
+  },
   shared: {
     get: (token: string) => request<{ project: { id: string; name: string; mainDocument: string; version: number }; permission: "read" | "comment"; tree: WorkspaceTreeNode[]; comments: Array<{ id: string; path: string; line?: number; author: string; body: string; status: "open" | "resolved"; createdAt: string }> }>(`/api/shared/${encodeURIComponent(token)}`),
     file: (token: string, path: string) => request<{ path: string; content: string; version: number }>(`/api/shared/${encodeURIComponent(token)}/file?path=${encodeURIComponent(path)}`),
     comment: (token: string, body: { path: string; line?: number; author: string; body: string }) => request<{ id: string }>(`/api/shared/${encodeURIComponent(token)}/comments`, jsonInit("POST", body))
   },
   agentSettings: {
-    get: (signal?: AbortSignal) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/agent-settings", signal ? { signal } : undefined),
+    get: (signal?: AbortSignal) => request<{ configured: boolean; harness?: "legacy" | "claude" | "codex"; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/agent-settings", signal ? { signal } : undefined),
     save: (body: { apiKey: string; baseURL?: string; model?: string; wireAPI: AgentWireApi }) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/agent-settings", jsonInit("PUT", body))
   },
   venues: {

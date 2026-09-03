@@ -10,5 +10,7 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
+    ,"baseUrl": "."
+    ,"paths": { "@fastwrite/harness-core": ["packages/harness-core/src/index.ts"], "@fastwrite/harness-protocol": ["packages/harness-protocol/src/index.ts"], "@fastwrite/harness-codex": ["packages/harness-codex/src/index.ts"], "@fastwrite/harness-claude": ["packages/harness-claude/src/index.ts"] }
   }
 }

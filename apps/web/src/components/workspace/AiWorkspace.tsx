@@ -14,6 +14,7 @@ import { compileRepairObjective, compileRepairPath, type CompileRepairRequest } 
 interface AiWorkspaceProps {
   project: PaperProject;
   selection: TextSelection | null;
+  paragraphSelection: TextSelection | null;
   sectionSelection: TextSelection | null;
   height: number;
   fullscreen: boolean;
@@ -37,13 +38,17 @@ const SHORTCUTS: ReadonlyArray<{ id: ReviseCommandId; label: string }> = [
   { id: "expand-argument", label: "Expand argument" },
   { id: "reorganize", label: "Reorganize" },
   { id: "grammar", label: "Grammar" },
-  { id: "citation-suggestion", label: "Citation suggestion" }
+  { id: "citation-suggestion", label: "Citation needs" },
+  { id: "clarify-contribution", label: "Clarify contribution" },
+  { id: "strengthen-transition", label: "Strengthen transition" },
+  { id: "terminology-consistency", label: "Terminology" },
+  { id: "limitations", label: "Limitations" }
 ];
 
 type PanelState = "idle" | "running" | "applying" | "accepted" | "error";
 interface ChatMessage { id: string; role: "user" | "assistant"; content: string; rationale?: string }
 
-export function AiWorkspace({ project, selection, sectionSelection, height, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onWorkspaceChanged, onPrepareLocalRevision, compileState, compileRepairRequest, onRequestCompile }: AiWorkspaceProps) {
+export function AiWorkspace({ project, selection, paragraphSelection, sectionSelection, height, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onWorkspaceChanged, onPrepareLocalRevision, compileState, compileRepairRequest, onRequestCompile }: AiWorkspaceProps) {
   const [instruction, setInstruction] = useState("");
   const [state, setState] = useState<PanelState>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -53,6 +58,8 @@ export function AiWorkspace({ project, selection, sectionSelection, height, full
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [researchOpen, setResearchOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"revise" | "agent">("revise");
+  const [harnesses, setHarnesses] = useState<Array<{ status: { kind: string; state: string; version?: string; message?: string }; capabilities: Record<string, boolean> }>>([]);
+  const [selectedHarness, setSelectedHarness] = useState<"codex" | "claude">(() => localStorage.getItem("fastwrite.selected-harness") === "claude" ? "claude" : "codex");
   const [agentSeed, setAgentSeed] = useState<AgentTaskSeed>({});
   const [editingProposal, setEditingProposal] = useState(false);
   const [editedAfter, setEditedAfter] = useState("");
@@ -69,6 +76,7 @@ export function AiWorkspace({ project, selection, sectionSelection, height, full
   const appliedCompileRepairRef = useRef<number | null>(null);
 
   useEffect(() => () => { requestRef.current?.abort(); resizeCleanupRef.current?.(); }, []);
+  useEffect(() => { const controller = new AbortController(); void api.harness.list(controller.signal).then(setHarnesses).catch(() => setHarnesses([])); return () => controller.abort(); }, []);
   useEffect(() => {
     if (!compileRepairRequest || appliedCompileRepairRef.current === compileRepairRequest.id) return;
     appliedCompileRepairRef.current = compileRepairRequest.id;
@@ -254,7 +262,7 @@ export function AiWorkspace({ project, selection, sectionSelection, height, full
   return (<>
     <section className={`ai-workspace${activeTab === "agent" ? " ai-workspace--agent" : ""}${fullscreen ? " ai-workspace--fullscreen" : ""}`} style={{ "--ai-workspace-height": `${height}px` } as React.CSSProperties} aria-label="AI writing workspace">
       <header className="ai-workspace__header">
-        <nav className="ai-workspace__tabs" aria-label="AI writing mode"><button className={activeTab === "revise" ? "is-active" : ""} onClick={() => setActiveTab("revise")}><Sparkles /> Revise</button><button className={activeTab === "agent" ? "is-active" : ""} onClick={() => { setAgentSeed(selection?.path ? { path: selection.path } : {}); setActiveTab("agent"); }}><Workflow /> Agent</button></nav>
+        <nav className="ai-workspace__tabs" aria-label="AI writing mode"><button className={activeTab === "revise" ? "is-active" : ""} onClick={() => setActiveTab("revise")}><Sparkles /> Revise</button><button className={activeTab === "agent" ? "is-active" : ""} onClick={() => { setAgentSeed(selection?.path ? { path: selection.path } : {}); setActiveTab("agent"); }}><Workflow /> Agent</button><div className="ai-workspace__harness-status" aria-label="Harness status">{harnesses.filter((item) => item.status.kind === "codex" || item.status.kind === "claude").map((item) => <button type="button" key={item.status.kind} className={`harness-chip harness-chip--${item.status.state}${selectedHarness === item.status.kind ? " is-selected" : ""}`} title={item.status.message ?? item.status.version} onClick={() => { const kind = item.status.kind as "codex" | "claude"; setSelectedHarness(kind); localStorage.setItem("fastwrite.selected-harness", kind); }} aria-pressed={selectedHarness === item.status.kind}><i />{item.status.kind === "codex" ? "Codex" : "Claude"}<em>{selectedHarness === item.status.kind ? "Using" : item.status.state === "ready" ? "Ready" : "Unavailable"}</em></button>)}</div></nav>
         <div className="ai-workspace__tools">
           <button className="ai-header-action" onClick={() => setMemoryOpen(true)}><Database /> Memory</button>
           <button className="ai-header-action" onClick={() => setResearchOpen(true)}><Search /> Research</button>
@@ -268,7 +276,7 @@ export function AiWorkspace({ project, selection, sectionSelection, height, full
       <div hidden={activeTab !== "revise"} className="revise-chat">
         {selection ? <aside className="revise-context-strip"><span>{selection.path} · lines {selection.startLine}–{selection.endLine}</span><p title={selection.text}>{selection.text}</p><button type="button" title="Clear selected context" aria-label="Clear selected context" onClick={onClearSelection}><X /></button></aside> : null}
         <div ref={messagesRef} className="revise-chat__messages" aria-live="polite">
-          {!selection ? <div className="revise-chat__empty"><Sparkles /><strong>Select text in the editor</strong><span>Select a sentence or paragraph, or use the current section. The selection stays active while you chat.</span>{sectionSelection ? <Button size="small" variant="secondary" onClick={() => onUseSelection(sectionSelection)}>Use current section</Button> : null}</div> : null}
+          {!selection ? <div className="revise-chat__empty"><Sparkles /><strong>Select text in the editor</strong><span>Select a sentence, use the paragraph at the cursor, or revise the current section. The selection stays active while you chat.</span>{paragraphSelection ? <Button size="small" variant="primary" onClick={() => onUseSelection(paragraphSelection)}>Use current paragraph</Button> : null}{sectionSelection ? <Button size="small" variant="secondary" onClick={() => onUseSelection(sectionSelection)}>Use current section</Button> : null}</div> : null}
           {messages.map((message, index) => <article className={`revise-message revise-message--${message.role}`} key={message.id}>
             <span>{message.role === "assistant" ? <><Bot /> {project.skill.name}</> : "You"}</span>
             {message.role === "assistant" && index === messages.length - 1 && changeSet ? <>
@@ -288,7 +296,7 @@ export function AiWorkspace({ project, selection, sectionSelection, height, full
           <small>Each reply refines the current candidate. The file changes only after Accept.</small>
         </form>
       </div>
-      <div hidden={activeTab !== "agent"} className="agent-workspace-slot"><AgentTaskWorkspace open={activeTab === "agent"} project={project} seed={agentSeed} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onAccepted={onFileChanged} onNavigate={onNavigate} /></div>
+      <div hidden={activeTab !== "agent"} className="agent-workspace-slot"><AgentTaskWorkspace open={activeTab === "agent"} project={project} seed={{ ...agentSeed, harness: selectedHarness }} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onAccepted={onFileChanged} onNavigate={onNavigate} /></div>
       {fullscreen ? <div className="ai-workspace__width-handle" role="separator" aria-label="Resize maximized AI workspace" aria-orientation="vertical" aria-valuemin={Math.min(560, window.innerWidth)} aria-valuemax={window.innerWidth} aria-valuenow={Math.min(fullscreenWidth, window.innerWidth)} tabIndex={0} onPointerDown={startWidthResize} onKeyDown={(event) => {
         if (event.key === "ArrowLeft") { event.preventDefault(); updateFullscreenWidth(fullscreenWidth - 40); }
         else if (event.key === "ArrowRight") { event.preventDefault(); updateFullscreenWidth(fullscreenWidth + 40); }

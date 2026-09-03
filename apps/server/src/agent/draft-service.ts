@@ -4,6 +4,7 @@ import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
 import type { WorkspaceService } from "../workspace/workspace-service";
 import type { AgentProvider, DraftGeneratedFile } from "./provider";
+import type { AgentGateway } from "./agent-gateway";
 import type { SkillRegistry } from "./skill-registry";
 import { createFileChange, replaceFileChange } from "./change-set";
 import { isAgentCancellation, runAgentOperation } from "./agent-operation";
@@ -15,15 +16,18 @@ export class DraftService {
     private readonly database: JsonDatabase,
     private readonly workspaces: WorkspaceService,
     private readonly skills: SkillRegistry,
-    private readonly provider?: AgentProvider
+    private readonly provider?: AgentProvider | AgentGateway
   ) {}
 
+  private get agent(): AgentProvider | undefined { return this.provider && "provider" in this.provider ? this.provider.provider : this.provider; }
+
   async plan(projectId: string, request: DraftRequest, requestSignal?: AbortSignal): Promise<DraftPlanResponse> {
-    if (!this.provider?.planDraft) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable Draft Agent");
+    if (!this.agent?.planDraft) throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable Draft Agent");
     this.validateRequest(request);
     const normalizedRequest = this.normalizeRequest(request);
     const project = this.workspaces.getProject(projectId);
     const loaded = await this.skills.load(project.skill, project.publicationTarget);
+    const workflowInstructions = await this.skills.loadWorkflow("draft");
     const createdAt = now();
     const run: AgentRun = {
       id: `run_${crypto.randomUUID()}`,
@@ -43,8 +47,8 @@ export class DraftService {
     };
     await this.database.mutate((state) => state.agentRuns.push(run));
     try {
-      const input = { request: normalizedRequest, skill: project.skill, skillInstructions: loaded.instructions, venueInstructions: loaded.venueInstructions };
-      const result = await runAgentOperation<{ outline: DraftOutlineSection[] }>((signal) => this.provider!.planDraft!(input, signal), { signal: requestSignal, label: "Draft planning" });
+      const input = { request: normalizedRequest, skill: project.skill, skillInstructions: `${workflowInstructions}\n\n${loaded.instructions}`, venueInstructions: loaded.venueInstructions };
+      const result = await runAgentOperation<{ outline: DraftOutlineSection[] }>((signal) => this.agent!.planDraft!(input, signal), { signal: requestSignal, label: "Draft planning" });
       const outline = this.validateOutline(result.outline, project.mainDocument);
       const plan: DraftPlan = {
         id: `draft_${crypto.randomUUID()}`,
@@ -72,7 +76,7 @@ export class DraftService {
   }
 
   async confirm(projectId: string, planId: string, outline: DraftOutlineSection[], requestSignal?: AbortSignal): Promise<{ run: AgentRun; plan: DraftPlan; changeSet: ChangeSet }> {
-    if (!this.provider?.generateDraft) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable Draft Agent");
+    if (!this.agent?.generateDraft) throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable Draft Agent");
     const plan = this.getPlan(projectId, planId);
     if (plan.status !== "proposed") throw new ApiError(409, "draft_not_proposed", "This draft outline is no longer awaiting confirmation");
     const project = this.workspaces.getProject(projectId);
@@ -80,6 +84,7 @@ export class DraftService {
     const plannedRun = this.database.snapshot().agentRuns.find((run) => run.id === plan.agentRunId);
     const plannedSkill = plannedRun?.skill ?? project.skill;
     const loaded = await this.skills.load(plannedSkill, plannedRun?.publicationTarget);
+    const workflowInstructions = await this.skills.loadWorkflow("draft");
     await this.database.mutate((state) => {
       const storedPlan = state.draftPlans.find((item) => item.id === planId)!;
       storedPlan.status = "generating";
@@ -96,14 +101,11 @@ export class DraftService {
         outline: checkedOutline,
         mainDocument: project.mainDocument,
         skill: plannedSkill,
-        skillInstructions: loaded.instructions,
+        skillInstructions: `${workflowInstructions}\n\n${loaded.instructions}`,
         venueInstructions: loaded.venueInstructions
       };
-      const result = await runAgentOperation<{ files: DraftGeneratedFile[] }>((signal) => this.provider!.generateDraft!(input, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: "Draft generation" });
+      const result = await runAgentOperation<{ files: DraftGeneratedFile[] }>((signal) => this.agent!.generateDraft!(input, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: "Draft generation" });
       const files = this.validateFiles(result.files, project.mainDocument, checkedOutline);
-      if (!files.some((file) => file.path.toLowerCase().endsWith(".bib")) && !await this.workspaces.fileExists(projectId, "references.bib")) {
-        files.push({ path: "references.bib", content: "% Add verified BibTeX entries here. Do not invent citations.\n", rationale: "Create an explicit placeholder for verified references." });
-      }
       const changes: TextChange[] = [];
       for (const file of files) {
         if (await this.workspaces.fileExists(projectId, file.path)) {
@@ -212,6 +214,10 @@ export class DraftService {
       throw new ApiError(502, "draft_files_invalid", "Draft Agent returned duplicate, binary, or empty files");
     }
     for (const path of required) if (!normalized.some((file) => file.path === path)) throw new ApiError(502, "draft_files_incomplete", `Draft Agent did not return '${path}'`);
+    for (const section of outline) {
+      const file = normalized.find((candidate) => candidate.path === section.path)!;
+      if (!hasSubstantiveDraftProse(file.content)) throw new ApiError(502, "draft_placeholder_only", `Draft Agent returned placeholder-only content for '${section.path}'. Add more concrete evidence to the brief or retry generation.`);
+    }
     return normalized;
   }
 
@@ -226,4 +232,18 @@ export class DraftService {
       }
     });
   }
+}
+
+function hasSubstantiveDraftProse(content: string): boolean {
+  const prose = content
+    .replace(/%.*$/gm, " ")
+    .replace(/^.*\b(?:TODO|TBD|FIXME|PLACEHOLDER)\b.*$/gimu, " ")
+    .replace(/\[(?:insert|add|write|fill|cite)[^\]]*\]/gimu, " ")
+    .replace(/\\(?:section|subsection|subsubsection|paragraph)\*?\{[^}]*\}/g, " ")
+    .replace(/\\(?:label|input|include|bibliography|bibliographystyle)\{[^}]*\}/g, " ")
+    .replace(/\\[A-Za-z@]+\*?(?:\[[^\]]*\])?/g, " ")
+    .replace(/[{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return prose.length >= 80 && prose.split(/\s+/u).length >= 10;
 }

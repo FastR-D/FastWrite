@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentProviderConfigurations } from "./config";
+import { agentProviderConfigurations, configuredHarness } from "./config";
 
 describe("agentProviderConfigurations", () => {
   test("uses global settings unless a workflow overrides an individual field", () => {
@@ -21,5 +21,14 @@ describe("agentProviderConfigurations", () => {
     const providers = agentProviderConfigurations({ FASTWRITE_MEMORY_OPENAI_API_KEY: "memory-key", FASTWRITE_MEMORY_OPENAI_BASE_URL: "https://memory.example/v1", FASTWRITE_MEMORY_OPENAI_MODEL: "memory-model", FASTWRITE_MEMORY_OPENAI_WIRE_API: "chat-completions" });
     expect(providers.memory).toEqual({ apiKey: "memory-key", baseURL: "https://memory.example/v1", model: "memory-model", wireAPI: "chat" });
     expect(providers.agent.apiKey).toBeUndefined();
+  });
+});
+
+describe("configuredHarness", () => {
+  test("normalizes supported modes and falls back safely", () => {
+    expect(configuredHarness(" CODEX ")).toBe("codex");
+    expect(configuredHarness("claude")).toBe("claude");
+    expect(configuredHarness("unsupported")).toBe("legacy");
+    expect(configuredHarness()).toBe("legacy");
   });
 });

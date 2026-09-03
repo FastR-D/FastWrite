@@ -4,6 +4,7 @@ import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
 import type { WorkspaceService } from "../workspace/workspace-service";
 import type { AgentProvider, AgentTaskInput, AgentTaskIssue, AgentTaskPlanOutput, DraftGeneratedFile } from "./provider";
+import type { AgentGateway } from "./agent-gateway";
 import type { MemoryService } from "./memory-service";
 import type { SkillRegistry } from "./skill-registry";
 import { createFileChange, replaceFileChange } from "./change-set";
@@ -37,10 +38,12 @@ function scopeTerms(content: string): string[] { return [...new Set((content.toL
 function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }
 
 export class AgentTaskService {
-  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider, private readonly memories?: MemoryService, private readonly reviewProvider?: AgentProvider, private readonly compliance?: ComplianceService) {}
+  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider | AgentGateway, private readonly memories?: MemoryService, private readonly reviewProvider?: AgentProvider | AgentGateway, private readonly compliance?: ComplianceService) {}
+  private unwrap(provider?: AgentProvider | AgentGateway): AgentProvider | undefined { return provider && "provider" in provider ? provider.provider : provider; }
 
   async plan(projectId: string, request: AgentTaskRequest, requestSignal?: AbortSignal): Promise<AgentTaskPlanResponse & { resolution?: IssueResolution }> {
-    if (!this.provider?.planAgentTask) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable Agent tasks");
+    const agent = this.unwrap(this.provider);
+    if (!agent?.planAgentTask) throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable Agent tasks");
     if (!request.objective?.trim()) throw new ApiError(400, "agent_objective_missing", "Describe the revision objective");
     if (request.scope.type !== "project" && !request.scope.path) throw new ApiError(400, "agent_scope_missing", "File and section scopes require a path");
     const project = this.workspaces.getProject(projectId);
@@ -50,13 +53,14 @@ export class AgentTaskService {
     const commandIntent = parseIntentCommand(request.objective);
     const objective = stripIntentCommand(request.objective);
     if (!objective) throw new ApiError(400, "agent_objective_missing", "Describe the drafting or revision objective after the command");
-    const intent = request.intent ?? commandIntent ?? classifyAgentIntent(objective, visibleDocuments);
-    const normalizedRequest: AgentTaskRequest = { ...request, objective, intent };
     const issues = this.issues(projectId, request.issueIds ?? []);
-    const skill = await this.skills.load(project.skill, project.publicationTarget);
+    const intent = request.intent ?? commandIntent ?? (issues.length ? "revise" : classifyAgentIntent(objective, visibleDocuments));
+    const normalizedRequest: AgentTaskRequest = { ...request, objective, intent };
+    const workflow = /compile\s+repair|latex\s+error/i.test(objective) ? "compile-repair" : "revise";
+    const [skill, workflowInstructions] = await Promise.all([this.skills.load(project.skill, project.publicationTarget), this.skills.loadWorkflow(workflow)]);
     const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };
     const complianceFindings = project.publicationTarget && this.compliance ? (await this.compliance.check(projectId, { verifyCitationsOnline: false })).findings : [];
-    const input = this.input(normalizedRequest, visibleDocuments, issues, project.skill, withMemory(skill.instructions, memory.content), skill.venueInstructions, complianceFindings);
+    const input = this.input(normalizedRequest, visibleDocuments, issues, project.skill, withMemory(`${workflowInstructions}\n\n${skill.instructions}`, memory.content), skill.venueInstructions, complianceFindings);
     const createdAt = now();
     const searchMatches = searchDocumentPaths(visibleDocuments, objective);
     const run: AgentRun = { id: `run_${crypto.randomUUID()}`, projectId, type: "agent", status: "running", objective, skill: structuredClone(project.skill), ...(project.publicationTarget ? { publicationTarget: structuredClone(project.publicationTarget) } : {}), createdAt, updatedAt: createdAt, auditTrail: [
@@ -65,7 +69,7 @@ export class AgentTaskService {
     ], ...(memory.version ? { memoryVersion: memory.version } : {}) };
     await this.database.mutate((state) => state.agentRuns.push(run));
     try {
-      const rawOutput: unknown = await runAgentOperation((signal) => this.provider!.planAgentTask!(input, signal), { signal: requestSignal, label: "Agent planning" });
+      const rawOutput: unknown = await runAgentOperation((signal) => agent.planAgentTask!(input, signal), { signal: requestSignal, label: "Agent planning" });
       const available = new Set(documents.map((document) => document.path));
       const permitsNewFiles = intent === "draft" || intent === "continue" || isStructuralFileOrganizationObjective(objective);
       const allowedPath = (path: string) => (request.scope.type !== "project" || isProjectWritingSource(path)) && (available.has(path) || (permitsNewFiles && request.scope.type === "project" && isNewDraftPath(path)));
@@ -102,7 +106,8 @@ export class AgentTaskService {
   }
 
   async confirm(projectId: string, planId: string, requestSignal?: AbortSignal): Promise<AgentTaskPlanResponse & { changeSet: ChangeSet; resolution?: IssueResolution }> {
-    if (!this.provider?.generateAgentTask) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable Agent tasks");
+    const agent = this.unwrap(this.provider);
+    if (!agent?.generateAgentTask) throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable Agent tasks");
     const plan = this.getPlan(projectId, planId);
     if (plan.status !== "proposed") throw new ApiError(409, "agent_plan_not_proposed", "This plan is no longer awaiting confirmation");
     if (plan.request.scope.type === "project") plan.affectedFiles = plan.affectedFiles.filter(isProjectWritingSource);
@@ -118,18 +123,19 @@ export class AgentTaskService {
     const plannedRun = this.database.snapshot().agentRuns.find((run) => run.id === plan.agentRunId);
     const plannedSkill = plannedRun?.skill ?? project.skill;
     const plannedTarget = plannedRun?.publicationTarget;
-    const skill = await this.skills.load(plannedSkill, plannedTarget);
+    const workflow = /compile\s+repair|latex\s+error/i.test(plan.request.objective) ? "compile-repair" : "revise";
+    const [skill, workflowInstructions] = await Promise.all([this.skills.load(plannedSkill, plannedTarget), this.skills.loadWorkflow(workflow)]);
     const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };
     const visibleDocuments = agentVisibleDocuments(documents);
-    const input = this.input(plan.request, visibleDocuments, issues, plannedSkill, withMemory(skill.instructions, memory.content), skill.venueInstructions);
-    const generationConcurrency = this.provider.fileGenerationConcurrency?.() ?? plan.affectedFiles.length;
+    const input = this.input(plan.request, visibleDocuments, issues, plannedSkill, withMemory(`${workflowInstructions}\n\n${skill.instructions}`, memory.content), skill.venueInstructions);
+    const generationConcurrency = agent.fileGenerationConcurrency?.() ?? plan.affectedFiles.length;
     const generationMode = generationConcurrency <= 1 ? "sequentially" : "in parallel";
     await this.database.mutate((state) => { const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "generating"; stored.affectedFiles = [...plan.affectedFiles]; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "running"; delete run.error; run.steps = plan.affectedFiles.map((path, index) => ({ id: `generate-file-${index + 1}`, label: executionStepLabel(path), status: "running" })); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "execution-started", summary: `Started checking scoped context and updating ${plan.affectedFiles.length} planned files ${generationMode}`, paths: plan.affectedFiles, createdAt: now() }); for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "in_revision"); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.status = "in-revision"; resolution.updatedAt = now(); } });
     try {
       const generated = await mapWithConcurrency(plan.affectedFiles, generationConcurrency, async (path, index) => {
         const scopedDocuments = generationDocuments(visibleDocuments, path, project.mainDocument, issues, plan.request.objective);
-        const output = await runAgentOperation<{ files?: DraftGeneratedFile[] }>((signal) => this.provider!.generateAgentTask!({ ...input, documents: scopedDocuments, steps: plan.steps, affectedFiles: [path], targetPath: path, risks: plan.risks, validation: plan.validation, sectionBudget: plan.sectionBudget ?? [], venueChecks: plan.venueChecks ?? [], evidenceDependencies: plan.evidenceDependencies ?? [], missingEvidence: plan.missingEvidence ?? [] }, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: `Agent execution for ${path}` });
-        const files = this.validateGeneratedFiles(Array.isArray(output?.files) ? output.files : [], path);
+        const output = await runAgentOperation<{ files?: DraftGeneratedFile[] }>((signal) => agent.generateAgentTask!({ ...input, documents: scopedDocuments, steps: plan.steps, affectedFiles: [path], targetPath: path, risks: plan.risks, validation: plan.validation, sectionBudget: plan.sectionBudget ?? [], venueChecks: plan.venueChecks ?? [], evidenceDependencies: plan.evidenceDependencies ?? [], missingEvidence: plan.missingEvidence ?? [] }, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: `Agent execution for ${path}` });
+        const files = this.validateGeneratedFiles(Array.isArray(output?.files) ? output.files : [], path, plan.intent);
         await this.database.mutate((state) => {
           const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!;
           const current = run.steps?.[index];
@@ -193,7 +199,7 @@ export class AgentTaskService {
   }
 
   async rereview(projectId: string, resolutionId: string, requestSignal?: AbortSignal): Promise<IssueResolution> {
-    const provider = this.reviewProvider ?? this.provider;
+    const provider = this.unwrap(this.reviewProvider ?? this.provider);
     if (!provider?.rereviewIssues) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable targeted re-review");
     const resolution = this.database.snapshot().issueResolutions.find((item) => item.id === resolutionId && item.projectId === projectId);
     if (!resolution) throw new ApiError(404, "resolution_not_found", "Issue resolution not found");
@@ -258,7 +264,7 @@ export class AgentTaskService {
   private issues(projectId: string, ids: string[]): ReviewIssue[] { const all = this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).flatMap((report) => report.issues); const issues = ids.map((id) => all.find((issue) => issue.id === id)).filter((issue): issue is ReviewIssue => Boolean(issue)); if (issues.length !== new Set(ids).size) throw new ApiError(404, "review_issue_not_found", "One or more review issues were not found"); return issues; }
   private input(request: AgentTaskRequest, documents: Array<{ path: string; content: string; version: number }>, issues: ReviewIssue[], skill: AgentTaskInput["skill"], skillInstructions: string, venueInstructions: string, complianceFindings: ComplianceFinding[] = []): AgentTaskInput { return { objective: request.objective.trim(), intent: request.intent ?? "revise", scope: request.scope, issues: issues.map(toAgentIssue), documents, skill, skillInstructions, venueInstructions, ...(complianceFindings.length ? { complianceFindings } : {}) }; }
   private getPlan(projectId: string, id: string) { const plan = this.database.snapshot().agentTaskPlans.find((item) => item.id === id && item.projectId === projectId); if (!plan) throw new ApiError(404, "agent_plan_not_found", "Agent plan not found"); return plan; }
-  private validateGeneratedFiles(files: DraftGeneratedFile[], targetPath: string) {
+  private validateGeneratedFiles(files: DraftGeneratedFile[], targetPath: string, intent: AgentTaskIntent) {
     const normalized = files.flatMap((file) => {
       try {
         const path = normalizeWorkspacePath(file.path);
@@ -268,6 +274,9 @@ export class AgentTaskService {
       }
     });
     if (normalized.length !== 1) throw new ApiError(502, "agent_files_invalid", `Agent must return exactly one non-empty file for '${targetPath}'`);
+    if (intent === "draft" && containsDraftPlaceholder(normalized[0]!.content)) {
+      throw new ApiError(502, "agent_draft_placeholder", `Agent returned placeholder content for '${targetPath}'. /draft must generate complete prose without TODOs or template markers.`);
+    }
     return normalized;
   }
   private mutateIssue(issues: ReviewIssue[], id: string, status: ReviewIssue["status"]) { const issue = issues.find((item) => item.id === id); if (issue) { issue.status = status; issue.updatedAt = now(); } }
@@ -287,6 +296,10 @@ export class AgentTaskService {
       }
     }
   }); }
+}
+
+function containsDraftPlaceholder(content: string): boolean {
+  return /\b(?:TODO|TBD|FIXME|XXX|PLACEHOLDER|YOUR[_ ]TEXT|to be (?:completed|written|added|filled))\b|\[(?:insert|add|fill|evidence required|citation needed)[^\]]*\]|\\cite\{\s*\}/iu.test(content);
 }
 
 function toAgentIssue(issue: ReviewIssue): AgentTaskIssue { return { id: issue.id, title: issue.title, rationale: issue.rationale, suggestion: issue.suggestion, evidence: issue.evidence.filter((evidence) => evidence.path).map((evidence) => ({ path: evidence.path!, excerpt: evidence.excerpt })) }; }

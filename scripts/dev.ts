@@ -4,6 +4,7 @@ const webPort = numberEnvironment("FASTWRITE_WEB_PORT", 3002);
 const apiPort = numberEnvironment("FASTWRITE_PORT", 3003);
 const children: Bun.Subprocess[] = [];
 let shuttingDown = false;
+let shutdownPromise: Promise<never> | undefined;
 
 await Promise.all([assertPortAvailable(webPort), assertPortAvailable(apiPort)]);
 
@@ -14,7 +15,7 @@ const web = start(["bun", "run", "--filter", "@fastwrite/web", "dev"]);
 for (const child of children) void child.exited.then((code) => {
   if (shuttingDown) return;
   console.error(`A development process exited unexpectedly (status ${code}).`);
-  shutdown(code || 1);
+  void shutdown(code || 1);
 });
 
 try {
@@ -26,12 +27,12 @@ try {
   console.log(`FastWrite API: http://localhost:${apiPort}\n`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Development services did not become ready.");
-  shutdown(1);
+  await shutdown(1);
 }
 
 await new Promise<void>((resolve) => {
-  process.once("SIGINT", () => { shutdown(0); resolve(); });
-  process.once("SIGTERM", () => { shutdown(0); resolve(); });
+  process.once("SIGINT", () => { void shutdown(0); resolve(); });
+  process.once("SIGTERM", () => { void shutdown(0); resolve(); });
   // Keep Bun's event loop alive while the three watcher subprocesses run.
   setInterval(() => undefined, 60_000);
 });
@@ -64,11 +65,18 @@ async function waitFor(url: string): Promise<void> {
   throw new Error(`Timed out waiting for ${url} (${lastError}).`);
 }
 
-function shutdown(code: number): never {
-  if (shuttingDown) process.exit(code);
+function shutdown(code: number): Promise<never> {
+  if (shutdownPromise) return shutdownPromise;
   shuttingDown = true;
-  for (const child of children) child.kill();
-  process.exit(code);
+  shutdownPromise = (async () => {
+    for (const child of children) child.kill("SIGTERM");
+    await Promise.race([
+      Promise.allSettled(children.map((child) => child.exited)),
+      Bun.sleep(2_000)
+    ]);
+    process.exit(code);
+  })();
+  return shutdownPromise;
 }
 
 function numberEnvironment(name: string, fallback: number): number {

@@ -3,6 +3,7 @@ import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
 import type { WorkspaceService } from "../workspace/workspace-service";
 import type { AgentProvider, MemoryAgentOutput, MemoryHierarchyOutput } from "./provider";
+import type { AgentGateway } from "./agent-gateway";
 import type { SkillRegistry } from "./skill-registry";
 
 const MEMORY_CHUNK_BYTES = 48_000;
@@ -28,7 +29,8 @@ function summaryLocked(summary: MemoryOverview | MemorySectionSummary): boolean 
 function memoryTextPath(path: string): boolean { return path !== MEMORY_FILE && /\.(?:tex|md|bib|txt)$/i.test(path); }
 
 export class MemoryService {
-  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider) {}
+  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider | AgentGateway) {}
+  private get agent(): AgentProvider | undefined { return this.provider && "provider" in this.provider ? this.provider.provider : this.provider; }
 
   latest(projectId: string): PaperMemory | null {
     const stored = this.latestStored(projectId);
@@ -61,19 +63,19 @@ export class MemoryService {
   }
 
   async extract(projectId: string): Promise<PaperMemory> {
-    if (!this.provider?.extractMemory) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to generate Paper Memory");
+    if (!this.agent?.extractMemory) throw new ApiError(503, "agent_not_configured", "Configure a Harness to generate Paper Memory");
     const project = this.workspaces.getProject(projectId);
     const [documents, outline] = await Promise.all([this.documents(projectId), this.workspaces.outline(projectId)]);
-    const skill = await this.skills.load(project.skill, project.publicationTarget);
+    const [skill, workflowInstructions] = await Promise.all([this.skills.load(project.skill, project.publicationTarget), this.skills.loadWorkflow("memory-extract")]);
     const documentMap = new Map(documents.map((document) => [document.path, document]));
     const outputs: MemoryAgentOutput[] = [];
     for (const chunk of documentChunks(documents)) {
-      outputs.push(await this.provider.extractMemory({ documents: chunk, skill: project.skill, skillInstructions: skill.instructions, venueInstructions: skill.venueInstructions }));
+      outputs.push(await this.agent.extractMemory({ documents: chunk, skill: project.skill, skillInstructions: `${workflowInstructions}\n\n${skill.instructions}`, venueInstructions: skill.venueInstructions }));
     }
 
     const timestamp = now();
     const proposed = deduplicateItems(outputs.flatMap((output) => this.validateItems(output, documentMap, timestamp)));
-    const hierarchy = await this.hierarchy(projectId, project.skill, skill.instructions, skill.venueInstructions, outline, proposed);
+    const hierarchy = await this.hierarchy(projectId, project.skill, `${workflowInstructions}\n\n${skill.instructions}`, skill.venueInstructions, outline, proposed);
     const sectionProposals = this.sectionProposals(outline, hierarchy, proposed, timestamp);
     const overviewContent = cleanContent(hierarchy.overview, MAX_SUMMARY_CONTENT) || fallbackOverview(proposed);
     const previous = this.latest(projectId);
@@ -331,10 +333,10 @@ export class MemoryService {
   }
 
   private async polishContent(projectId: string, kind: "overview" | "section" | "fact", title: string, content: string, limit: number, signal?: AbortSignal): Promise<string> {
-    if (!this.provider?.polishMemory) throw new ApiError(503, "memory_polish_not_configured", "Configure FASTWRITE_MEMORY_* in .env to polish edited Paper Memory");
+    if (!this.agent?.polishMemory) throw new ApiError(503, "memory_polish_not_configured", "Configure a Harness to polish edited Paper Memory");
     const project = this.workspaces.getProject(projectId);
-    const skill = await this.skills.load(project.skill, project.publicationTarget);
-    const polished = await this.provider.polishMemory({ kind, title, content: cleanContent(content, limit), skill: project.skill, skillInstructions: skill.instructions, venueInstructions: skill.venueInstructions }, signal);
+    const [skill, workflowInstructions] = await Promise.all([this.skills.load(project.skill, project.publicationTarget), this.skills.loadWorkflow("memory-polish")]);
+    const polished = await this.agent.polishMemory({ kind, title, content: cleanContent(content, limit), skill: project.skill, skillInstructions: `${workflowInstructions}\n\n${skill.instructions}`, venueInstructions: skill.venueInstructions }, signal);
     const result = cleanContent(polished.content, limit);
     if (!result) throw new ApiError(502, "memory_polish_empty", "The configured Memory model returned empty content");
     return result;
@@ -367,8 +369,8 @@ export class MemoryService {
   private async hierarchy(_projectId: string, skill: PaperSkillRef, skillInstructions: string, venueInstructions: string, outline: OutlineItem[], facts: ProposedItem[]): Promise<MemoryHierarchyOutput> {
     const flatOutline = outlineItems(outline).map(({ path, title, line }) => ({ path, title, line })).slice(0, 200);
     const hierarchyFacts = facts.slice(0, MAX_HIERARCHY_FACTS).map((fact) => ({ category: fact.category, label: fact.label, content: fact.content, sources: fact.sources.map((source) => ({ path: source.path, ...(source.section ? { section: source.section } : {}) })) }));
-    if (this.provider?.summarizeMemory) {
-      return this.provider.summarizeMemory({ outline: flatOutline, facts: hierarchyFacts, skill, skillInstructions, venueInstructions });
+    if (this.agent?.summarizeMemory) {
+      return this.agent.summarizeMemory({ outline: flatOutline, facts: hierarchyFacts, skill, skillInstructions, venueInstructions });
     }
     return { overview: fallbackOverview(facts), sections: flatOutline.map((section) => ({ path: section.path, title: section.title, content: fallbackSection(section.path, facts) })) };
   }

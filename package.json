@@ -12,7 +12,7 @@
     "build": "bun run --filter '*' build",
     "package:app": "bun scripts/package-app.ts",
     "typecheck": "bun run --filter '*' typecheck",
-    "test": "bun test apps/server/src apps/web/src packages/shared/src",
+    "test": "bun test apps/server/src apps/web/src packages/shared/src packages/harness-core/src packages/harness-protocol/src packages/harness-codex/src packages/harness-claude/src",
     "writing:eval": "bun scripts/writing-eval.ts",
     "papers:eval": "bun scripts/papers-eval.ts",
     "papers:compile": "bun scripts/papers-compile.ts",

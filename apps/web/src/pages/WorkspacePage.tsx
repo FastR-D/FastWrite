@@ -35,7 +35,7 @@ import { GithubSyncDialog } from "../components/workspace/GithubSyncDialog";
 import { ComplianceDialog } from "../components/workspace/ComplianceDialog";
 import type { CompileFailureContext, CompileRepairRequest } from "../components/workspace/compileRepair";
 import { navigate } from "../lib/navigation";
-import { currentSectionSelection } from "../lib/sectionSelection";
+import { currentParagraphSelection, currentSectionSelection } from "../lib/sectionSelection";
 import { FASTWRITE_SAVE_EVENT } from "../lib/keyboard";
 import { publicationTargetAbbreviation } from "../lib/labels";
 import { ThemeToggle } from "../components/ui/ThemeToggle";
@@ -233,6 +233,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
 
   const selectedNode = useMemo(() => selectedPath ? findNode(tree, selectedPath) : null, [selectedPath, tree]);
   const sectionSelection = useMemo(() => currentSectionSelection(fileDocument, outline, cursorLocation), [cursorLocation, fileDocument, outline]);
+  const paragraphSelection = useMemo(() => currentParagraphSelection(fileDocument, cursorLocation), [cursorLocation, fileDocument]);
 
   const prepareLocalRevision = useCallback(async (issue: ReviewIssue): Promise<TextSelection | null> => {
     const evidence = issue.evidence.find((item) => !item.inferred && (item.excerpt.trim() || item.line));
@@ -342,7 +343,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             )}
           </section>
           <PanelDivider label="Resize AI workspace" orientation="horizontal" active={resizing === "ai"} value={aiHeight} min={220} max={760} onPointerDown={() => setResizing("ai")} onKeyboardChange={setAiHeight} />
-          <AiWorkspace project={project} selection={selection} sectionSelection={sectionSelection} height={aiHeight} fullscreen={aiFullscreen} onToggleFullscreen={() => setAiFullscreen((value) => !value)} onUseSelection={(nextSelection) => { setSelection(nextSelection); setTargetSelection(nextSelection); }} onClearSelection={() => { setSelection(null); setTargetSelection(null); }} onRestoreSelection={async (savedSelection) => {
+          <AiWorkspace project={project} selection={selection} paragraphSelection={paragraphSelection} sectionSelection={sectionSelection} height={aiHeight} fullscreen={aiFullscreen} onToggleFullscreen={() => setAiFullscreen((value) => !value)} onUseSelection={(nextSelection) => { setSelection(nextSelection); setTargetSelection(nextSelection); }} onClearSelection={() => { setSelection(null); setTargetSelection(null); }} onRestoreSelection={async (savedSelection) => {
             try {
               const opened = await api.projects.readFile(projectId, savedSelection.path);
               if (opened.file.version !== savedSelection.fileVersion || opened.content.slice(savedSelection.from, savedSelection.to) !== savedSelection.text) return false;

@@ -59,7 +59,13 @@ export function agentProviderConfigurations(environment: NodeJS.ProcessEnv = pro
   };
 }
 
+export function configuredHarness(value?: string): "claude" | "codex" | "legacy" {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "claude" || normalized === "codex" || normalized === "legacy" ? normalized : "legacy";
+}
+
 export const config = {
+  harness: configuredHarness(process.env.FASTWRITE_HARNESS),
   port: Number.parseInt(process.env.FASTWRITE_PORT ?? "3003", 10),
   dataDirectory: resolve(configuredDataDirectory || defaultDataDirectory),
   webDirectory: resolve(process.env.FASTWRITE_WEB_DIR || (existsSync(packagedWebDirectory) ? packagedWebDirectory : embeddedWebDirectory)),

@@ -8,6 +8,7 @@ export interface ReviseAgentInput {
   history: ReviseTurn[];
   sectionTitle?: string;
   selectionIsSectionScaffold: boolean;
+  selectionKind: "sentence" | "paragraph" | "section";
   contextBefore: string;
   contextAfter: string;
   /** Compact overview and active-section context, not the full Paper Memory. */
@@ -262,11 +263,12 @@ export class OpenAIAgentProvider implements AgentProvider {
     return this.structured<ReviseAgentOutput>(
       `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
       {
-        task: "Revise only the selected span and return its complete replacement. When selectionIsSectionScaffold is true, preserve the LaTeX section heading and draft concrete section prose from Reviewed Local Paper Context and adjacent manuscript context. Prefer supplied terminology, contributions, findings, and limitations over generic bracketed placeholders. Use an explicit plain-text TODO only when neither source contains enough evidence; never put a placeholder inside a LaTeX citation command, and never invent evidence, citations, or results.",
+        task: "Revise only the selected span and return its complete replacement. Treat selectionKind as a hard scope boundary: sentence edits must not add unrelated sentences; paragraph edits may improve the paragraph's internal claim-evidence-reasoning flow but must not draft neighboring paragraphs; section edits may reorganize only content already inside the selected section. Preserve every LaTeX command, environment, label, reference, citation key, equation, symbol, algorithm identifier, numeric value, dataset name, and defined technical term unless the instruction explicitly targets it. Do not introduce new claims, citations, measurements, baselines, causal language, novelty language, or stronger certainty. When selectionIsSectionScaffold is true, preserve the LaTeX section heading and draft concrete section prose from Reviewed Local Paper Context and adjacent manuscript context. Prefer supplied terminology, contributions, findings, and limitations over generic bracketed placeholders. Use an explicit plain-text TODO only when neither source contains enough evidence; never put a placeholder inside a LaTeX citation command, and never invent evidence, citations, or results. Return polished manuscript text, not advice, a critique, bullet-point commentary, or Markdown fences.",
         instruction: input.instruction,
         venue: input.skill.venue,
         section: input.sectionTitle ?? "unknown",
         selectionIsSectionScaffold: input.selectionIsSectionScaffold,
+        selectionKind: input.selectionKind,
         contextBefore: input.contextBefore,
         originalSelectedText: input.selection.text,
         currentCandidate: input.workingText,
@@ -314,7 +316,7 @@ export class OpenAIAgentProvider implements AgentProvider {
   async generateDraft(input: DraftAgentInput & { outline: DraftOutlineSection[]; mainDocument: string }, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }> {
     return this.structured(
       `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
-      { task: "Generate a minimal compilable LaTeX research-paper draft for the selected publication target. Use explicit TODO markers for missing evidence and never invent citations or results.", ...input.request, outline: input.outline, mainDocument: input.mainDocument },
+      { task: "Generate a compilable, substantive first LaTeX draft for the selected publication target. Turn every research question, contribution, constraint, method description, and available evidence in the user's brief into concrete academic prose. Every outlined section must contain meaningful prose, not merely a heading, outline notes, or TODO placeholders. State qualitative design rationale and limitations when supported by the brief. Never invent citations, measurements, experiments, or results. For a genuinely missing fact, add one precise TODO describing exactly what evidence must be supplied, but do not replace an entire paragraph or section with TODOs and do not use generic TODO text. The main document must include the generated section files and compile as a coherent paper.", ...input.request, outline: input.outline, mainDocument: input.mainDocument },
       "fastwrite_draft_files",
       {
         type: "object",
@@ -448,7 +450,10 @@ export class OpenAIAgentProvider implements AgentProvider {
   }
 
   async generateAgentTask(input: AgentTaskExecutionInput, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }> {
-    return this.structured(`${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`, { task: `Execute the approved ${input.intent} paper plan for targetPath. Return exactly one non-empty file whose path is exactly targetPath, containing that file's complete content. Do not return companion files; FastWrite generates each planned file separately. Satisfy the approved venue checks that apply to this file without inventing compliance evidence. When evidence is missing, use a plain-text TODO and never put placeholders such as [EVIDENCE REQUIRED] inside a LaTeX citation command. LaTeX comments are intentionally omitted from Agent context and restored by FastWrite; do not invent or act on hidden comment lines. Preserve unsupported claims and LaTeX syntax.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, targetPath: input.targetPath, plan: { steps: input.steps, affectedFiles: input.affectedFiles, risks: input.risks, validation: input.validation, sectionBudget: input.sectionBudget ?? [], venueChecks: input.venueChecks ?? [] }, documents: input.documents }, "fastwrite_agent_files", {
+    const missingEvidenceInstruction = input.intent === "draft"
+      ? "For /draft, never emit TODO, TBD, FIXME, placeholder text, empty template fields, or instructions for future writing. If evidence is missing, write only bounded, evidence-honest prose that states what is currently known and its limitations; omit unsupported details entirely."
+      : "When evidence is missing, use a plain-text TODO and never put placeholders such as [EVIDENCE REQUIRED] inside a LaTeX citation command.";
+    return this.structured(`${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`, { task: `Execute the approved ${input.intent} paper plan for targetPath. Return exactly one non-empty file whose path is exactly targetPath, containing that file's complete content. Do not return companion files; FastWrite generates each planned file separately. Satisfy the approved venue checks that apply to this file without inventing compliance evidence. ${missingEvidenceInstruction} LaTeX comments are intentionally omitted from Agent context and restored by FastWrite; do not invent or act on hidden comment lines. Preserve unsupported claims and LaTeX syntax.`, intent: input.intent, objective: input.objective, scope: input.scope, issues: input.issues, targetPath: input.targetPath, plan: { steps: input.steps, affectedFiles: input.affectedFiles, risks: input.risks, validation: input.validation, sectionBudget: input.sectionBudget ?? [], venueChecks: input.venueChecks ?? [] }, documents: input.documents }, "fastwrite_agent_files", {
       type: "object", additionalProperties: false, properties: { files: { type: "array", minItems: 1, maxItems: 1, items: { type: "object", additionalProperties: false, properties: { path: { type: "string", const: input.targetPath }, content: { type: "string", minLength: 1 }, rationale: { type: "string" } }, required: ["path", "content", "rationale"] } } }, required: ["files"]
     }, signal);
   }

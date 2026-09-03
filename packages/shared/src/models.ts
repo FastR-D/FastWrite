@@ -282,7 +282,11 @@ export type ReviseCommandId =
   | "expand-argument"
   | "reorganize"
   | "grammar"
-  | "citation-suggestion";
+  | "citation-suggestion"
+  | "clarify-contribution"
+  | "strengthen-transition"
+  | "terminology-consistency"
+  | "limitations";
 
 export interface ReviseRequest {
   selection: TextSelection;
@@ -627,6 +631,7 @@ export interface PaperMemory {
 export interface AgentTaskRequest {
   objective: string;
   scope: { type: "file" | "section" | "project"; path?: string };
+  harness?: "codex" | "claude" | "legacy";
   issueIds?: string[];
   intent?: AgentTaskIntent;
 }

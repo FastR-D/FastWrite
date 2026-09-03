@@ -10,6 +10,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastwrite/harness-core": "workspace:*",
+    "@fastwrite/harness-protocol": "workspace:*",
+    "@fastwrite/harness-codex": "workspace:*",
+    "@fastwrite/harness-claude": "workspace:*",
     "@fastwrite/shared": "workspace:*",
     "fflate": "^0.8.2",
     "openai": "^7.3.0"

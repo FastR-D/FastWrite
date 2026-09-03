@@ -9,18 +9,37 @@ export interface LoadedSkill {
   venueRules?: { version?: string; sourceUrl?: string; stages?: string[]; checks?: Array<{ id: string; category: string; pattern?: string; message?: string }> };
 }
 
+export type WorkflowSkill = "draft" | "revise" | "review" | "completion" | "memory-extract" | "memory-polish" | "compile-repair";
+
+export interface WorkflowSkillDescriptor { id: WorkflowSkill; version: string; instructions: string }
+
 export class SkillRegistry {
   constructor(private readonly skillsDirectory: string) {}
 
+  async loadWorkflow(workflow: WorkflowSkill): Promise<string> {
+    return readFile(join(this.skillsDirectory, workflow, "SKILL.md"), "utf8");
+  }
+
+  async workflowCatalog(): Promise<WorkflowSkillDescriptor[]> {
+    const workflows: WorkflowSkill[] = ["draft", "revise", "review", "completion", "memory-extract", "memory-polish", "compile-repair"];
+    return Promise.all(workflows.map(async (id) => {
+      const instructions = await this.loadWorkflow(id);
+      const version = /^version:\s*([^\s]+)\s*$/m.exec(instructions)?.[1] ?? "unversioned";
+      return { id, version, instructions };
+    }));
+  }
+
   async load(skill: PaperSkillRef, target?: PublicationTarget): Promise<LoadedSkill> {
     const directory = join(this.skillsDirectory, skill.id);
-    const [baseInstructions, specializationInstructions, instructions, profileInstructions] = await Promise.all([
+    const [baseInstructions, specializationInstructions, evidenceBoundary, latexSafety, instructions, profileInstructions] = await Promise.all([
       readFile(join(this.skillsDirectory, "_shared", "academic-writing.md"), "utf8"),
       readFile(join(this.skillsDirectory, "_shared", "venue-specialization.md"), "utf8"),
+      readFile(join(this.skillsDirectory, "_shared", "evidence-boundary.md"), "utf8"),
+      readFile(join(this.skillsDirectory, "_shared", "latex-safety.md"), "utf8"),
       readFile(join(directory, "SKILL.md"), "utf8"),
       readFile(join(directory, "references", "profile.md"), "utf8")
     ]);
-    const combinedInstructions = `${baseInstructions}\n\n${instructions}`;
+    const combinedInstructions = `${baseInstructions}\n\n${evidenceBoundary}\n\n${latexSafety}\n\n${instructions}`;
     if (!target) return { instructions: combinedInstructions, venueInstructions: profileInstructions };
     if (target.domain !== skill.id || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(target.venueId)) return { instructions: combinedInstructions, venueInstructions: profileInstructions };
     const venueInstructions = await readFile(join(directory, "references", "venues", `${target.venueId}.md`), "utf8");

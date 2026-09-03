@@ -2,6 +2,7 @@ import type { CompletionRequest, CompletionResponse, OutlineItem, WorkspaceTreeN
 import { ApiError } from "../http";
 import type { WorkspaceService } from "../workspace/workspace-service";
 import type { AgentProvider } from "./provider";
+import type { AgentGateway } from "./agent-gateway";
 import type { SkillRegistry } from "./skill-registry";
 import type { MemoryService } from "./memory-service";
 
@@ -34,12 +35,14 @@ export class CompletionService {
   constructor(
     private readonly workspaces: WorkspaceService,
     private readonly skills: SkillRegistry,
-    private readonly provider: AgentProvider | undefined,
+    private readonly provider: AgentProvider | AgentGateway | undefined,
     private readonly memories: MemoryService
   ) {}
 
+  private get agent(): AgentProvider | undefined { return this.provider && "provider" in this.provider ? this.provider.provider : this.provider; }
+
   async suggest(projectId: string, request: CompletionRequest): Promise<CompletionResponse> {
-    if (!this.provider?.complete) throw new ApiError(503, "completion_not_configured", "Set OPENAI_API_KEY to use writing completion");
+    if (!this.agent?.complete) throw new ApiError(503, "completion_not_configured", "Configure a Harness to use writing completion");
     if (!COMPLETION_KINDS.has(request.kind)) throw new ApiError(400, "completion_kind_invalid", "Unknown completion kind");
     if (!Number.isInteger(request.cursor) || request.cursor < 0 || !Number.isInteger(request.fileVersion) || request.fileVersion < 1) {
       throw new ApiError(400, "completion_position_invalid", "Completion cursor and file version must be positive integers");
@@ -52,8 +55,9 @@ export class CompletionService {
     }
     if (request.cursor > opened.content.length) throw new ApiError(400, "completion_cursor_invalid", "Completion cursor is outside the file");
 
-    const [skill, outline, paths] = await Promise.all([
+    const [skill, workflowInstructions, outline, paths] = await Promise.all([
       this.skills.load(project.skill, project.publicationTarget),
+      this.skills.loadWorkflow("completion"),
       this.workspaces.outline(projectId),
       this.workspaces.tree(projectId).then(textPaths)
     ]);
@@ -66,7 +70,7 @@ export class CompletionService {
     const memoryInstructions = memory.content ? `\n\nLocal Paper Context (paper core and current section only):\n${memory.content}` : "";
     const contextBefore = opened.content.slice(Math.max(0, request.cursor - BEFORE_LIMIT), request.cursor);
     const contextAfter = opened.content.slice(request.cursor, request.cursor + AFTER_LIMIT);
-    const result = await this.provider.complete({
+    const result = await this.agent.complete({
       intent: inferCompletionIntent(opened.file.path, contextBefore),
       path: opened.file.path,
       contextBefore,
@@ -75,7 +79,7 @@ export class CompletionService {
       outline: outlineTitles(outline),
       bibliography: bibliographyParts.join("\n\n").slice(0, BIBLIOGRAPHY_LIMIT),
       skill: project.skill,
-      skillInstructions: `${skill.instructions}${memoryInstructions}`,
+      skillInstructions: `${workflowInstructions}\n\n${skill.instructions}${memoryInstructions}`,
       venueInstructions: skill.venueInstructions
     });
 
