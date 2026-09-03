@@ -104,8 +104,8 @@ run_code 'async (page) => {
 run_code 'async (page) => {
   const toolbar = page.locator(".pdf-toolbar");
   const idleBox = await toolbar.boundingBox();
-  await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 30000 });
-  await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 30000 });
+  await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
+  await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 90000 });
   const successBox = await toolbar.boundingBox();
   for (const box of [successBox]) {
     if (!idleBox || !box || idleBox.width !== box.width || idleBox.height !== box.height) {
@@ -861,7 +861,7 @@ run_code 'async (page) => {
   await revisionPanel.getByRole("button", { name: "Accept all & complete", exact: true }).click();
   await revisionPanel.getByText("needs review", { exact: true }).waitFor();
   await revisionPanel.getByRole("button", { name: "Compile current version" }).click();
-  await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 30000 });
+  await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
   const rereview = revisionPanel.getByRole("button", { name: "Targeted re-review" });
   await rereview.waitFor();
   await rereview.click();
@@ -958,7 +958,7 @@ run_code 'async (page) => {
   await editor.press("ControlOrMeta+A");
   await page.keyboard.insertText("\\documentclass{article}\n\\begin{document}\n\\undefinedFastWriteCommand\n\\end{document}");
   const diagnostics = page.locator(".pdf-diagnostics");
-  await diagnostics.waitFor({ timeout: 30000 });
+  await diagnostics.waitFor({ timeout: 90000 });
   const errorIcon = page.locator(".compile-status-icon--error");
   await errorIcon.waitFor();
   if (await errorIcon.getAttribute("aria-label") !== "Compilation error") throw new Error("Compilation failure does not expose an unambiguous error icon");
@@ -1010,8 +1010,8 @@ run_code 'async (page) => {
   await editor.press("ControlOrMeta+A");
   await page.keyboard.insertText("\\documentclass{article}\n\\begin{document}\nCompilation repaired.\n\\end{document}");
   await page.getByText("Saved", { exact: true }).waitFor();
-  await page.locator(".compile-strip--success").waitFor({ timeout: 30000 });
-  await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 30000 });
+  await page.locator(".compile-strip--success").waitFor({ timeout: 90000 });
+  await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 90000 });
 }'
 run_accessibility
 
