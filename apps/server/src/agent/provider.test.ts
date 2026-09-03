@@ -71,6 +71,40 @@ describe("OpenAIAgentProvider compatible endpoints", () => {
     expect(result.files[0]?.content).toBe("\\documentclass{article}\n\\begin{document}\nSee \\cite{paper}.\n\\end{document}\n");
   });
 
+  test("states every required Draft file in the prompt and schema", async () => {
+    let requestBody: Record<string, unknown> = {};
+    const files = ["main.tex", "sections/introduction.tex", "sections/conclusion.tex"].map((path) => ({ path, content: `% ${path}`, rationale: "Required draft file." }));
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requestBody = await request.json() as Record<string, unknown>;
+        return Response.json({ id: "chatcmpl_draft", object: "chat.completion", created: 0, model: "test-model", choices: [{ index: 0, message: { role: "assistant", content: JSON.stringify({ files }) }, finish_reason: "stop" }] });
+      }
+    });
+    servers.push(server);
+
+    const provider = new OpenAIAgentProvider("test-key", "test-model", `http://127.0.0.1:${server.port}/v1`);
+    const result = await provider.generateDraft!({
+      request: { brief: "Draft a bounded fixture" },
+      outline: [
+        { path: "sections/introduction.tex", title: "Introduction", purpose: "Frame the problem" },
+        { path: "sections/conclusion.tex", title: "Conclusion", purpose: "Bound the claims" }
+      ],
+      mainDocument: "main.tex",
+      skill: { id: "artificial-intelligence", name: "人工智能", version: "2.0.0", venue: "artificial-intelligence" },
+      skillInstructions: "Follow the writing profile.",
+      venueInstructions: "Preserve evidence boundaries."
+    });
+
+    const serialized = JSON.stringify(requestBody);
+    const messages = requestBody.messages as Array<{ role: string; content: string }>;
+    const systemMessage = messages.find((message) => message.role === "system");
+    expect(serialized).toContain("requiredPaths");
+    expect(systemMessage?.content).toContain('"minItems":3');
+    for (const file of files) expect(serialized).toContain(file.path);
+    expect(result.files.map((file) => file.path)).toEqual(files.map((file) => file.path));
+  });
+
   test("uses the Responses wire API for a custom Codex-style provider", async () => {
     let requestPath = "";
     let requestBody: Record<string, unknown> = {};

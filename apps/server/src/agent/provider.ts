@@ -312,9 +312,10 @@ export class OpenAIAgentProvider implements AgentProvider {
   }
 
   async generateDraft(input: DraftAgentInput & { outline: DraftOutlineSection[]; mainDocument: string }, signal?: AbortSignal): Promise<{ files: DraftGeneratedFile[] }> {
+    const requiredPaths = [input.mainDocument, ...input.outline.map((section) => section.path)];
     return this.structured(
       `${input.skillInstructions}\n\nResearch-domain and publication-target guidance:\n${input.venueInstructions}`,
-      { task: "Generate a minimal compilable LaTeX research-paper draft for the selected publication target. Use explicit TODO markers for missing evidence and never invent citations or results.", ...input.request, outline: input.outline, mainDocument: input.mainDocument },
+      { task: `Generate a minimal compilable LaTeX research-paper draft for the selected publication target. The files array must contain exactly one entry for the main document and every confirmed outline path: ${requiredPaths.join(", ")}. The main document must include the section files. Use explicit TODO markers for missing evidence and never invent citations or results.`, ...input.request, outline: input.outline, mainDocument: input.mainDocument, requiredPaths },
       "fastwrite_draft_files",
       {
         type: "object",
@@ -322,11 +323,11 @@ export class OpenAIAgentProvider implements AgentProvider {
         properties: {
           files: {
             type: "array",
-            minItems: 2,
+            minItems: requiredPaths.length,
             items: {
               type: "object",
               additionalProperties: false,
-              properties: { path: { type: "string" }, content: { type: "string" }, rationale: { type: "string" } },
+              properties: { path: { type: "string", description: `Must be one of these required paths, each returned once: ${requiredPaths.join(", ")}` }, content: { type: "string" }, rationale: { type: "string" } },
               required: ["path", "content", "rationale"]
             }
           }

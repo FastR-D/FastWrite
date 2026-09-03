@@ -107,12 +107,13 @@ function runtimeAgentProvider(getProvider: () => AgentProvider | undefined): Age
       if (property === "then") return undefined;
       const current = getProvider();
       const method = current?.[property as keyof AgentProvider];
-      return typeof method === "function" ? (...args: unknown[]) => {
+      if (typeof method === "function" || property === "revise") return (...args: unknown[]) => {
         const provider = getProvider();
         const activeMethod = provider?.[property as keyof AgentProvider];
         if (typeof activeMethod !== "function") throw new ApiError(503, "agent_not_configured", "Add an API key in Project settings to enable Agent tasks");
         return (activeMethod as (...parameters: unknown[]) => unknown).apply(provider, args);
-      } : undefined;
+      };
+      return undefined;
     }
   }) as AgentProvider;
 }

@@ -1,9 +1,11 @@
 import { normalizeWorkspacePath, type ChangeSet, type FastReadBundleReceipt, type MetadataObservation, type ProjectResearchWork, type ProjectResearchWorkDetails, type ResearchIdentifier, type ResearchProviderResult, type ResearchRun, type ResearchWork, type SourceEvidence } from "@fastwrite/shared";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
 import type { WorkspaceService } from "../workspace/workspace-service";
 
 const MAX_QUERY = 500;
+const MAX_PDF_PAGES = 200;
 const USER_AGENT = "FastWrite/0.1 (research metadata)";
 const now = () => new Date().toISOString();
 
@@ -310,9 +312,76 @@ export class ResearchService {
   }
 
   async extractPdfEvidence(projectId: string, workId: string, pdfBase64: string, authorized: boolean): Promise<SourceEvidence[]> {
-    this.workspaces.getProject(projectId); if (!authorized) throw new ApiError(403, "pdf_authorization_required", "Explicit authorization is required before parsing a local PDF"); if (pdfBase64.length > 20_000_000) throw new ApiError(413, "pdf_too_large", "PDF exceeds the 15 MB parsing limit"); const state = this.database.snapshot(); if (!state.researchWorks.some((work) => work.id === workId)) throw new ApiError(404, "research_work_not_found", "Research work not found"); const text = Buffer.from(pdfBase64, "base64").toString("latin1").replace(/[^\x20-\x7E\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 4000); if (!text) return [];
-    const timestamp = now(); const evidence: SourceEvidence = { id: `evidence_${crypto.randomUUID()}`, projectId, workId, kind: "background", origin: "model-extraction", representation: "paraphrase", status: "candidate", content: text, locatorType: "page", locator: "1", createdAt: timestamp, updatedAt: timestamp };
-    await this.database.mutate((current) => current.sourceEvidence.push(evidence)); return [evidence];
+    this.workspaces.getProject(projectId);
+    if (!authorized) throw new ApiError(403, "pdf_authorization_required", "Explicit authorization is required before parsing a local PDF");
+    const bytes = Buffer.from(pdfBase64, "base64");
+    if (bytes.byteLength > 15 * 1024 * 1024) throw new ApiError(413, "pdf_too_large", "PDF exceeds the 15 MB parsing limit");
+    if (bytes.byteLength < 5 || bytes.subarray(0, 5).toString("ascii") !== "%PDF-") throw new ApiError(422, "pdf_invalid", "The supplied data is not a valid PDF document");
+    const state = this.database.snapshot();
+    if (!state.researchWorks.some((work) => work.id === workId)) throw new ApiError(404, "research_work_not_found", "Research work not found");
+
+    let document: Awaited<ReturnType<typeof getDocument>["promise"]>;
+    try {
+      document = await getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: true }).promise;
+    } catch (error) {
+      throw new ApiError(422, "pdf_parse_failed", error instanceof Error ? `Could not parse PDF: ${error.message}` : "Could not parse PDF");
+    }
+    if (document.numPages > MAX_PDF_PAGES) {
+      await document.destroy();
+      throw new ApiError(413, "pdf_too_many_pages", `PDF exceeds the ${MAX_PDF_PAGES}-page parsing limit`);
+    }
+    const extracted: Array<{ page: number; content: string }> = [];
+    try {
+      for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+        const page = await document.getPage(pageNumber);
+        const text = await page.getTextContent();
+        const content = text.items
+          .map((item) => "str" in item ? item.str : "")
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 12_000);
+        if (content) extracted.push({ page: pageNumber, content });
+        page.cleanup();
+      }
+    } finally {
+      await document.destroy();
+    }
+    if (!extracted.length) return [];
+
+    const timestamp = now();
+    const evidence = extracted.map(({ page, content }): SourceEvidence => ({
+      id: `evidence_${crypto.randomUUID()}`,
+      projectId,
+      workId,
+      kind: "background",
+      origin: "source-text",
+      representation: "verbatim",
+      status: "candidate",
+      content,
+      locatorType: "page",
+      locator: String(page),
+      sourceNote: "Deterministically extracted from a user-authorized local PDF; verify layout-sensitive text against the source document.",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    }));
+    await this.database.mutate((current) => {
+      const marker = "Deterministically extracted from a user-authorized local PDF";
+      const existingByPage = new Map<string, SourceEvidence>();
+      const duplicates = new Set<string>();
+      for (const item of current.sourceEvidence) {
+        if (item.projectId !== projectId || item.workId !== workId || item.origin !== "source-text" || item.locatorType !== "page" || !item.sourceNote?.startsWith(marker)) continue;
+        if (existingByPage.has(item.locator)) duplicates.add(item.id);
+        else existingByPage.set(item.locator, item);
+      }
+      if (duplicates.size) current.sourceEvidence = current.sourceEvidence.filter((item) => !duplicates.has(item.id));
+      for (const item of evidence) {
+        const existing = existingByPage.get(item.locator);
+        if (existing) Object.assign(existing, { content: item.content, sourceNote: item.sourceNote, updatedAt: timestamp });
+        else current.sourceEvidence.push(item);
+      }
+    });
+    return evidence;
   }
 
   private async crossref(query: string, signal?: AbortSignal): Promise<Observation[]> { const response = await this.fetcher(`https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=5`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(5000)]) }); requireProviderResponse(response, "Crossref"); const body = await response.json() as { message?: { items?: any[] } }; return (body.message?.items ?? []).map((item) => ({ provider: "crossref" as const, title: item.title?.[0] ?? "", authors: (item.author ?? []).map((author: any) => [author.given, author.family].filter(Boolean).join(" ")), year: item.published?.["date-parts"]?.[0]?.[0] ?? item.issued?.["date-parts"]?.[0]?.[0], venue: item["container-title"]?.[0], identifiers: item.DOI ? [{ scheme: "doi" as const, value: String(item.DOI).toLowerCase() }] : [] })).filter((item) => item.title); }

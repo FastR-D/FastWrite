@@ -49,6 +49,25 @@ async function importBundle(service: ResearchService, workspaces: WorkspaceServi
   return (await service.importFastReadBundles(projectId, `${root}/manifest.json`))[0]!;
 }
 
+function onePagePdf(text: string): string {
+  const escaped = text.replace(/([\\()])/g, "\\$1");
+  const stream = `BT /F1 16 Tf 72 720 Td (${escaped}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => { offsets.push(Buffer.byteLength(pdf)); pdf += `${index + 1} 0 obj\n${object}\nendobj\n`; });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n `).join("\n")}\n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf).toString("base64");
+}
+
 describe("Research provider transparency", () => {
   test("keeps successful provider results and records partial failures", async () => {
     const fetcher = (async (input: string | URL | Request) => {
@@ -77,6 +96,25 @@ describe("Research provider transparency", () => {
     expect(result.run).toMatchObject({ status: "failed", error: "All research providers failed" });
     expect(result.run.providers?.every((item) => item.status === "failed")).toBe(true);
     expect(result.works).toEqual([]);
+  });
+});
+
+describe("Authorized PDF evidence", () => {
+  test("extracts page text with page provenance and replaces duplicate imports", async () => {
+    const fetcher = (async () => new Response("unused", { status: 500 })) as unknown as typeof fetch;
+    const { service, project, database } = await serviceWith(fetcher);
+    const work = await service.importWork(project.id, { title: "PDF fixture", authors: ["Ada Lovelace"], year: 2026 });
+    const pdf = onePagePdf("Distributional Equivalence PDF fixture");
+
+    const first = await service.extractPdfEvidence(project.id, work.id, pdf, true);
+    const second = await service.extractPdfEvidence(project.id, work.id, pdf, true);
+
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({ origin: "source-text", representation: "verbatim", locatorType: "page", locator: "1" });
+    expect(first[0]!.content).toContain("Distributional Equivalence PDF fixture");
+    expect(second).toHaveLength(1);
+    expect(database.snapshot().sourceEvidence.filter((item) => item.workId === work.id)).toHaveLength(1);
+    expect(service.extractPdfEvidence(project.id, work.id, Buffer.from("not a PDF").toString("base64"), true)).rejects.toMatchObject({ status: 422, code: "pdf_invalid" });
   });
 });
 

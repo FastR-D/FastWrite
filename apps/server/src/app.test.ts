@@ -41,6 +41,21 @@ describe("workspace API", () => {
     expect(JSON.stringify(await status.json())).not.toContain("sk-test-private-key");
   });
 
+  test("returns a structured configuration error when Revise has no provider", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Unconfigured Revise", mainDocument: "main.tex", venue: "artificial-intelligence" }) })).json() as PaperProject;
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const text = "Introduction";
+    const from = opened.content.indexOf(text);
+    const response = await request(`/api/projects/${project.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ selection: { path: "main.tex", text, from, to: from + text.length, startLine: 6, endLine: 6, fileVersion: opened.file.version }, instruction: "Clarify this heading" })
+    });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: "agent_not_configured" } });
+  });
+
   test("exports a bounded provenance dossier without manuscript or secret content", async () => {
     const request = await testApplication();
     const created = await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Provenance paper", mainDocument: "main.tex", venue: "sp" }) });
