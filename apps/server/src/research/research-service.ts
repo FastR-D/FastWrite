@@ -268,6 +268,32 @@ export class ResearchService {
     this.workspaces.getProject(projectId); if (updates.status && !new Set(["candidate", "saved", "rejected"]).has(updates.status)) throw new ApiError(400, "research_status_invalid", "Research work status is invalid"); return this.database.mutate((state) => { const link = state.projectResearchWorks.find((item) => item.projectId === projectId && item.workId === workId); if (!link) throw new ApiError(404, "research_work_not_found", "Research work is not linked to this project"); if (updates.status) link.status = updates.status; if (updates.citationKey !== undefined) { const key = typeof updates.citationKey === "string" ? updates.citationKey.trim() : ""; if (key && !/^[A-Za-z][A-Za-z0-9:._-]{0,127}$/.test(key)) throw new ApiError(400, "citation_key_invalid", "Citation key contains unsupported characters"); if (key) link.citationKey = key; else delete link.citationKey; } link.updatedAt = now(); return link; });
   }
 
+  async verifyMetadata(projectId: string, workId: string): Promise<ResearchWork> {
+    this.workspaces.getProject(projectId);
+    const state = this.database.snapshot();
+    const work = state.researchWorks.find((item) => item.id === workId);
+    if (!work) throw new ApiError(404, "research_work_not_found", "Research work not found");
+    const identifier = state.researchIdentifiers.find((item) => item.workId === workId && item.scheme === "doi");
+    if (!identifier) throw new ApiError(400, "doi_required", "A DOI is required for metadata verification");
+    const [crossrefResponse, openAlexResponse, semanticResponse] = await Promise.allSettled([
+      fetch(`https://api.crossref.org/works/${encodeURIComponent(identifier.value)}`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(5000) }),
+      fetch(`https://api.openalex.org/works/https://doi.org/${encodeURIComponent(identifier.value)}`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(5000) }),
+      fetch(`https://api.semanticscholar.org/graph/v1/paper/DOI:${encodeURIComponent(identifier.value)}?fields=title,authors,year,venue,publicationTypes`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(5000) })
+    ]);
+    const response = crossrefResponse.status === "fulfilled" ? crossrefResponse.value : undefined;
+    if (!response?.ok) return this.database.mutate((current) => { const target = current.researchWorks.find((item) => item.id === workId)!; target.metadataStatus = "unresolved"; target.updatedAt = now(); return target; });
+    const item = (await response.json() as { message?: any }).message;
+    const title = item?.title?.[0];
+    const year = item?.published?.["date-parts"]?.[0]?.[0] ?? item?.issued?.["date-parts"]?.[0]?.[0];
+    const authors = (item?.author ?? []).map((author: any) => [author.given, author.family].filter(Boolean).join(" ")).filter(Boolean);
+    const openAlex = openAlexResponse.status === "fulfilled" && openAlexResponse.value.ok ? await openAlexResponse.value.json() as any : undefined;
+    const semantic = semanticResponse.status === "fulfilled" && semanticResponse.value.ok ? await semanticResponse.value.json() as any : undefined;
+    const observedTitles = [title, openAlex?.title, semantic?.title].filter(Boolean).map(String);
+    const matching = Boolean(title && normalize(title) === normalize(work.title) && (!year || !work.year || year === work.year) && observedTitles.every((value) => similarity(normalize(value), normalize(title)) >= .8));
+    const relationText = JSON.stringify(item?.relation ?? {}); const updateType = String(item?.update?.type ?? ""); const retracted = /retract/i.test(relationText + updateType + String(item?.subtype ?? "")); const corrected = !retracted && /correct|update|errat/i.test(relationText + updateType);
+    return this.database.mutate((current) => { const target = current.researchWorks.find((candidate) => candidate.id === workId)!; target.metadataStatus = matching ? "verified" : "conflicting"; target.publicationStatus = retracted ? "retracted" : corrected ? "corrected" : "normal"; target.updatedAt = now(); const observations = [{ provider: "crossref" as const, fields: { ...(title ? { title } : {}), ...(authors.length ? { authors } : {}), ...(year ? { year } : {}), publicationStatus: target.publicationStatus } }, ...(openAlex ? [{ provider: "openalex" as const, fields: { title: String(openAlex.title ?? ""), ...(openAlex.publication_year ? { year: Number(openAlex.publication_year) } : {}) } }] : []), ...(semantic ? [{ provider: "semantic-scholar" as const, fields: { title: String(semantic.title ?? ""), ...(semantic.year ? { year: Number(semantic.year) } : {}) } }] : [])]; for (const observation of observations) current.metadataObservations.push({ id: `observation_${crypto.randomUUID()}`, workId, provider: observation.provider, fields: observation.fields, fetchedAt: now() }); return target; });
+  }
+
   async citationContext(projectId: string, citationKey: string): Promise<{ key: string; contexts: Array<{ path: string; line: number; excerpt: string }>; bibliography?: { path: string; line: number; entry: string } }> {
     this.workspaces.getProject(projectId); const contexts: Array<{ path: string; line: number; excerpt: string }> = []; let bibliography: { path: string; line: number; entry: string } | undefined;
     const files = await this.workspaces.tree(projectId); const paths = flattenText(files).filter((path) => /\.(?:tex|bib)$/i.test(path));
@@ -298,6 +324,7 @@ export class ResearchService {
 type Observation = { provider: "crossref" | "openalex" | "semantic-scholar" | "arxiv"; title: string; authors: string[]; year?: number; venue?: string; identifiers: Array<{ scheme: ResearchIdentifier["scheme"]; value: string }> };
 function findWork(works: ResearchWork[], knownIdentifiers: ResearchIdentifier[], identifiers: Observation["identifiers"], title: string, authors: string[], year?: number): ResearchWork | undefined { const byIdentifier = works.find((work) => identifiers.some((identifier) => knownIdentifiers.some((known) => known.workId === work.id && known.scheme === identifier.scheme && known.value.toLowerCase() === identifier.value.toLowerCase()))); if (byIdentifier) return byIdentifier; const normalizedTitle = normalize(title); const first = normalize(authors[0] ?? ""); return works.find((work) => normalize(work.title) === normalizedTitle && (!year || !work.year || work.year === year) && (!first || normalize(work.authors[0] ?? "") === first)) ?? undefined; }
 function normalize(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
+function similarity(left: string, right: string): number { const a = new Set(left.split(" ").filter(Boolean)); const b = new Set(right.split(" ").filter(Boolean)); if (!a.size || !b.size) return 0; const common = [...a].filter((item) => b.has(item)).length; return common / Math.max(a.size, b.size); }
 function dedupeWorks(works: ResearchWork[]): ResearchWork[] { return [...new Map(works.map((work) => [work.id, work])).values()]; }
 function flattenText(nodes: any[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? flattenText(node.children) : node.kind === "text" ? [node.path] : []); }
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&"); }

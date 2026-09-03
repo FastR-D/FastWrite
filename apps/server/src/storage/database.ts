@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type ClaimEvidenceLink, type ClaimRelation, type CompileRecord, type DraftPlan, type FastReadBundleReceipt, type GithubSyncRun, type IssueResolution, type MetadataObservation, type PaperClaim, type PaperMemory, type PaperProject, type ProjectResearchWork, type ResearchIdentifier, type ResearchRun, type ResearchWork, type ReviewReport, type ReviewSnapshot, type SourceEvidence, type UploadSession } from "@fastwrite/shared";
+import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type ClaimEvidenceLink, type ClaimRelation, type CompileRecord, type DraftPlan, type FastReadBundleReceipt, type GithubSyncRun, type IssueResolution, type MetadataObservation, type PaperClaim, type PaperMemory, type PaperProject, type ProjectResearchWork, type ProjectShare, type ResearchIdentifier, type ResearchRun, type ResearchWork, type ReviewReport, type ReviewSnapshot, type ShareComment, type SourceEvidence, type UploadSession } from "@fastwrite/shared";
 
 export interface FileVersionRecord {
   version: number;
@@ -32,10 +32,12 @@ export interface DatabaseState {
   researchRuns: ResearchRun[];
   claimRelations: ClaimRelation[];
   fastReadBundles: FastReadBundleReceipt[];
+  projectShares: ProjectShare[];
+  shareComments: ShareComment[];
 }
 
 export const CURRENT_SCHEMA_VERSION = 4;
-const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], fastReadBundles: [], claimRelations: [] };
+const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
@@ -76,6 +78,7 @@ export class JsonDatabase {
         researchRuns: parsed.researchRuns ?? [],
         fastReadBundles: parsed.fastReadBundles ?? [],
         claimRelations: parsed.claimRelations ?? []
+        ,projectShares: parsed.projectShares ?? [], shareComments: parsed.shareComments ?? []
       };
       this.state = migrate(migratedState);
       let migrated = false;
@@ -146,6 +149,9 @@ export class JsonDatabase {
       state.researchWorks = state.researchWorks.filter((item) => !orphanedWorkIds.has(item.id));
       state.researchIdentifiers = state.researchIdentifiers.filter((item) => !orphanedWorkIds.has(item.workId));
       state.metadataObservations = state.metadataObservations.filter((item) => !orphanedWorkIds.has(item.workId));
+      const shareIds = new Set(state.projectShares.filter((item) => item.projectId === projectId).map((item) => item.id));
+      state.projectShares = state.projectShares.filter((item) => item.projectId !== projectId);
+      state.shareComments = state.shareComments.filter((item) => item.projectId !== projectId && !shareIds.has(item.shareId));
       delete state.fileVersions[projectId];
     });
   }
@@ -162,6 +168,8 @@ export class JsonDatabase {
 }
 
 function migrate(state: DatabaseState): DatabaseState {
+  state.projectShares ??= [];
+  state.shareComments ??= [];
   if (state.schemaVersion < 2) {
     state.researchWorks ??= [];
     state.projectResearchWorks ??= [];

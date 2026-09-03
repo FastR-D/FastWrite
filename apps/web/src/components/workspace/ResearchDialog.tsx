@@ -107,6 +107,12 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
     setMessage(`Approved ${citationKey}.`);
   });
 
+  const verifyMetadata = (work: ResearchWorkView) => perform(`verify:${work.id}`, async () => {
+    const updated = await api.research.verifyMetadata(project.id, work.id);
+    setWorks((items) => items.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
+    setMessage(`${updated.metadataStatus === "verified" ? "Metadata verified" : "Metadata conflict detected"}: ${work.title}`);
+  });
+
   const importManualSource = () => perform("manual:import", async () => {
     if (!manualSource.title.trim()) throw new Error("Enter a source title.");
     const year = manualSource.year.trim() ? Number.parseInt(manualSource.year, 10) : undefined;
@@ -225,7 +231,9 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
               <div className="research-work-title"><strong>{work.title}</strong><span className={`research-status is-${work.project.status}`}>{work.project.status}</span></div>
               <small>{work.authors.join(", ") || "Authors unresolved"} · {work.year ?? "year unresolved"} · {work.venue ?? "venue unresolved"}</small>
               <div className="research-source-provenance">{work.metadataStatus === "conflicting" ? <span className="is-conflict"><AlertTriangle />metadata conflict</span> : null}{providers.map((provider) => <span key={provider}>{providerLabel(provider)}</span>)}{work.identifiers.slice(0, 3).map((identifier) => <code key={`${identifier.scheme}:${identifier.value}`}>{identifier.scheme}: {identifier.value}</code>)}</div>
+              {work.publicationStatus === "retracted" ? <strong className="text-danger">Retracted — do not cite without explicit justification.</strong> : work.publicationStatus === "corrected" ? <strong className="text-warning">Correction or erratum available.</strong> : null}
               <div className="research-work-actions">
+                <Button size="small" variant="ghost" loading={busy === `verify:${work.id}`} onClick={() => void verifyMetadata(work)}>Verify DOI</Button>
                 {work.project.status === "saved" ? <em>Approved · {work.project.citationKey || "key pending"}</em> : <Button size="small" loading={busy === `work:${work.id}`} onClick={() => void approveWork(work)}>Approve metadata</Button>}
                 {work.project.status === "saved" ? <><Button size="small" variant="ghost" loading={busy === `context:${work.id}`} onClick={() => void inspectCitations(work)}>Find citations</Button><Button size="small" variant="ghost" loading={busy === `bibtex:${work.id}`} onClick={() => void proposeBibtex(work)}>Propose BibTeX</Button></> : null}
               </div>

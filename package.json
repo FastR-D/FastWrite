@@ -14,6 +14,10 @@
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test apps/server/src apps/web/src packages/shared/src",
     "writing:eval": "bun scripts/writing-eval.ts",
+    "papers:eval": "bun scripts/papers-eval.ts",
+    "papers:compile": "bun scripts/papers-compile.ts",
+    "latex:check": "bash scripts/check-latex-linux.sh",
+    "latex:setup": "bash scripts/setup-latex-linux.sh --install",
     "e2e:smoke": "sh scripts/e2e-smoke.sh",
     "e2e:cross-browser": "sh scripts/e2e-cross-browser.sh",
     "llm:smoke": "bun scripts/llm-smoke.ts",
@@ -24,5 +28,8 @@
     "@types/bun": "latest",
     "axe-core": "^4.12.1",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "yjs": "^13.6.32"
   }
 }

@@ -636,11 +636,50 @@ export class WorkspaceService {
     }
   }
 
-  private async snapshotHistory(id: string, message: string): Promise<void> {
+  private async snapshotHistory(id: string, message: string): Promise<string | undefined> {
     const projectDirectory = join(this.projectsDirectory, id);
-    await this.gitHistory.snapshot(projectDirectory, join(projectDirectory, "workspace"), message).catch((error) => {
+    return this.gitHistory.snapshot(projectDirectory, join(projectDirectory, "workspace"), message).catch((error) => {
       logServerError("managed Git history update failed", error);
+      return undefined;
     });
+  }
+
+  async commitHistory(id: string, message: string): Promise<string | undefined> {
+    this.getProject(id);
+    this.clearHistoryTimer(id);
+    return this.snapshotHistory(id, message);
+  }
+
+  async history(id: string, limit?: number): Promise<Array<{ oid: string; message: string; createdAt: string }>> {
+    const project = this.getProject(id);
+    return this.gitHistory.list(join(this.projectsDirectory, project.id), limit);
+  }
+
+  async historySummary(id: string, oid: string): Promise<{ oid: string; message: string; createdAt: string; paths: string[] }> {
+    const project = this.getProject(id);
+    try {
+      return await this.gitHistory.summary(join(this.projectsDirectory, project.id), oid);
+    } catch {
+      const history = await this.gitHistory.list(join(this.projectsDirectory, project.id), 200);
+      const entry = history.find((item) => item.oid === oid || item.oid.startsWith(oid));
+      if (entry) return { ...entry, paths: [] };
+      if (!/^[0-9a-f]{7,64}$/i.test(oid)) throw new ApiError(404, "history_checkpoint_not_found", "History checkpoint not found");
+      return { oid, message: "", createdAt: "", paths: [] };
+    }
+  }
+
+  async historyFile(id: string, oid: string, path: string): Promise<string> {
+    const project = this.getProject(id);
+    return this.gitHistory.fileAt(join(this.projectsDirectory, project.id), oid, path);
+  }
+
+  async restoreHistoryFiles(id: string, oid: string, paths: string[]): Promise<{ oid?: string; restored: string[] }> {
+    const targets = [...new Set(paths)];
+    const files = await Promise.all(targets.map(async (path) => ({ path, content: await this.historyFile(id, oid, path), opened: await this.readTextFile(id, path) })));
+    for (const file of files) await this.saveTextFile(id, file.path, { content: file.content, baseVersion: file.opened.file.version });
+    const restored = files.map((file) => file.path);
+    const checkpoint = await this.commitHistory(id, `Restore history checkpoint ${oid}`);
+    return { ...(checkpoint ? { oid: checkpoint } : {}), restored };
   }
 
   private scheduleHistorySnapshot(id: string, message: string): void {

@@ -8,12 +8,14 @@ import {
   FilePlus2,
   FolderTree,
   GitCommitHorizontal,
+  History,
   MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
   Pencil,
   RefreshCw,
   ShieldCheck,
+  Share2,
   Trash2,
   Upload
 } from "lucide-react";
@@ -83,6 +85,8 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [compileState, setCompileState] = useState<CompileStateReport>({ state: "idle", compiledVersion: null });
   const [compileRepairRequest, setCompileRepairRequest] = useState<CompileRepairRequest | null>(null);
   const [checkpointState, setCheckpointState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const handleCompileState = useCallback((report: CompileStateReport) => setCompileState((current) => report.state === "idle" && current.state === "success" ? current : report), []);
   const fixCompileWithAgent = useCallback((failure: CompileFailureContext) => {
     setCompileRepairRequest((current) => ({ id: (current?.id ?? 0) + 1, failure }));
@@ -297,6 +301,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         <div className="workspace-topbar__right">
           <span className="skill-badge" title={project.publicationTarget?.venueId ?? project.skill.name}>{publicationTargetAbbreviation(project.publicationTarget, project.skill.id)}</span>
           <Button size="small" variant="secondary" icon={<ShieldCheck />} onClick={() => setComplianceOpen(true)}>Compliance</Button>
+          <Button size="small" variant="secondary" icon={<Share2 />} onClick={() => setShareOpen(true)}>Share</Button>
           {project.source.type === "github" ? <Button className="workspace-sync-button" size="small" variant="secondary" icon={<RefreshCw />} onClick={() => setSyncOpen(true)}>Sync</Button> : null}
           <ThemeToggle />
           <IconButton label="Project settings" icon={<MoreHorizontal />} onClick={() => void openSettings()} />
@@ -307,6 +312,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         {sidebarWidth > 0 ? (
           <aside className="workspace-sidebar" style={{ width: sidebarWidth }}>
             <section className="sidebar-section sidebar-section--files">
+              <div className="history-toolbar"><Button size="small" variant="ghost" icon={<History />} onClick={() => setHistoryOpen(true)}>History</Button></div>
               <header className="panel-heading"><div><FolderTree /><span>Files</span></div><div><IconButton label={checkpointState === "saving" ? "Saving local history checkpoint" : checkpointState === "saved" ? "Local history checkpoint saved" : checkpointState === "error" ? "Retry local history checkpoint" : "Save local history checkpoint"} icon={<GitCommitHorizontal />} disabled={checkpointState === "saving"} onClick={async () => { setCheckpointState("saving"); try { await api.projects.checkpoint(projectId); setCheckpointState("saved"); window.setTimeout(() => setCheckpointState("idle"), 2000); } catch { setCheckpointState("error"); } }} /><IconButton label="New file" icon={<FilePlus2 />} onClick={() => setNewFileOpen(true)} /><IconButton label="Add external file" icon={<Upload />} onClick={() => setAddFileOpen(true)} /><IconButton label="Rename selected file" icon={<Pencil />} disabled={selectedNode?.type !== "file"} onClick={() => setRenameOpen(true)} /><IconButton label="Move selected file to trash" icon={<Trash2 />} variant="danger" disabled={selectedNode?.type !== "file" || selectedPath === project.mainDocument} onClick={() => { setDeleteError(""); setDeleteOpen(true); }} /><IconButton label="Collapse files panel" icon={<ChevronLeft />} onClick={collapseSidebar} /></div></header>
               <FileTree nodes={tree} selectedPath={selectedPath} mainDocument={project.mainDocument} onSelect={selectNode} onExpand={expandDirectory} />
             </section>
@@ -317,7 +323,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             </section>
             <section className="sidebar-section sidebar-section--claims">
               <header className="panel-heading panel-heading--plain"><span>Claims & evidence</span><IconButton label="Rescan claims" icon={<RefreshCw />} onClick={async () => { try { setClaims(await api.claims.scan(projectId)); } catch { /* keep the last ledger visible */ } }} /></header>
-              {claims.length ? <div className="claim-ledger-list">{(["supported", "partial", "unsupported", "needs-review", "detected"] as const).map((status) => { const items = claims.filter((claim) => claim.reviewStatus === status || (status === "needs-review" && claim.anchorStatus === "stale")); return items.length ? <div className="claim-ledger-group" key={status}><small>{status === "needs-review" ? "stale / needs review" : status} · {items.length}</small>{items.map((claim) => <button className="claim-ledger-item" key={claim.id} onClick={async () => { const refreshed = claim.anchorStatus === "stale" ? await api.claims.reanchor(projectId, claim.id).catch(() => claim) : claim; setClaims((current) => current.map((item) => item.id === refreshed.id ? refreshed : item)); setSelectedPath(refreshed.anchor.path); setTargetLine(1); }} title={claim.anchorStatus === "stale" ? "Reanchor claim and open source" : claim.anchor.exactText}><span>{claim.semanticType ?? "claim"}</span><em>{claim.anchor.exactText.slice(0, 72)}{claim.anchorStatus === "stale" ? " · reanchor" : ""}</em></button>)}</div> : null; })}</div> : <p className="sidebar-empty">Scan the workspace to build the claim ledger.</p>}
+              {claims.length ? <div className="claim-ledger-list">{(["supported", "partial", "unsupported", "stale", "orphaned", "needs-review"] as const).map((status) => { const items = claims.filter((claim) => status === "stale" || status === "orphaned" ? claim.anchorStatus === status : status === "needs-review" ? claim.reviewStatus === "needs-review" || claim.reviewStatus === "detected" : claim.reviewStatus === status && claim.anchorStatus !== "stale" && claim.anchorStatus !== "orphaned"); return items.length ? <div className="claim-ledger-group" key={status}><small>{status} · {items.length}</small>{items.map((claim) => <button className={`claim-ledger-item is-${status}`} key={claim.id} onClick={async () => { const refreshed = claim.anchorStatus === "stale" ? await api.claims.reanchor(projectId, claim.id).catch(() => claim) : claim; setClaims((current) => current.map((item) => item.id === refreshed.id ? refreshed : item)); setSelectedPath(refreshed.anchor.path); setTargetLine(1); }} title={claim.anchorStatus === "stale" ? "Reanchor claim and open source" : claim.anchor.exactText}><span>{claim.semanticType ?? "claim"}</span><em>{claim.anchor.exactText.slice(0, 72)}{claim.anchorStatus === "stale" ? " · reanchor" : claim.anchorStatus === "orphaned" ? " · source missing" : ""}</em></button>)}</div> : null; })}</div> : <p className="sidebar-empty">Scan the workspace to build the claim ledger.</p>}
             </section>
           </aside>
         ) : (
@@ -382,10 +388,39 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       <ProjectSettingsDialog open={settingsOpen} project={project} tree={settingsTree} onClose={() => setSettingsOpen(false)} onSaved={async (updated) => { setProject(updated); setSettingsOpen(false); await refreshWorkspace(undefined, updated.mainDocument); setSelectedPath(updated.mainDocument); }} />
       {project.source.type === "github" ? <GithubSyncDialog open={syncOpen} project={project} compileState={compileState} onClose={() => setSyncOpen(false)} onFlushEditor={() => editorRef.current?.flush() ?? Promise.resolve()} onWorkspaceApplied={refreshAfterSync} onRequestCompile={() => setCompileRequest((value) => value + 1)} /> : null}
       <ComplianceDialog open={complianceOpen} project={project} {...(compileState.renderedPages ? { renderedPages: compileState.renderedPages } : {})} onClose={() => setComplianceOpen(false)} />
+      <HistoryDialog open={historyOpen} projectId={projectId} selectedPath={selectedPath} tree={tree} onClose={() => setHistoryOpen(false)} onRestored={async (path) => { await refreshWorkspace(undefined, path); setSelectedPath(path); setFileDocument(await api.projects.readFile(projectId, path)); }} />
+      <ShareDialog open={shareOpen} projectId={projectId} onClose={() => setShareOpen(false)} />
       <Dialog open={deleteOpen} title="Move file to trash?" description={selectedPath ?? ""} onClose={() => setDeleteOpen(false)} footer={<><Button variant="ghost" onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="danger" icon={<Trash2 />} onClick={async () => { if (!selectedPath) return; setDeleteError(""); try { await editorRef.current?.flush(); await api.projects.deleteFile(projectId, selectedPath); setDeleteOpen(false); setSelectedPath(project.mainDocument); await refreshWorkspace(); } catch (deleteFailure) { setDeleteError(deleteFailure instanceof Error ? deleteFailure.message : "Could not delete file"); } }}>Move to trash</Button></>}><p className="dialog-copy">The file is moved to the project trash and can be recovered from workspace storage.</p>{deleteError ? <div className="form-error" role="alert">{deleteError}</div> : null}</Dialog>
     </div>
   );
 }
+
+function ShareDialog({ open, projectId, onClose }: { open: boolean; projectId: string; onClose: () => void }) {
+  const [links, setLinks] = useState<Array<{ id: string; permission: "read" | "comment"; revokedAt?: string; createdAt: string }>>([]);
+  const [createdUrl, setCreatedUrl] = useState("");
+  const [error, setError] = useState("");
+  const load = useCallback(() => api.projects.shares(projectId).then(setLinks).catch((e) => setError(e instanceof Error ? e.message : "Could not load share links")), [projectId]);
+  useEffect(() => { if (open) void load(); }, [load, open]);
+  const create = async (permission: "read" | "comment") => { try { const share = await api.projects.createShare(projectId, permission); setCreatedUrl(`${window.location.origin}/shared/${share.token}`); await load(); } catch (e) { setError(e instanceof Error ? e.message : "Could not create share link"); } };
+  return <Dialog open={open} title="Share project" description="Create revocable links. Read-only links cannot add comments; comment links never allow editing manuscript files." onClose={onClose} footer={<Button variant="ghost" onClick={onClose}>Close</Button>}><div className="history-dialog"><div><Button variant="secondary" onClick={() => void create("read")}>Create read-only link</Button> <Button variant="secondary" onClick={() => void create("comment")}>Create review link</Button></div>{createdUrl ? <label className="field"><span>New link (shown once)</span><input readOnly value={createdUrl} onFocus={(event) => event.currentTarget.select()} /></label> : null}{error ? <div className="form-error" role="alert">{error}</div> : null}{links.map((link) => <p className="dialog-copy" key={link.id}>{link.permission} · {new Date(link.createdAt).toLocaleString()} · {link.revokedAt ? "revoked" : <button onClick={async () => { await api.projects.revokeShare(projectId, link.id); await load(); }}>Revoke</button>}</p>)}</div></Dialog>;
+}
+
+function HistoryDialog({ open, projectId, selectedPath, tree, onClose, onRestored }: { open: boolean; projectId: string; selectedPath: string | null; tree: WorkspaceTreeNode[]; onClose: () => void; onRestored: (path: string) => Promise<void> }) {
+  const [entries, setEntries] = useState<Array<{ oid: string; message: string; createdAt: string }>>([]);
+  const [selectedOid, setSelectedOid] = useState("");
+  const [selectedFile, setSelectedFile] = useState(selectedPath ?? "");
+  const [content, setContent] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (!open) return; setBusy(true); api.projects.history(projectId).then((items) => { setEntries(items); setSelectedOid(items[0]?.oid ?? ""); }).catch((e) => setError(e instanceof Error ? e.message : "History unavailable")).finally(() => setBusy(false)); }, [open, projectId]);
+  useEffect(() => { if (selectedPath) setSelectedFile(selectedPath); }, [selectedPath]);
+  useEffect(() => { if (!open || !selectedOid || !selectedFile) { setContent(null); return; } const controller = new AbortController(); api.projects.historyFile(projectId, selectedOid, selectedFile, controller.signal).then((result) => setContent(result.content)).catch(() => setContent(null)); return () => controller.abort(); }, [open, projectId, selectedOid, selectedFile]);
+  const restore = async () => { if (!selectedOid || !selectedFile) return; setBusy(true); try { await api.projects.restoreHistory(projectId, selectedOid, [selectedFile]); await onRestored(selectedFile); onClose(); } catch (e) { setError(e instanceof Error ? e.message : "Could not restore checkpoint"); } finally { setBusy(false); } };
+  const paths = flattenTextFiles(tree);
+  return <Dialog open={open} title="Project history" description="Preview a checkpoint and restore the selected source file as a new commit." onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Close</Button><Button variant="primary" disabled={!selectedOid || !selectedFile || content === null} loading={busy} onClick={() => void restore()}>Restore file</Button></>}><div className="history-dialog"><label className="field"><span>Checkpoint</span><select value={selectedOid} onChange={(event) => setSelectedOid(event.target.value)}>{entries.map((entry) => <option key={entry.oid} value={entry.oid}>{new Date(entry.createdAt).toLocaleString()} · {entry.message}</option>)}</select></label><label className="field"><span>File</span><select value={selectedFile} onChange={(event) => setSelectedFile(event.target.value)}>{paths.map((path) => <option key={path}>{path}</option>)}</select></label>{error ? <div className="form-error" role="alert">{error}</div> : null}{content !== null ? <pre className="history-preview">{content}</pre> : <p className="sidebar-empty">No checkpoint content available.</p>}</div></Dialog>;
+}
+
+function flattenTextFiles(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? flattenTextFiles(node.children) : node.kind === "text" ? [node.path] : []); }
 
 function PanelDivider({ label, active, value, min, max, reverse = false, orientation = "vertical", onPointerDown, onKeyboardChange }: { label: string; active: boolean; value: number; min: number; max: number; reverse?: boolean; orientation?: "vertical" | "horizontal"; onPointerDown: () => void; onKeyboardChange: (value: number) => void }) {
   const decreaseKey = orientation === "horizontal" ? "ArrowDown" : "ArrowLeft";

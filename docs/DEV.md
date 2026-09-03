@@ -81,9 +81,11 @@ Issue -> Revise locally
 
 Review 新契约：服务端只读取请求发生时的当前源码；浏览器提交的 pageText 有页数、单页和总大小上限，仅在请求内存中使用，不进入数据库、日志或 Agent audit trail。新 Review 不写入 ReviewSnapshot，旧快照仅兼容读取。
 
+协作边界：每个文本文件映射为一个 Yjs `Doc`，`content` 是唯一共享文本。REST update 以当前 `PaperFile.version` 为并发闸门；合并后通过 `WorkspaceService.saveTextFile` 落盘并增加版本，因此 ChangeSet、Review 和 GitHub Sync 始终只观察已落盘版本。Yjs 不直接修改 ChangeSet 或 Git 历史；自动 history checkpoint 仍由 Workspace 保存策略负责。Presence 为 45 秒过期的内存态，不作为作者身份或审计证据。
+
 当前实现尚未达到该设计：浏览器编译的 PDF 只保存在前端 Blob URL；服务器编译返回 `pdfBase64` 后也不持久化。`CompileRecord` 只有状态和摘要，`ReviewAgentInput` 实际只有 `documents + outline`，targeted re-review 同样只读取源码；`sourceOnly` 还可以生成正式报告。因此现状是源码审稿原型，不是 PDF 审稿。
 
-需新增 PDF artifact 持久化：Browser WASM 编译成功后上传 PDF/SyncTeX，Server LaTeX 在临时目录清理前保存同样的 artifact；`CompileRecord` 引用 artifact ID 和 SHA-256。随后扩展 `ReviewSnapshot`、`ReviewAgentInput` 与 `ReviewEvidence`，让 Provider 实际接收 PDF 或由该 PDF 生成的逐页图像与文本，并记录页码证据；`sourceOnly` 只能保留为开发诊断，不能生成正式 ReviewReport。
+暂不持久化 PDF artifact。若用户在 Review 请求中授权，浏览器可提交有界的逐页 `pageText`；服务端只在请求期间使用，并在报告中记录输入边界和实际输入类型。需要视觉审稿时另行设计用户显式授权的临时 artifact。
 
 一条 Review Issue 是报告中的单条审稿意见；“用户选中的审稿意见”是本次送往 Agent 或 Revise 的一条或多条意见。两条解决路径都应创建 `IssueResolution`。当前仅 Agent 路径保存 Resolution；Revise 路径和基于新 PDF 的 targeted re-review 仍需补齐。
 
@@ -139,6 +141,6 @@ GitHub Sync 是一个服务端编排流程和一个顶层 `Sync` 按钮，不拆
 
 ## 4. 当前状态
 
-Completion、Agent、Revise 和 GitHub Sync 主流程已实现，但 Rollback 目前还不是 Git-based。Review 的报告、审稿意见管理和 Agent 路由已有源码审稿原型，但 PDF artifact、PDF Provider 输入、PDF 页码证据、Revise Resolution 和基于新 PDF 的 targeted re-review 尚未完成。
+Completion、Agent、Revise、GitHub Sync 和 Git-based history checkpoint 主流程已实现。Review 使用当前源码及可选的请求期有界 pageText；PDF artifact 持久化和视觉 Provider 仍是延期能力。
 
 最近一次回归记录见 [BUG-done.md](./BUG-done.md)：2026-08-04 通过 `bun run typecheck`、102 项 `bun test`、`bun run build`、源码服务器完整 Chromium smoke，以及同一套直接运行在 `app-bin/fastwrite` 上的 release smoke。这些测试未覆盖 PDF 作为 Review Provider 输入；下一步应先完成 PDF 审稿纵向链路，再做真实安全/AI 论文验收。Tauri 仍属于独立后续范围。

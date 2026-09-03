@@ -48,6 +48,7 @@ import { writingGuardMany } from "./writing/writing-guard";
 import { deriveArgumentGraph } from "./claims/argument-graph";
 import { buildAdversarialMemo } from "./claims/adversarial-memo";
 import { normalizePlaceholderFindings } from "./agent/citation-findings";
+import * as Y from "yjs";
 
 interface Services {
   database: JsonDatabase;
@@ -186,11 +187,40 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
 }
 
 function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void }): Route[] {
+  const collaborationDocuments = new Map<string, { document: Y.Doc; version: number }>();
+  const presence = new Map<string, Map<string, { clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>();
   return [
     route("GET", "/api/health", async () => json({ status: "ok" })),
     route("GET", "/api/agent-settings", async () => json(agentSettings.status())),
     route("PUT", "/api/agent-settings", async (request) => { agentSettings.configure(await readJson<AgentSettingsInput>(request)); return json(agentSettings.status()); }),
     route("GET", "/api/venues", async () => json(await skillRegistry.catalog())),
+    route("GET", "/api/projects/:projectId/collaboration", async (_request, params, url) => {
+      const projectId = required(params, "projectId"); const path = requiredQuery(url, "path"); const opened = await workspaces.readTextFile(projectId, path); const key = `${projectId}:${path}`;
+      let entry = collaborationDocuments.get(key); if (!entry || entry.version !== opened.file.version) { const document = new Y.Doc(); document.getText("content").insert(0, opened.content); entry = { document, version: opened.file.version }; collaborationDocuments.set(key, entry); }
+      return json({ path, fileVersion: entry.version, update: Buffer.from(Y.encodeStateAsUpdate(entry.document)).toString("base64"), presence: [...(presence.get(projectId)?.values() ?? [])].filter((item) => Date.now() - Date.parse(item.updatedAt) < 45_000) });
+    }),
+    route("POST", "/api/projects/:projectId/collaboration", async (request, params) => {
+      const projectId = required(params, "projectId"); const body = await readJson<{ path?: string; update?: string; baseVersion?: number; clientId?: string; name?: string; color?: string; line?: number }>(request); if (!body.path || !body.update || !Number.isInteger(body.baseVersion)) throw new ApiError(400, "collaboration_update_invalid", "path, update and baseVersion are required");
+      const opened = await workspaces.readTextFile(projectId, body.path); if (opened.file.version !== body.baseVersion) throw new ApiError(409, "collaboration_version_conflict", "Reload the CRDT document from the latest PaperFile version"); const key = `${projectId}:${body.path}`; let entry = collaborationDocuments.get(key); if (!entry || entry.version !== opened.file.version) { const document = new Y.Doc(); document.getText("content").insert(0, opened.content); entry = { document, version: opened.file.version }; collaborationDocuments.set(key, entry); }
+      try { Y.applyUpdate(entry.document, Buffer.from(body.update, "base64")); } catch { throw new ApiError(400, "collaboration_update_invalid", "Yjs update could not be decoded"); }
+      const content = entry.document.getText("content").toString(); const saved = await workspaces.saveTextFile(projectId, body.path, { content, baseVersion: entry.version }); entry.version = saved.file.version;
+      if (body.clientId && body.name) { const projectPresence = presence.get(projectId) ?? new Map(); projectPresence.set(body.clientId, { clientId: body.clientId, name: body.name.slice(0, 80), ...(body.color ? { color: body.color.slice(0, 32) } : {}), path: body.path, ...(Number.isInteger(body.line) && body.line! > 0 ? { line: body.line } : {}), updatedAt: new Date().toISOString() }); presence.set(projectId, projectPresence); }
+      return json({ path: body.path, fileVersion: entry.version, update: Buffer.from(Y.encodeStateAsUpdate(entry.document)).toString("base64"), presence: [...(presence.get(projectId)?.values() ?? [])] });
+    }),
+    route("POST", "/api/projects/:projectId/collaboration/presence", async (request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); const body = await readJson<{ clientId?: string; name?: string; path?: string; line?: number; color?: string }>(request); if (!body.clientId || !body.name || !body.path) throw new ApiError(400, "presence_invalid", "clientId, name and path are required"); const projectPresence = presence.get(projectId) ?? new Map(); projectPresence.set(body.clientId, { clientId: body.clientId, name: body.name.slice(0, 80), ...(body.color ? { color: body.color.slice(0, 32) } : {}), path: body.path, ...(Number.isInteger(body.line) && body.line! > 0 ? { line: body.line } : {}), updatedAt: new Date().toISOString() }); presence.set(projectId, projectPresence); return json([...projectPresence.values()].filter((item) => Date.now() - Date.parse(item.updatedAt) < 45_000)); }),
+    route("POST", "/api/projects/:projectId/shares", async (request, params) => {
+      const projectId = required(params, "projectId"); workspaces.getProject(projectId);
+      const body = await readJson<{ permission?: "read" | "comment"; label?: string; expiresAt?: string }>(request);
+      const token = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
+      const createdAt = new Date().toISOString();
+      const share = await database.mutate((state) => { const item = { id: `share_${crypto.randomUUID()}`, projectId, tokenHash: shareTokenHash(token), permission: body.permission === "comment" ? "comment" as const : "read" as const, ...(body.label?.trim() ? { label: body.label.trim().slice(0, 120) } : {}), ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}), createdAt }; state.projectShares.push(item); return item; });
+      return json({ id: share.id, token, permission: share.permission, label: share.label, expiresAt: share.expiresAt, createdAt: share.createdAt }, 201);
+    }),
+    route("GET", "/api/projects/:projectId/shares", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().projectShares.filter((item) => item.projectId === projectId).map(({ tokenHash: _tokenHash, ...item }) => item)); }),
+    route("DELETE", "/api/projects/:projectId/shares/:shareId", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); await database.mutate((state) => { const share = state.projectShares.find((item) => item.projectId === projectId && item.id === required(params, "shareId")); if (!share) throw new ApiError(404, "share_not_found", "Share link not found"); share.revokedAt = new Date().toISOString(); }); return new Response(null, { status: 204 }); }),
+    route("GET", "/api/shared/:token", async (_request, params) => { const share = activeShare(database.snapshot().projectShares, required(params, "token")); const project = workspaces.getProject(share.projectId); return json({ project: { id: project.id, name: project.name, mainDocument: project.mainDocument, version: project.version }, permission: share.permission, tree: await workspaces.tree(project.id), comments: database.snapshot().shareComments.filter((item) => item.shareId === share.id) }); }),
+    route("GET", "/api/shared/:token/file", async (_request, params, url) => { const share = activeShare(database.snapshot().projectShares, required(params, "token")); const path = requiredQuery(url, "path"); const file = await workspaces.readTextFile(share.projectId, path); return json({ path, content: file.content, version: file.file.version }); }),
+    route("POST", "/api/shared/:token/comments", async (request, params) => { const share = activeShare(database.snapshot().projectShares, required(params, "token")); if (share.permission !== "comment") throw new ApiError(403, "share_read_only", "This share link is read-only"); const body = await readJson<{ path?: string; line?: number; author?: string; body?: string }>(request); if (!body.path || !body.body?.trim() || !body.author?.trim()) throw new ApiError(400, "comment_invalid", "path, author and body are required"); await workspaces.readTextFile(share.projectId, body.path); const createdAt = new Date().toISOString(); return json(await database.mutate((state) => { const comment = { id: `comment_${crypto.randomUUID()}`, shareId: share.id, projectId: share.projectId, path: body.path!, ...(Number.isInteger(body.line) && body.line! > 0 ? { line: body.line } : {}), author: body.author!.trim().slice(0, 80), body: body.body!.trim().slice(0, 4000), status: "open" as const, createdAt, updatedAt: createdAt }; state.shareComments.push(comment); return comment; }), 201); }),
     route("POST", "/api/projects/:projectId/compliance-checks", async (request, params) => {
       const body = await readJson<{ pdfBase64?: string; renderedPages?: number; mainBodyPages?: number; verifyCitationsOnline?: boolean }>(request);
       return json(await compliance.check(required(params, "projectId"), body), 201);
@@ -212,6 +242,7 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
     route("GET", "/api/projects/:projectId/research-works", async (_request, params) => json(research.listWorks(required(params, "projectId")))),
     route("POST", "/api/projects/:projectId/research-works/import", async (request, params) => { const body = await readJson<Parameters<ResearchService["importWork"]>[1]>(request); if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiError(400, "invalid_research_request", "Research import must be an object"); return json(await research.importWork(required(params, "projectId"), body), 201); }),
     route("PATCH", "/api/projects/:projectId/research-works/:workId", async (request, params) => json(await research.saveWork(required(params, "projectId"), required(params, "workId"), await readJson<{ status?: "candidate" | "saved" | "rejected"; citationKey?: string }>(request)))),
+    route("POST", "/api/projects/:projectId/research-works/:workId/verify-metadata", async (_request, params) => json(await research.verifyMetadata(required(params, "projectId"), required(params, "workId")))),
     route("GET", "/api/projects/:projectId/research-citations/:citationKey", async (_request, params) => json(await research.citationContext(required(params, "projectId"), required(params, "citationKey")))),
     route("POST", "/api/projects/:projectId/research-works/:workId/bibtex-changes", async (request, params) => { const body = await readJson<{ targetBibPath?: string }>(request); if (!body.targetBibPath) throw new ApiError(400, "target_bib_required", "targetBibPath is required"); const changeSet = await research.proposeBibtexChange(required(params, "projectId"), required(params, "workId"), body.targetBibPath); return json(await database.mutate((state) => { state.changeSets.push(changeSet); return changeSet; }), 201); }),
     route("POST", "/api/projects/:projectId/research-works/:workId/pdf-evidence", async (request, params) => { const body = await readJson<{ pdfBase64?: string; authorized?: boolean }>(request); if (!body.pdfBase64 || body.authorized !== true) throw new ApiError(403, "pdf_authorization_required", "Provide bounded PDF data with explicit authorization"); return json(await research.extractPdfEvidence(required(params, "projectId"), required(params, "workId"), body.pdfBase64, body.authorized === true), 201); }),
@@ -265,6 +296,29 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
     }),
     route("POST", "/api/projects/:projectId/history/checkpoint", async (_request, params) => {
       return json(await workspaces.createHistoryCheckpoint(required(params, "projectId")), 201);
+    }),
+    route("GET", "/api/projects/:projectId/history", async (request, params) => {
+      const limit = Number(new URL(request.url).searchParams.get("limit") ?? "50");
+      return json(await workspaces.history(required(params, "projectId"), Number.isFinite(limit) ? limit : 50));
+    }),
+    route("GET", "/api/projects/:projectId/history/:oid", async (_request, params) => {
+      const projectId = required(params, "projectId");
+      const oid = required(params, "oid");
+      if (!/^[0-9a-f]{7,64}$/i.test(oid)) throw new ApiError(404, "history_checkpoint_not_found", "History checkpoint not found");
+      const history = await workspaces.history(projectId, 200);
+      const entry = history.find((item) => item.oid === oid || item.oid.startsWith(oid));
+      if (!entry) throw new ApiError(404, "history_checkpoint_not_found", "History checkpoint not found");
+      return json({ ...entry, paths: [] });
+    }),
+    route("GET", "/api/projects/:projectId/history/:oid/file", async (request, params) => {
+      const path = new URL(request.url).searchParams.get("path");
+      if (!path) throw new ApiError(400, "history_path_required", "path is required");
+      return json({ path, content: await workspaces.historyFile(required(params, "projectId"), required(params, "oid"), path) });
+    }),
+    route("POST", "/api/projects/:projectId/history/:oid/restore", async (request, params) => {
+      const body = await readJson<{ paths?: string[] }>(request);
+      if (!Array.isArray(body.paths) || !body.paths.length || body.paths.some((path) => typeof path !== "string" || !path.trim())) throw new ApiError(400, "history_paths_required", "Provide one or more workspace-relative paths to restore");
+      return json(await workspaces.restoreHistoryFiles(required(params, "projectId"), required(params, "oid"), body.paths));
     }),
     route("POST", "/api/projects/:projectId/github-sync", async (_request, params) => {
       return json(await githubSync.start(required(params, "projectId")), 201);
@@ -367,6 +421,19 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
     route("POST", "/api/projects/:projectId/memory/rollback", async (_request, params) => json(await memories.rollback(required(params, "projectId")))),
     route("GET", "/api/projects/:projectId/agent-tasks", async (_request, params) => json(agentTasks.list(required(params, "projectId")))),
     route("GET", "/api/projects/:projectId/agent-runs", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().agentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); }),
+    route("GET", "/api/projects/:projectId/provenance", async (_request, params) => {
+      const projectId = required(params, "projectId");
+      const project = workspaces.getProject(projectId);
+      const state = database.snapshot();
+      const runs = state.agentRuns.filter((run) => run.projectId === projectId).map((run) => ({ id: run.id, type: run.type, status: run.status, objective: run.objective, skill: run.skill, publicationTarget: run.publicationTarget, changeSetId: run.changeSetId, createdAt: run.createdAt, updatedAt: run.updatedAt, auditTrail: run.auditTrail ?? [] }));
+      const changeSets = state.changeSets.filter((changeSet) => changeSet.projectId === projectId).map((changeSet) => ({ id: changeSet.id, agentRunId: changeSet.agentRunId, status: changeSet.status, summary: changeSet.summary, rationale: changeSet.rationale, baseCheckpointOid: changeSet.baseCheckpointOid, appliedCheckpointOids: changeSet.appliedCheckpointOids, reviewFinishedAt: changeSet.reviewFinishedAt, createdAt: changeSet.createdAt, updatedAt: changeSet.updatedAt, changes: changeSet.changes.map((change) => ({ path: change.path, operation: change.operation, appliedVersion: change.appliedVersion, hunks: (change.hunks ?? []).map((hunk) => ({ id: hunk.id, status: hunk.status, rationale: hunk.rationale, findings: hunk.findings, additions: classifyHunkAdditions(hunk.after) })) })) }));
+      const aiRuns = runs.filter((run) => run.type !== "review");
+      const venueLabel = project.publicationTarget?.venueId ?? project.skill.venue;
+      const disclosureDraft = aiRuns.length
+        ? `AI usage disclosure (${venueLabel}): During preparation of this manuscript, the authors used FastWrite AI-assisted workflows for ${[...new Set(aiRuns.map((run) => run.type))].join(", ")} operations. All generated changes were reviewed and approved by the authors; the authors remain responsible for the final content, claims, citations, and compliance. This statement should be checked against the selected venue's current author instructions before submission.`
+        : "No AI-assisted writing operation is recorded for this project.";
+      return json({ project: { id: project.id, version: project.version, mainDocument: project.mainDocument, skill: project.skill, publicationTarget: project.publicationTarget }, generatedAt: new Date().toISOString(), disclosureDraft, runs, changeSets });
+    }),
     route("POST", "/api/projects/:projectId/agent-tasks", async (request, params) => json(await agentTasks.plan(required(params, "projectId"), await readJson<AgentTaskRequest>(request), request.signal), 201)),
     route("POST", "/api/projects/:projectId/agent-tasks/:planId/confirm", async (request, params) => json(await agentTasks.confirm(required(params, "projectId"), required(params, "planId"), request.signal), 201)),
     route("POST", "/api/projects/:projectId/agent-tasks/:planId/cancel", async (_request, params) => json(await agentTasks.cancel(required(params, "projectId"), required(params, "planId")))),
@@ -405,7 +472,7 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
         }
         for (const runId of auditedRuns) {
           const run = state.agentRuns.find((candidate) => candidate.id === runId);
-          if (run) { run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "compile", summary: `Browser WASM compile ${record.status} for project version ${record.projectVersion}`, createdAt: record.createdAt }); run.updatedAt = record.createdAt; }
+          if (run) { run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "compile", summary: `Local LaTeX compile ${record.status} for project version ${record.projectVersion}`, createdAt: record.createdAt }); run.updatedAt = record.createdAt; }
         }
         return record;
       }), 201);
@@ -440,9 +507,10 @@ function buildRoutes({ database, workspaces, uploads, github, githubSync, revisi
     route("POST", "/api/projects/:projectId/change-sets/:changeSetId/reject", async (_request, params) => {
       return json(await revisions.reject(required(params, "projectId"), required(params, "changeSetId")));
     }),
-    route("POST", "/api/projects/:projectId/change-sets/:changeSetId/rollback", async (_request, params) => {
+    route("POST", "/api/projects/:projectId/change-sets/:changeSetId/rollback", async (request, params) => {
+      const body = request.headers.get("content-length") === "0" || !request.headers.get("content-type")?.includes("application/json") ? {} : await readJson<{ resolutions?: Array<{ path: string; currentVersion: number; content: string }> }>(request);
       const projectId = required(params, "projectId");
-      const rolledBack = await revisions.rollback(projectId, required(params, "changeSetId"));
+      const rolledBack = await revisions.rollback(projectId, required(params, "changeSetId"), body.resolutions ?? []);
       await claims.refresh(projectId);
       return json(rolledBack);
     }),
@@ -494,6 +562,17 @@ function required(params: Record<string, string>, key: string): string {
   const value = params[key];
   if (!value) throw new ApiError(400, "missing_parameter", `Missing route parameter '${key}'`);
   return value;
+}
+
+function classifyHunkAdditions(after: string): { claims: boolean; citations: boolean; numbers: boolean; experimentalConclusions: boolean } {
+  return { claims: /\b(?:we|our|this work|results? show|demonstrate|achieve)\b/i.test(after), citations: /\\(?:cite|citep|citet|autocite)\b|\[[^\]]*\d{4}[^\]]*\]/i.test(after), numbers: /\b\d+(?:\.\d+)?\s*(?:%|ms|s|m|k|mb|gb|x)?\b/i.test(after), experimentalConclusions: /\b(?:improv|outperform|significant|accuracy|f1|auc|recall|precision)\b/i.test(after) };
+}
+
+function shareTokenHash(token: string): string { return new Bun.CryptoHasher("sha256").update(token).digest("hex"); }
+function activeShare(shares: Array<{ tokenHash: string; revokedAt?: string; expiresAt?: string }>, token: string) {
+  const share = shares.find((item) => item.tokenHash === shareTokenHash(token));
+  if (!share || share.revokedAt || (share.expiresAt && Date.parse(share.expiresAt) <= Date.now())) throw new ApiError(404, "share_not_found", "Share link not found or expired");
+  return share as typeof share & { id: string; projectId: string; permission: "read" | "comment" };
 }
 
 function textPaths(nodes: any[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }

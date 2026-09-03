@@ -7,10 +7,15 @@ E2E_BROWSER=${FASTWRITE_E2E_BROWSER:-chrome}
 E2E_PORT=${FASTWRITE_E2E_PORT:-3213}
 E2E_SERVER_BIN=${FASTWRITE_E2E_SERVER_BIN:-}
 E2E_PLAYWRIGHT_CLI_VERSION=${FASTWRITE_E2E_PLAYWRIGHT_CLI_VERSION:-0.1.18}
+E2E_PLAYWRIGHT_CLI_JS=${FASTWRITE_E2E_PLAYWRIGHT_CLI_JS:-}
 QA_SESSION="fastwrite-e2e-${E2E_BROWSER}-$$"
 SERVER_PID=""
 
 pw() {
+  if [ -n "$E2E_PLAYWRIGHT_CLI_JS" ]; then
+    node "$E2E_PLAYWRIGHT_CLI_JS" --session "$QA_SESSION" "$@"
+    return
+  fi
   npx --yes --package "@playwright/cli@$E2E_PLAYWRIGHT_CLI_VERSION" playwright-cli --session "$QA_SESSION" "$@"
 }
 
@@ -28,8 +33,7 @@ run_code() {
 }
 
 run_accessibility() {
-  run_code '
-async (page) => {
+  run_code 'async (page) => {
   await page.addScriptTag({ path: "node_modules/axe-core/axe.min.js" });
   const result = await page.evaluate(async () => await window.axe.run(document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] }
@@ -72,8 +76,7 @@ done
 pw open "http://127.0.0.1:$E2E_PORT/projects" --browser "$E2E_BROWSER"
 run_accessibility
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   await page.getByRole("button", { name: "New paper" }).click();
   await page.getByRole("textbox", { name: "Project name" }).fill("E2E Smoke Paper");
   await page.getByRole("button", { name: "Create paper" }).click();
@@ -98,8 +101,7 @@ async (page) => {
   await page.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor();
 }'
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   const toolbar = page.locator(".pdf-toolbar");
   const idleBox = await toolbar.boundingBox();
   await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 30000 });
@@ -112,8 +114,7 @@ async (page) => {
   }
 }'
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   await page.getByRole("treeitem", { name: "sections", exact: true }).click();
   await page.locator("span[title=\"sections/method.tex\"]").click();
   const methodEditor = page.getByRole("textbox", { name: "Source editor for sections/method.tex" });
@@ -133,8 +134,7 @@ async (page) => {
 }'
 run_accessibility
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   await page.getByRole("button", { name: "Review", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Paper Review" });
   await dialog.getByRole("button", { name: "Compact review window" }).click();
@@ -150,8 +150,7 @@ async (page) => {
 }
 '
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   await page.locator("span[title=\"main.tex\"]").click();
   const editor = page.getByRole("textbox", { name: "Source editor for main.tex" });
   await editor.waitFor();
@@ -194,8 +193,7 @@ async (page) => {
 }
 '
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   let changeSet;
   await page.route("**/api/projects/*/revisions", async route => {
     const selection = route.request().postDataJSON().selection;
@@ -273,8 +271,7 @@ async (page) => {
   await page.unroute("**/api/projects/*/change-sets/revise-e2e/reject");
 }'
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   const projectId = page.url().split("/").pop();
   const apiRoot = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId;
   const timestamp = new Date().toISOString();
@@ -607,7 +604,7 @@ async (page) => {
   const externalMarker = "% External edit while Agent review is open";
   const externalSave = await page.request.put(apiRoot + "/file?path=sections%2Fmethod.tex", { data: { content: methodBeforeConflict.content + "\n" + externalMarker, baseVersion: methodBeforeConflict.file.version } });
   if (!externalSave.ok()) throw new Error("Could not create the Agent conflict fixture");
-  await agentPanel.getByRole("button", { name: "Accept pending & complete", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "Accept all & complete", exact: true }).click();
   const conflictDialog = page.getByRole("dialog", { name: "File changed during review" });
   await conflictDialog.waitFor();
   const overwriteDiff = conflictDialog.getByLabel("Overwrite diff for sections/method.tex");
@@ -651,8 +648,7 @@ async (page) => {
   await page.unroute("**/api/projects/*/change-sets/draft-change-e2e/accept");
 }'
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   const agentPanel = page.getByRole("region", { name: "Agent workspace" });
   await agentPanel.waitFor();
@@ -660,8 +656,7 @@ async (page) => {
   await page.getByRole("button", { name: "Revise", exact: true }).click();
 }'
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   const projectId = page.url().split("/").pop();
   const apiRoot = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId;
   const project = await (await page.request.get(apiRoot)).json();
@@ -863,7 +858,7 @@ async (page) => {
   await page.screenshot({ path: "output/playwright/workspace-revision-manual-edit-1440x900" + browserSuffix + ".png", fullPage: true });
   await revisionPanel.getByRole("button", { name: "Save hunk", exact: true }).click();
   await revisionPanel.locator(".hunk-card").waitFor();
-  await revisionPanel.getByRole("button", { name: "Accept pending & complete", exact: true }).click();
+  await revisionPanel.getByRole("button", { name: "Accept all & complete", exact: true }).click();
   await revisionPanel.getByText("needs review", { exact: true }).waitFor();
   await revisionPanel.getByRole("button", { name: "Compile current version" }).click();
   await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 30000 });
@@ -889,8 +884,7 @@ async (page) => {
   await page.unroute("**/api/projects/*/issue-resolutions/resolution-e2e/rereview");
 }'
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   let completionRequests = 0;
   const projectId = page.url().split("/").pop();
   const fileUrl = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId + "/file?path=main.tex";
@@ -930,7 +924,7 @@ async (page) => {
   if (!metrics.suggested || !metrics.accepted || Object.values(metrics).some(value => typeof value !== "number")) throw new Error("Completion metrics were not privacy-safe counters");
 
   const toggle = page.getByRole("checkbox", { name: "Complete" });
-  await page.locator(".completion-switch").click();
+  await page.getByTitle("Skill-guided writing completion", { exact: true }).click();
   if (await toggle.isChecked()) throw new Error("Completion toggle did not switch off");
   const beforeDisabledEdit = completionRequests;
   const disabledValue = acceptedContent;
@@ -942,8 +936,7 @@ async (page) => {
   await page.unroute("**/api/projects/*/completions");
 }'
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   const openStarted = Date.now();
   await page.locator("span[title=\"large-notes.md\"]").click();
   const editor = page.getByRole("textbox", { name: "Source editor for large-notes.md" });
@@ -957,8 +950,7 @@ async (page) => {
 }
 '
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   await page.locator("span[title=\"main.tex\"]").click();
   const editor = page.getByRole("textbox", { name: "Source editor for main.tex" });
   await editor.waitFor();
@@ -1019,12 +1011,11 @@ async (page) => {
   await page.keyboard.insertText("\\documentclass{article}\n\\begin{document}\nCompilation repaired.\n\\end{document}");
   await page.getByText("Saved", { exact: true }).waitFor();
   await page.locator(".compile-strip--success").waitFor({ timeout: 30000 });
-  if (await page.locator(".react-pdf__Page__canvas").count() < 1) throw new Error("Automatic retry after a failed compile did not produce a PDF");
+  await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 30000 });
 }'
 run_accessibility
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 1280, height: 800 },
@@ -1036,8 +1027,7 @@ async (page) => {
   }
 }'
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   const errors = [];
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   await page.reload();
@@ -1045,8 +1035,7 @@ async (page) => {
   if (errors.length) throw new Error(errors.join("\n"));
 }'
 
-run_code '
-async (page) => {
+run_code 'async (page) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const origin = page.url().replace(/\/projects(?:\/.*)?$/, "");
   await page.goto(origin + "/projects");

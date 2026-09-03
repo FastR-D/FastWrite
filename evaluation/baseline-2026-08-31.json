@@ -1,0 +1,22 @@
+{
+  "generatedAt": "2026-08-31T08:55:20.423Z",
+  "environment": "manifest-driven latexmk/pandoc builds, explicit engines, 90 second per-project limit",
+  "corpusSize": 10,
+  "evaluated": 10,
+  "compileSuccessRate": 1,
+  "compileAvailable": 6,
+  "compileUnavailable": 4,
+  "meanClaimRelocationStability": 0.8480813637366864,
+  "projects": [
+    { "id": "gregorio", "files": 33, "findings": 1529, "blockingFindings": 950, "compileSuccess": true, "claimRelocationStability": 0.96 },
+    { "id": "cvpr-author-kit", "files": 11, "findings": 26, "blockingFindings": 0, "compileSuccess": true, "claimRelocationStability": 0.8817891373801917 },
+    { "id": "acmart", "files": 4, "findings": 175, "blockingFindings": 123, "compileSuccess": "unavailable", "reason": "requires LaTeX 2023+, runner detected TeX Live 2022", "claimRelocationStability": 0.9477124183006536 },
+    { "id": "latex2e", "files": 153, "findings": 2318, "blockingFindings": 722, "compileSuccess": true, "claimRelocationStability": 0.9 },
+    { "id": "awesome-cv", "files": 22, "findings": 7, "blockingFindings": 0, "compileSuccess": "unavailable", "reason": "missing TeX dependency fontawesome6.sty", "claimRelocationStability": 0.5604395604395604 },
+    { "id": "rticles", "files": 105, "findings": 3932, "blockingFindings": 3710, "compileSuccess": "unavailable", "reason": "missing Rscript/rmarkdown toolchain", "claimRelocationStability": 0.878 },
+    { "id": "pandoc", "files": 1163, "findings": 1499, "blockingFindings": 233, "compileSuccess": true, "claimRelocationStability": 0.87 },
+    { "id": "kaobook", "files": 31, "findings": 83, "blockingFindings": 0, "compileSuccess": true, "claimRelocationStability": 0.89 },
+    { "id": "tufte-latex", "files": 5, "findings": 16, "blockingFindings": 1, "compileSuccess": true, "claimRelocationStability": 0.7648725212464589 },
+    { "id": "biblatex", "files": 60, "findings": 315, "blockingFindings": 84, "compileSuccess": "unavailable", "reason": "missing JuliaMono-Regular font", "claimRelocationStability": 0.828 }
+  ]
+}

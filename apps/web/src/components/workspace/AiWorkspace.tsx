@@ -288,7 +288,7 @@ export function AiWorkspace({ project, selection, sectionSelection, height, full
           <small>Each reply refines the current candidate. The file changes only after Accept.</small>
         </form>
       </div>
-      <div hidden={activeTab !== "agent"} className="agent-workspace-slot"><AgentTaskWorkspace open={activeTab === "agent"} project={project} seed={agentSeed} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onAccepted={onFileChanged} /></div>
+      <div hidden={activeTab !== "agent"} className="agent-workspace-slot"><AgentTaskWorkspace open={activeTab === "agent"} project={project} seed={agentSeed} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onAccepted={onFileChanged} onNavigate={onNavigate} /></div>
       {fullscreen ? <div className="ai-workspace__width-handle" role="separator" aria-label="Resize maximized AI workspace" aria-orientation="vertical" aria-valuemin={Math.min(560, window.innerWidth)} aria-valuemax={window.innerWidth} aria-valuenow={Math.min(fullscreenWidth, window.innerWidth)} tabIndex={0} onPointerDown={startWidthResize} onKeyDown={(event) => {
         if (event.key === "ArrowLeft") { event.preventDefault(); updateFullscreenWidth(fullscreenWidth - 40); }
         else if (event.key === "ArrowRight") { event.preventDefault(); updateFullscreenWidth(fullscreenWidth + 40); }

@@ -1,6 +1,5 @@
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
-import topLevelAwait from "vite-plugin-top-level-await";
 import wasm from "vite-plugin-wasm";
 
 function siglumStaticHeaders(): Plugin {
@@ -12,7 +11,6 @@ function siglumStaticHeaders(): Plugin {
           response.setHeader("Cache-Control", "public, max-age=3600");
         }
         if (request.url?.startsWith("/bundles/") && request.url.endsWith(".data.gz")) {
-          // Siglum receives and decompresses these bytes itself.
           response.setHeader("Content-Type", "application/octet-stream");
           response.setHeader("Content-Encoding", "identity");
         }
@@ -27,7 +25,7 @@ export default defineConfig(({ mode }) => {
   const webPort = Number.parseInt(process.env.FASTWRITE_WEB_PORT ?? environment.FASTWRITE_WEB_PORT ?? "3002", 10);
   const apiOrigin = process.env.FASTWRITE_API_ORIGIN ?? environment.FASTWRITE_API_ORIGIN ?? `http://localhost:${process.env.FASTWRITE_PORT ?? environment.FASTWRITE_PORT ?? "3003"}`;
   return {
-    plugins: [siglumStaticHeaders(), react(), wasm(), topLevelAwait()],
+    plugins: [siglumStaticHeaders(), react(), wasm()],
     server: {
       host: "127.0.0.1",
       port: webPort,
