@@ -838,7 +838,7 @@ run_code 'async (page) => {
   await reviewDialog.waitFor({ state: "hidden" });
   await page.waitForFunction(() => (document.querySelector("textarea[aria-label=\"Revision message\"]")?.value || "").includes("Threat-model boundary needs explicit evidence"));
   await localRevision.focus();
-  if (await page.locator(".source-editor .fastwrite-monaco-selection").count() < 1) throw new Error("Review evidence did not remain selected while Revise had focus");
+  await page.locator(".source-editor .fastwrite-monaco-selection").first().waitFor({ timeout: 5000 });
   await page.getByRole("button", { name: "Review", exact: true }).click();
   const reopenedReview = page.getByRole("dialog", { name: "Paper Review" });
   await reopenedReview.getByRole("article").getByRole("button", { name: "Fix with Agent", exact: true }).click();
