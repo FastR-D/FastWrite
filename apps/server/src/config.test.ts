@@ -28,7 +28,8 @@ describe("configuredHarness", () => {
   test("normalizes supported modes and falls back safely", () => {
     expect(configuredHarness(" CODEX ")).toBe("codex");
     expect(configuredHarness("claude")).toBe("claude");
-    expect(configuredHarness("unsupported")).toBe("legacy");
-    expect(configuredHarness()).toBe("legacy");
+    expect(configuredHarness("unsupported")).toBe("codex");
+    expect(configuredHarness()).toBe("codex");
+    expect(configuredHarness(" ")).toBe("codex");
   });
 });

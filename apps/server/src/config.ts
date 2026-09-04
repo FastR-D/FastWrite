@@ -61,7 +61,7 @@ export function agentProviderConfigurations(environment: NodeJS.ProcessEnv = pro
 
 export function configuredHarness(value?: string): "claude" | "codex" | "legacy" {
   const normalized = value?.trim().toLowerCase();
-  return normalized === "claude" || normalized === "codex" || normalized === "legacy" ? normalized : "legacy";
+  return normalized === "claude" || normalized === "codex" || normalized === "legacy" ? normalized : "codex";
 }
 
 export const config = {
