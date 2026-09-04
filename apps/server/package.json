@@ -16,7 +16,8 @@
     "@fastwrite/harness-claude": "workspace:*",
     "@fastwrite/shared": "workspace:*",
     "fflate": "^0.8.2",
-    "openai": "^7.3.0"
+    "openai": "^7.3.0",
+    "pdfjs-dist": "^5.4.296"
   },
   "devDependencies": {
     "@types/bun": "latest",

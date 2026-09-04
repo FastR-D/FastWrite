@@ -1,8 +1,8 @@
 # FastWrite 后续方向与实施计划
 
-> 整理日期：2026-08-31  
-> 基线：结合 `docs/3. FastWrite.md`、当前代码、现有设计文档和公开资料整理。  
-> 当前验证：`bun test` 137 项通过；`bun run writing:eval` 12/12 通过，clean false positive 为 0；`bun run typecheck` 通过。
+> 整理日期：2026-08-31
+> 基线：结合 `docs/3. FastWrite.md`、当前代码、现有设计文档和公开资料整理。
+> 当前验证：`bun test` 150 项通过；`bun run writing:eval` 12/12 通过，clean false positive 为 0；`bun run typecheck` 通过。
 
 ## 1. 总体判断
 

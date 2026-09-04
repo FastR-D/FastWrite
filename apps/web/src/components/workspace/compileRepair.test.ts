@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { compileRepairObjective, compileRepairPath, compilerLogExcerpt, shouldAutoCompile, type CompileFailureContext } from "./compileRepair";
 
 const failure: CompileFailureContext = {
-  engine: "server",
+  engine: "browser",
   mainDocument: "main.tex",
   summary: "Compilation failed",
   diagnostics: [
@@ -16,7 +16,7 @@ describe("compile repair requests", () => {
   test("build a scoped revise objective from compiler diagnostics", () => {
     const objective = compileRepairObjective(failure);
     expect(objective.startsWith("/revise ")).toBe(true);
-    expect(objective).toContain("Local LaTeX");
+    expect(objective).toContain("Browser WASM");
     expect(objective).toContain("Main document: main.tex");
     expect(objective).toContain("sections/results.tex:42");
     expect(objective).toContain("Undefined control sequence");

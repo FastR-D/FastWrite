@@ -41,7 +41,7 @@ import type {
   TargetVenue,
   WorkspaceTreeNode
   ,AgentWireApi
-  ,ResearchWork, ResearchRun, ProjectResearchWork, PaperClaim, SourceEvidence
+  ,ResearchWork, ResearchRun, ProjectResearchWork, ProjectResearchWorkDetails, PaperClaim, SourceEvidence, FastReadBundleReceipt, ClaimEvidenceLink
   ,AlignmentFinding
 } from "@fastwrite/shared";
 
@@ -213,21 +213,27 @@ export const api = {
     confirm: (projectId: string, runId: string) => request<ResearchRun>(`/api/projects/${projectId}/research-runs/${runId}/confirm`, { method: "POST" }),
     updatePlan: (projectId: string, runId: string, queryPlan: { steps: string[]; rationale?: string }) => request<ResearchRun>(`/api/projects/${projectId}/research-runs/${runId}`, jsonInit("PATCH", queryPlan)),
     cancel: (projectId: string, runId: string) => request<ResearchRun>(`/api/projects/${projectId}/research-runs/${runId}/cancel`, { method: "POST" }),
-    works: (projectId: string, signal?: AbortSignal) => request<Array<ResearchWork & { project: ProjectResearchWork }>>(`/api/projects/${projectId}/research-works`, signal ? { signal } : undefined),
+    works: (projectId: string, signal?: AbortSignal) => request<ProjectResearchWorkDetails[]>(`/api/projects/${projectId}/research-works`, signal ? { signal } : undefined),
+    fastReadBundles: (projectId: string, signal?: AbortSignal) => request<FastReadBundleReceipt[]>(`/api/projects/${projectId}/fastread-bundles`, signal ? { signal } : undefined),
+    importFastReadBundles: (projectId: string, manifestPath?: string) => request<FastReadBundleReceipt[]>(`/api/projects/${projectId}/fastread-bundles/import`, jsonInit("POST", manifestPath ? { manifestPath } : {})),
     import: (projectId: string, body: { title: string; authors?: string[]; year?: number; venue?: string; doi?: string; arxiv?: string; citationKey?: string }) => request<ResearchWork>(`/api/projects/${projectId}/research-works/import`, jsonInit("POST", body)),
     approve: (projectId: string, workId: string, body: { status?: "candidate" | "saved" | "rejected"; citationKey?: string }) => request<ProjectResearchWork>(`/api/projects/${projectId}/research-works/${workId}`, jsonInit("PATCH", body)),
     verifyMetadata: (projectId: string, workId: string) => request<ResearchWork>(`/api/projects/${projectId}/research-works/${workId}/verify-metadata`, { method: "POST" }),
-    citationContext: (projectId: string, key: string) => request<{ key: string; contexts: Array<{ path: string; line: number; excerpt: string }> }>(`/api/projects/${projectId}/research-citations/${encodeURIComponent(key)}`),
+    citationContext: (projectId: string, key: string) => request<{ key: string; contexts: Array<{ path: string; line: number; excerpt: string }>; bibliography?: { path: string; line: number; entry: string } }>(`/api/projects/${projectId}/research-citations/${encodeURIComponent(key)}`),
     bibtexChange: (projectId: string, workId: string, targetBibPath: string) => request<ChangeSet>(`/api/projects/${projectId}/research-works/${workId}/bibtex-changes`, jsonInit("POST", { targetBibPath }))
     ,pdfEvidence: (projectId: string, workId: string, pdfBase64: string) => request<SourceEvidence[]>(`/api/projects/${projectId}/research-works/${workId}/pdf-evidence`, jsonInit("POST", { pdfBase64, authorized: true }))
   },
   claims: {
     scan: (projectId: string) => request<PaperClaim[]>(`/api/projects/${projectId}/claim-scans`, { method: "POST" }),
     list: (projectId: string) => request<PaperClaim[]>(`/api/projects/${projectId}/claims`),
-    links: (projectId: string, claimId: string) => request<unknown[]>(`/api/projects/${projectId}/claims/${claimId}/links`),
+    links: (projectId: string, claimId?: string) => request<ClaimEvidenceLink[]>(claimId ? `/api/projects/${projectId}/claims/${claimId}/links` : `/api/projects/${projectId}/claim-links`),
+    linkEvidence: (projectId: string, claimId: string, evidenceId: string, citationKey?: string) => request<ClaimEvidenceLink>(`/api/projects/${projectId}/claims/${claimId}/links`, jsonInit("POST", { kind: "literature", evidenceId, ...(citationKey ? { citationKey } : {}) })),
+    linkWaiver: (projectId: string, claimId: string, reason: string) => request<ClaimEvidenceLink>(`/api/projects/${projectId}/claims/${claimId}/links`, jsonInit("POST", { kind: "review-waiver", reason, approvedByUser: true })),
+    unlinkEvidence: (projectId: string, claimId: string, linkId: string) => request<void>(`/api/projects/${projectId}/claims/${claimId}/links/${linkId}`, { method: "DELETE" }),
     reanchor: (projectId: string, claimId: string) => request<PaperClaim>(`/api/projects/${projectId}/claims/${claimId}/reanchor`, { method: "POST" }),
-    update: (projectId: string, claimId: string, body: { reviewStatus?: PaperClaim["reviewStatus"]; anchorStatus?: PaperClaim["anchorStatus"] }) => request<PaperClaim>(`/api/projects/${projectId}/claims/${claimId}`, jsonInit("PATCH", body)),
+    update: (projectId: string, claimId: string, body: { reviewStatus?: PaperClaim["reviewStatus"] }) => request<PaperClaim>(`/api/projects/${projectId}/claims/${claimId}`, jsonInit("PATCH", body)),
     evidence: (projectId: string) => request<SourceEvidence[]>(`/api/projects/${projectId}/evidence`),
+    updateEvidence: (projectId: string, evidenceId: string, status: SourceEvidence["status"]) => request<SourceEvidence>(`/api/projects/${projectId}/evidence/${evidenceId}`, jsonInit("PATCH", { status })),
     addEvidence: (projectId: string, body: { workId: string; content: string; kind?: string; locator: string; locatorType?: string; origin?: string; representation?: string }) => request<SourceEvidence>(`/api/projects/${projectId}/evidence`, jsonInit("POST", body)),
     writingChecks: (projectId: string, signal?: AbortSignal) => request<{ projectId: string; projectVersion: number; findings: HunkFinding[] }>(`/api/projects/${projectId}/writing-checks`, { method: "POST", ...(signal ? { signal } : {}) }),
     argumentGraph: (projectId: string, signal?: AbortSignal) => request<{ projectId: string; relations: ClaimRelation[] }>(`/api/projects/${projectId}/argument-graph`, signal ? { signal } : undefined),

@@ -695,7 +695,28 @@ export interface ProjectResearchWork {
   updatedAt: string;
 }
 
+export interface FastReadBundleReceipt {
+  id: string;
+  projectId: string;
+  bundleId: string;
+  manifestPath: string;
+  status: "pending" | "imported" | "failed";
+  workIds: string[];
+  evidenceIds: string[];
+  error?: string;
+  importedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ResearchRunStatus = "planned" | "running" | "completed" | "cancelled" | "failed";
+export interface ResearchProviderResult {
+  provider: "crossref" | "openalex" | "semantic-scholar" | "arxiv" | "cache";
+  status: "completed" | "failed";
+  resultCount: number;
+  error?: string;
+}
+
 export interface ResearchRun {
   id: string;
   projectId: string;
@@ -703,6 +724,7 @@ export interface ResearchRun {
   status: ResearchRunStatus;
   provider?: string;
   queryPlan?: { steps: string[]; rationale?: string };
+  providers?: ResearchProviderResult[];
   workIds: string[];
   error?: string;
   createdAt: string;
@@ -718,9 +740,15 @@ export interface ResearchIdentifier {
 export interface MetadataObservation {
   id: string;
   workId: string;
-  provider: "crossref" | "openalex" | "semantic-scholar" | "arxiv" | "publisher" | "user";
+  provider: "crossref" | "openalex" | "semantic-scholar" | "arxiv" | "publisher" | "fastread" | "user";
   fields: Record<string, string | number | string[]>;
   fetchedAt: string;
+}
+
+export interface ProjectResearchWorkDetails extends ResearchWork {
+  project: ProjectResearchWork;
+  identifiers: ResearchIdentifier[];
+  metadataObservations: MetadataObservation[];
 }
 
 export type ResearchEvidenceKind = "background" | "claim" | "method" | "result" | "limitation" | "quote";
@@ -735,6 +763,10 @@ export interface SourceEvidence {
   content: string;
   locatorType: "page" | "section" | "paragraph" | "abstract";
   locator: string;
+  sourceTaskId?: string;
+  sourceHash?: string;
+  sourceNote?: string;
+  fastReadBundleId?: string;
   createdByRunId?: string;
   approvedAt?: string;
   createdAt: string;
