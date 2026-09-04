@@ -17,6 +17,10 @@
       "name": "@fastwrite/server",
       "version": "0.1.0",
       "dependencies": {
+        "@fastwrite/harness-claude": "workspace:*",
+        "@fastwrite/harness-codex": "workspace:*",
+        "@fastwrite/harness-core": "workspace:*",
+        "@fastwrite/harness-protocol": "workspace:*",
         "@fastwrite/shared": "workspace:*",
         "fflate": "^0.8.2",
         "openai": "^7.3.0",
@@ -49,6 +53,42 @@
         "typescript": "^5.9.3",
         "vite": "^7.3.1",
         "vite-plugin-wasm": "^3.5.0",
+      },
+    },
+    "packages/harness-claude": {
+      "name": "@fastwrite/harness-claude",
+      "version": "0.1.0",
+      "dependencies": {
+        "@fastwrite/harness-core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.9.3",
+      },
+    },
+    "packages/harness-codex": {
+      "name": "@fastwrite/harness-codex",
+      "version": "0.1.0",
+      "dependencies": {
+        "@fastwrite/harness-core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.9.3",
+      },
+    },
+    "packages/harness-core": {
+      "name": "@fastwrite/harness-core",
+      "version": "0.1.0",
+      "devDependencies": {
+        "typescript": "^5.9.3",
+      },
+    },
+    "packages/harness-protocol": {
+      "name": "@fastwrite/harness-protocol",
+      "version": "0.1.0",
+      "dependencies": {
+        "@fastwrite/harness-core": "workspace:*",
       },
     },
     "packages/shared": {
@@ -149,6 +189,14 @@
     "@esbuild/win32-ia32": ["@esbuild/win32-ia32@0.28.1", "https://registry.npmmirror.com/@esbuild/win32-ia32/-/win32-ia32-0.28.1.tgz", { "os": "win32", "cpu": "ia32" }, "sha512-zvb/mB2bSCoJOpoCBgYKKpX6YM6mJBlBUVUtVj41DlZJVEB6/0CKlRYxP5wWl1C1ILiCoAU5wZZ4q1P3qeS6Eg=="],
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.28.1", "https://registry.npmmirror.com/@esbuild/win32-x64/-/win32-x64-0.28.1.tgz", { "os": "win32", "cpu": "x64" }, "sha512-bm4Mowrv+GXMlpWX++EcXw/iLyd1o3+bJkC2DkWXYVvgZCqD/bSj9ctZeAMC3cIxgjRVR2Dufaiu4YPxr5gW1A=="],
+
+    "@fastwrite/harness-claude": ["@fastwrite/harness-claude@workspace:packages/harness-claude"],
+
+    "@fastwrite/harness-codex": ["@fastwrite/harness-codex@workspace:packages/harness-codex"],
+
+    "@fastwrite/harness-core": ["@fastwrite/harness-core@workspace:packages/harness-core"],
+
+    "@fastwrite/harness-protocol": ["@fastwrite/harness-protocol@workspace:packages/harness-protocol"],
 
     "@fastwrite/server": ["@fastwrite/server@workspace:apps/server"],
 
@@ -387,5 +435,17 @@
     "yallist": ["yallist@3.1.1", "https://registry.npmmirror.com/yallist/-/yallist-3.1.1.tgz", {}, "sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g=="],
 
     "yjs": ["yjs@13.6.32", "https://registry.npmmirror.com/yjs/-/yjs-13.6.32.tgz", { "dependencies": { "lib0": "^0.2.99" } }, "sha512-lfiJIIC4Xayt5ItynE407ehlE03pCjeOc4hkR4yxxvvNJ4kuiN25B0g+Qp8XagYz361LLL7DCzR5bvFJ81QKtQ=="],
+
+    "@fastwrite/harness-claude/@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
+
+    "@fastwrite/harness-codex/@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
+
+    "@fastwrite/server/@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
+
+    "@fastwrite/harness-claude/@types/bun/bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
+
+    "@fastwrite/harness-codex/@types/bun/bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
+
+    "@fastwrite/server/@types/bun/bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
   }
 }
