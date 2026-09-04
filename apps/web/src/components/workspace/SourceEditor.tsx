@@ -517,11 +517,11 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
         <div className="editor-toolbar__file"><span>{document.file.name}</span><code>{document.file.path}</code></div>
         <div className="editor-toolbar__actions">
           <label className={`completion-switch${completionEnabled ? " is-on" : ""}`} title={completionError || "Skill-guided writing completion"}>
-            <input type="checkbox" checked={completionEnabled} onChange={(event) => changeCompletionEnabled(event.target.checked)} />
+            <input id="completion-enabled" name="completion-enabled" type="checkbox" checked={completionEnabled} onChange={(event) => changeCompletionEnabled(event.target.checked)} />
             {completionLoading ? <LoaderCircle className="spin" /> : <Sparkles />}
             <span>Complete</span>
           </label>
-          <label className={`completion-switch${collaborationEnabled ? " is-on" : ""}`} title="Synchronize this file through Yjs collaboration"><input type="checkbox" checked={collaborationEnabled} onChange={(event) => { setCollaborationEnabled(event.target.checked); localStorage.setItem("fastwrite.collaboration.enabled", String(event.target.checked)); }} /><span>Collaborate{collaborators.length ? ` · ${collaborators.length}` : ""}</span></label>
+        <label className={`completion-switch${collaborationEnabled ? " is-on" : ""}`} title="Synchronize this file through Yjs collaboration"><input id="collaboration-enabled" name="collaboration-enabled" type="checkbox" checked={collaborationEnabled} onChange={(event) => { setCollaborationEnabled(event.target.checked); localStorage.setItem("fastwrite.collaboration.enabled", String(event.target.checked)); }} /><span>Collaborate{collaborators.length ? ` · ${collaborators.length}` : ""}</span></label>
           {acceptedCompletion ? <button className="editor-undo-completion" type="button" onClick={undoCompletion}><Undo2 /> Undo completion</button> : null}
           <SaveIndicator status={status} />
         </div>

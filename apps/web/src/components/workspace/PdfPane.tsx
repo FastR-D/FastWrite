@@ -249,7 +249,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
       <header className="pdf-toolbar">
         <div className="pdf-toolbar__title"><FileOutput /><span>PDF Preview</span></div>
         <div className="pdf-toolbar__controls" aria-label="PDF controls">
-          {pageCount > 0 ? <><input className="pdf-page-input" aria-label="Current PDF page" value={currentPage} onChange={(event) => scrollToPage(Number(event.target.value))} /><span className="pdf-page-count">/ {pageCount}</span><span className="toolbar-separator" /></> : null}
+          {pageCount > 0 ? <><input id="pdf-current-page" name="pdf-current-page" className="pdf-page-input" aria-label="Current PDF page" value={currentPage} onChange={(event) => scrollToPage(Number(event.target.value))} /><span className="pdf-page-count">/ {pageCount}</span><span className="toolbar-separator" /></> : null}
           <IconButton label="Zoom out" icon={<ZoomOut />} disabled={!pdfUrl || scale <= MIN_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.max(MIN_PDF_SCALE, value - .1)); }} />
           <span className="pdf-toolbar__zoom">{Math.round(scale * 100)}%</span>
           <IconButton label="Zoom in" icon={<ZoomIn />} disabled={!pdfUrl || scale >= MAX_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.min(MAX_PDF_SCALE, value + .1)); }} />
@@ -265,7 +265,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
         <CompileStatusIcon state={state} />
         <span>{progress}</span>
         {failure ? <button className="compile-fix-agent" onClick={() => onFixWithAgent(failure)}><Wrench />Fix with Agent</button> : null}
-        <label className="compile-engine"><span className="visually-hidden">Compilation engine</span><select value={compileEngine} disabled={isRunning} onChange={(event) => setCompileEngine(event.target.value as CompileEngine)}><option value="browser">Browser WASM</option><option value="server">Local LaTeX</option></select></label>
+        <label className="compile-engine"><span className="visually-hidden">Compilation engine</span><select id="compile-engine" name="compile-engine" value={compileEngine} disabled={isRunning} onChange={(event) => setCompileEngine(event.target.value as CompileEngine)}><option value="browser">Browser WASM</option><option value="server">Local LaTeX</option></select></label>
         {isRunning ? <button onClick={cancel}>Cancel</button> : <button onClick={() => void compile()}>{pdfUrl ? "Recompile" : "Compile"}</button>}
         {compileEngine === "browser" && state === "error" ? <button onClick={() => void repairAndRetry()}>Repair cache</button> : null}
         {log ? <button onClick={() => setDiagnosticsOpen((value) => !value)}>{diagnosticLabel}</button> : null}
