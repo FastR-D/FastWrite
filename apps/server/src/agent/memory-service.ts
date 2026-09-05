@@ -30,7 +30,7 @@ function memoryTextPath(path: string): boolean { return path !== MEMORY_FILE && 
 
 export class MemoryService {
   constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider | AgentGateway) {}
-  private get agent(): AgentProvider | undefined { return this.provider && "provider" in this.provider ? this.provider.provider : this.provider; }
+  private get agent(): AgentProvider | undefined { return this.provider as AgentProvider | undefined; }
 
   latest(projectId: string): PaperMemory | null {
     const stored = this.latestStored(projectId);
@@ -357,10 +357,10 @@ export class MemoryService {
   }
 
   private validateItems(output: MemoryAgentOutput, documents: Map<string, MemoryDocument>, timestamp: string): ProposedItem[] {
-    return output.items.flatMap((item) => {
-      const label = item.label.trim();
-      const content = cleanContent(item.content, MAX_ITEM_CONTENT);
-      const sources = item.sources.flatMap((source) => sourceFor(source.path, source.excerpt, source.section, documents));
+    return (Array.isArray(output?.items) ? output.items : []).filter(Boolean).flatMap((item) => {
+      const label = String(item.label ?? "").trim();
+      const content = cleanContent(String(item.content ?? ""), MAX_ITEM_CONTENT);
+      const sources = (Array.isArray(item.sources) ? item.sources : []).filter(Boolean).flatMap((source) => sourceFor(String(source.path ?? ""), String(source.excerpt ?? ""), source.section, documents));
       if (!label || !content || !sources.length) return [];
       return [{ category: item.category, label, content, sources, key: itemKey(item.category, label) }];
     });
@@ -370,7 +370,7 @@ export class MemoryService {
     const flatOutline = outlineItems(outline).map(({ path, title, line }) => ({ path, title, line })).slice(0, 200);
     const hierarchyFacts = facts.slice(0, MAX_HIERARCHY_FACTS).map((fact) => ({ category: fact.category, label: fact.label, content: fact.content, sources: fact.sources.map((source) => ({ path: source.path, ...(source.section ? { section: source.section } : {}) })) }));
     if (this.agent?.summarizeMemory) {
-      return this.agent.summarizeMemory({ outline: flatOutline, facts: hierarchyFacts, skill, skillInstructions, venueInstructions });
+      return this.agent.summarizeMemory({ outline: flatOutline, facts: hierarchyFacts, skill, skillInstructions, venueInstructions }).then((result) => ({ overview: String(result?.overview ?? ""), sections: Array.isArray(result?.sections) ? result.sections.filter(Boolean).map((section) => ({ path: String(section.path ?? ""), title: String(section.title ?? ""), content: String(section.content ?? "") })) : [] }));
     }
     return { overview: fallbackOverview(facts), sections: flatOutline.map((section) => ({ path: section.path, title: section.title, content: fallbackSection(section.path, facts) })) };
   }

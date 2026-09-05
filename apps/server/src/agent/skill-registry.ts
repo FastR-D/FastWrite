@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { WRITING_PROFILES, type PaperSkillRef, type PublicationTarget, type PublicationVenueOption, type ResearchDomainId } from "@fastwrite/shared";
+import { WRITING_PROFILES, type AgentTaskIntent, type AgentTaskSkillDescriptor, type PaperSkillRef, type PublicationTarget, type PublicationVenueOption, type ResearchDomainId } from "@fastwrite/shared";
 import { templateForVenue } from "../templates/latex-template-service";
 
 export interface LoadedSkill {
@@ -27,6 +27,27 @@ export class SkillRegistry {
       const version = /^version:\s*([^\s]+)\s*$/m.exec(instructions)?.[1] ?? "unversioned";
       return { id, version, instructions };
     }));
+  }
+
+  async taskCatalog(): Promise<AgentTaskSkillDescriptor[]> {
+    const entries = await readdir(this.skillsDirectory, { withFileTypes: true });
+    const result: AgentTaskSkillDescriptor[] = [];
+    for (const entry of entries.filter((item) => item.isDirectory() && item.name.startsWith("task-"))) {
+      const content = await readFile(join(this.skillsDirectory, entry.name, "SKILL.md"), "utf8").catch(() => "");
+      const field = (name: string) => new RegExp(`^\\s*${name}:\\s*(.+)$`, "m").exec(content)?.[1]?.trim() ?? "";
+      const list = (name: string) => field(name).split(",").map((item) => item.trim()).filter(Boolean);
+      const intents = list("supportedIntents").filter((item): item is AgentTaskIntent => ["draft", "continue", "revise"].includes(item));
+      if (!intents.length) continue;
+      result.push({ id: entry.name.slice(5), version: field("version") || "1.0.0", description: field("description") || entry.name, supportedIntents: intents, allowedScope: ["project", "file", "section"].includes(field("allowedScope")) ? field("allowedScope") as AgentTaskSkillDescriptor["allowedScope"] : "project", requiredEvidence: list("requiredEvidence"), validationCommands: list("validationCommands"), riskLevel: ["low", "medium", "high"].includes(field("riskLevel")) ? field("riskLevel") as AgentTaskSkillDescriptor["riskLevel"] : "medium", allowNewFiles: field("allowNewFiles") === "true", requiresReview: field("requiresReview") !== "false" });
+    }
+    return result.sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  async loadTask(id: string): Promise<{ descriptor: AgentTaskSkillDescriptor; instructions: string }> {
+    const descriptor = (await this.taskCatalog()).find((item) => item.id === id);
+    if (!descriptor) throw new Error(`Unknown Agent task Skill '${id}'`);
+    const instructions = await readFile(join(this.skillsDirectory, `task-${id}`, "SKILL.md"), "utf8");
+    return { descriptor, instructions };
   }
 
   async load(skill: PaperSkillRef, target?: PublicationTarget): Promise<LoadedSkill> {

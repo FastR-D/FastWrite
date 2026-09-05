@@ -1,26 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import { agentProviderConfigurations, configuredHarness } from "./config";
 
-describe("agentProviderConfigurations", () => {
-  test("uses global settings unless a workflow overrides an individual field", () => {
+describe("harness configuration", () => {
+  test("uses one shared Harness configuration for every workflow", () => {
     const providers = agentProviderConfigurations({
-      OPENAI_API_KEY: "global-key",
-      OPENAI_API_BASE: "https://global.example/v1",
-      FASTWRITE_OPENAI_MODEL: "global-model",
-      FASTWRITE_OPENAI_WIRE_API: "responses",
-      FASTWRITE_COMPLETION_API_KEY: "completion-key",
-      FASTWRITE_COMPLETION_MODEL: "fast-model",
-      FASTWRITE_REVIEW_BASE_URL: "https://review.example/v1"
+      FASTWRITE_HARNESS_API_KEY: "harness-key",
+      FASTWRITE_HARNESS_BASE_URL: "https://global.example/v1",
+      FASTWRITE_HARNESS_MODEL: "harness-model",
+      FASTWRITE_HARNESS_WIRE_API: "responses"
     });
-    expect(providers.completion).toEqual({ apiKey: "completion-key", baseURL: "https://global.example/v1", model: "fast-model", wireAPI: "responses" });
-    expect(providers.review).toEqual({ apiKey: "global-key", baseURL: "https://review.example/v1", model: "global-model", wireAPI: "responses" });
-    expect(providers.memory).toEqual({ apiKey: "global-key", baseURL: "https://global.example/v1", model: "global-model", wireAPI: "responses" });
+    expect(providers.completion).toEqual({ apiKey: "harness-key", baseURL: "https://global.example/v1", model: "harness-model", wireAPI: "responses" });
+    expect(providers.review).toEqual(providers.completion);
+    expect(providers.memory).toEqual(providers.completion);
   });
 
-  test("supports explicit OpenAI-compatible workflow aliases without a global provider", () => {
-    const providers = agentProviderConfigurations({ FASTWRITE_MEMORY_OPENAI_API_KEY: "memory-key", FASTWRITE_MEMORY_OPENAI_BASE_URL: "https://memory.example/v1", FASTWRITE_MEMORY_OPENAI_MODEL: "memory-model", FASTWRITE_MEMORY_OPENAI_WIRE_API: "chat-completions" });
-    expect(providers.memory).toEqual({ apiKey: "memory-key", baseURL: "https://memory.example/v1", model: "memory-model", wireAPI: "chat" });
-    expect(providers.agent.apiKey).toBeUndefined();
+  test("does not read legacy OpenAI workflow aliases", () => {
+    const providers = agentProviderConfigurations({ FASTWRITE_MEMORY_OPENAI_API_KEY: "memory-key" });
+    expect(providers.memory.apiKey).toBeUndefined();
   });
 });
 

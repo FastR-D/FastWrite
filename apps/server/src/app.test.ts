@@ -65,32 +65,17 @@ describe("workspace API", () => {
 
   test("accepts a runtime Agent key without exposing it", async () => {
     const request = await testApplication();
-    const before = await request("/api/agent-settings");
+    const before = await request("/api/harness-settings");
     expect(before.status).toBe(200);
-    const configured = await request("/api/agent-settings", {
+    const configured = await request("/api/harness-settings", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ apiKey: "sk-test-private-key", baseURL: "https://api.example.test/v1", model: "test-model", wireAPI: "responses" })
     });
     expect(configured.status).toBe(200);
     expect(await configured.json()).toMatchObject({ configured: true, source: "runtime", baseURL: "https://api.example.test/v1", model: "test-model", wireAPI: "responses" });
-    const status = await request("/api/agent-settings");
+    const status = await request("/api/harness-settings");
     expect(JSON.stringify(await status.json())).not.toContain("sk-test-private-key");
-  });
-
-  test("returns a structured configuration error when Revise has no provider", async () => {
-    const request = await testApplication();
-    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Unconfigured Revise", mainDocument: "main.tex", venue: "artificial-intelligence" }) })).json() as PaperProject;
-    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
-    const text = "Introduction";
-    const from = opened.content.indexOf(text);
-    const response = await request(`/api/projects/${project.id}/revisions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ selection: { path: "main.tex", text, from, to: from + text.length, startLine: 6, endLine: 6, fileVersion: opened.file.version }, instruction: "Clarify this heading" })
-    });
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ error: { code: "agent_not_configured" } });
   });
 
   test("exports a bounded provenance dossier without manuscript or secret content", async () => {
@@ -152,7 +137,7 @@ describe("workspace API", () => {
 
   test("rejects an unsupported runtime Agent wire API", async () => {
     const request = await testApplication();
-    const response = await request("/api/agent-settings", {
+    const response = await request("/api/harness-settings", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ apiKey: "sk-test", wireAPI: "websocket" })

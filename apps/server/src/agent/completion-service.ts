@@ -39,7 +39,7 @@ export class CompletionService {
     private readonly memories: MemoryService
   ) {}
 
-  private get agent(): AgentProvider | undefined { return this.provider && "provider" in this.provider ? this.provider.provider : this.provider; }
+  private get agent(): AgentProvider | undefined { return this.provider as AgentProvider | undefined; }
 
   async suggest(projectId: string, request: CompletionRequest): Promise<CompletionResponse> {
     if (!this.agent?.complete) throw new ApiError(503, "completion_not_configured", "Configure a Harness to use writing completion");

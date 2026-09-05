@@ -27,6 +27,7 @@ import type {
   AgentRun,
   AgentTaskPlanResponse,
   AgentTaskRequest,
+  AgentTaskSkillDescriptor,
   IssueResolution,
   CompileRecord,
   CompletionRequest,
@@ -83,7 +84,7 @@ export const api = {
     sendMessage: (kind: string, sessionId: string, body: { cwd: string; content: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }, signal?: AbortSignal) => request<{ sessionId: string; events: unknown[] }>(`/api/harnesses/${encodeURIComponent(kind)}/sessions/${encodeURIComponent(sessionId)}/messages`, jsonInit("POST", body, signal)),
     list: (signal?: AbortSignal) => request<Array<{ status: { kind: string; state: string; message?: string }; capabilities: Record<string, boolean> }>>("/api/harnesses", signal ? { signal } : undefined),
     runs: (signal?: AbortSignal) => request<Array<{ id: string; status: string; session: { harness: string; sessionId: string; cwd: string }; events: unknown[]; createdAt: string; updatedAt: string }>>("/api/harness-runs", signal ? { signal } : undefined),
-    createRun: (body: { kind: "claude" | "codex" | "legacy"; sessionId: string; cwd: string; content: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }, signal?: AbortSignal) => request<{ events: unknown[] }>("/api/harness-runs", jsonInit("POST", body, signal)),
+    createRun: (body: { kind: "claude" | "codex"; sessionId: string; cwd: string; content: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }, signal?: AbortSignal) => request<{ events: unknown[] }>("/api/harness-runs", jsonInit("POST", body, signal)),
     getRun: (runId: string, signal?: AbortSignal) => request<{ id: string; status: string; events: unknown[] }>(`/api/harness-runs/${encodeURIComponent(runId)}`, signal ? { signal } : undefined),
     events: (runId: string, since = 0, limit = 2000, signal?: AbortSignal) => request<unknown[]>(`/api/harness-runs/${encodeURIComponent(runId)}/events?since=${since}&limit=${limit}`, signal ? { signal } : undefined),
     mcp: (signal?: AbortSignal) => request<Array<{ id: string; name: string; version: string; enabled: boolean; tools: Array<{ name: string; description: string }> }>>("/api/mcp", signal ? { signal } : undefined),
@@ -98,12 +99,13 @@ export const api = {
     comment: (token: string, body: { path: string; line?: number; author: string; body: string }) => request<{ id: string }>(`/api/shared/${encodeURIComponent(token)}/comments`, jsonInit("POST", body))
   },
   agentSettings: {
-    get: (signal?: AbortSignal) => request<{ configured: boolean; harness?: "legacy" | "claude" | "codex"; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/agent-settings", signal ? { signal } : undefined),
-    save: (body: { apiKey: string; baseURL?: string; model?: string; wireAPI: AgentWireApi }) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/agent-settings", jsonInit("PUT", body))
+    get: (signal?: AbortSignal) => request<{ configured: boolean; harness?: "claude" | "codex"; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/harness-settings", signal ? { signal } : undefined),
+    save: (body: { apiKey: string; baseURL?: string; model?: string; wireAPI: AgentWireApi }) => request<{ configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }>("/api/harness-settings", jsonInit("PUT", body))
   },
   venues: {
     list: (signal?: AbortSignal) => request<PublicationVenueOption[]>("/api/venues", signal ? { signal } : undefined)
   },
+  agentSkills: { list: (signal?: AbortSignal) => request<AgentTaskSkillDescriptor[]>("/api/agent-skills", signal ? { signal } : undefined) },
   projects: {
     list: (signal?: AbortSignal) => request<PaperProject[]>("/api/projects", signal ? { signal } : undefined),
     get: (id: string, signal?: AbortSignal) => request<PaperProject>(`/api/projects/${id}`, signal ? { signal } : undefined),

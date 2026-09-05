@@ -1,4 +1,4 @@
-export type HarnessKind = "claude" | "codex" | "legacy";
+export type HarnessKind = "claude" | "codex";
 export type HarnessRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 export interface HarnessCapabilities {
@@ -32,7 +32,7 @@ export type HarnessEvent =
   | { type: "run.failed"; runId: string; error: string }
   | { type: "run.cancelled"; runId: string };
 
-export interface SendMessageInput { session: SessionReference; content: string; skills?: SkillInvocation[]; signal?: AbortSignal }
+export interface SendMessageInput { session: SessionReference; content: string; model?: string; skills?: SkillInvocation[]; signal?: AbortSignal }
 export interface HarnessAdapter {
   readonly kind: HarnessKind;
   getStatus(): Promise<HarnessStatus>;

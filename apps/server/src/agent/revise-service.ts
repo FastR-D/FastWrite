@@ -69,7 +69,7 @@ export class ReviseService {
     private readonly memories?: MemoryService
   ) {}
 
-  private get agent(): AgentProvider | undefined { return this.provider && "provider" in this.provider ? this.provider.provider : this.provider; }
+  private get agent(): AgentProvider | undefined { return this.provider as AgentProvider | undefined; }
 
   async propose(projectId: string, request: ReviseRequest): Promise<ReviseResponse> {
     if (!this.agent) {

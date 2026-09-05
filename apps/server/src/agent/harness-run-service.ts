@@ -6,15 +6,16 @@ import { createHash } from "node:crypto";
 export class HarnessRunService {
   constructor(private readonly registry: HarnessRegistry, private readonly database: JsonDatabase, private readonly events: HarnessEventBus = harnessEventBus) {}
   list(): HarnessRun[] { return structuredClone(this.database.snapshot().harnessRuns); }
+  adapter(kind: "claude" | "codex") { return this.registry.get(kind); }
   get(runId: string): HarnessRun | undefined { const run = this.database.snapshot().harnessRuns.find((item) => item.id === runId); return run ? structuredClone(run) : undefined; }
-  async start(input: { kind: "claude" | "codex" | "legacy"; session: SessionReference; skills?: SkillInvocation[] }): Promise<string> {
+  async start(input: { kind: "claude" | "codex"; session: SessionReference; skills?: SkillInvocation[] }): Promise<string> {
     const runId = `run_${crypto.randomUUID()}`;
     const skills = (input.skills ?? []).map((skill) => ({ ...skill, digest: skill.digest ?? createHash("sha256").update(`${skill.id}:${skill.version}:${skill.path}`).digest("hex") }));
     const now = new Date().toISOString();
     await this.database.mutate((state) => state.harnessRuns.push({ id: runId, session: input.session, status: "queued", skills: structuredClone(skills), events: [], approvals: [], createdAt: now, updatedAt: now }));
     return runId;
   }
-  async *send(input: { kind: "claude" | "codex" | "legacy"; session: SessionReference; content: string; skills?: SkillInvocation[]; signal?: AbortSignal }): AsyncIterable<HarnessEvent> {
+  async *send(input: { kind: "claude" | "codex"; session: SessionReference; content: string; model?: string; skills?: SkillInvocation[]; signal?: AbortSignal }): AsyncIterable<HarnessEvent> {
     const adapter = this.registry.get(input.kind);
     if (!adapter) throw new Error(`Harness '${input.kind}' is unavailable`);
     let runId: string | undefined;
@@ -57,7 +58,7 @@ export class HarnessRunService {
   async resolveApproval(approvalId: string, decision: "approved" | "denied") {
     const approval = this.listApprovals().find((item) => item.id === approvalId);
     if (!approval) return undefined;
-    const adapter = this.registry.get((this.get(approval.runId)?.session.harness) ?? "legacy");
+    const adapter = this.registry.get(this.get(approval.runId)?.session.harness ?? "codex");
     if (adapter?.resolveApproval) await adapter.resolveApproval({ approvalId, decision });
     return this.decideApproval(approvalId, decision);
   }

@@ -325,7 +325,7 @@ export interface AgentRun {
 
 export interface AgentAuditEvent {
   id: string;
-  action: "context-read" | "context-search" | "plan-created" | "execution-started" | "generation-progress" | "changes-proposed" | "proposal-edited" | "hunk-edited" | "hunk-decision" | "review-finished" | "compile" | "rollback";
+  action: "context-read" | "context-search" | "skill-loaded" | "plan-created" | "execution-started" | "generation-progress" | "changes-proposed" | "proposal-edited" | "hunk-edited" | "hunk-decision" | "review-finished" | "compile" | "rollback";
   summary: string;
   paths?: string[];
   createdAt: string;
@@ -634,9 +634,25 @@ export interface AgentTaskRequest {
   harness?: "codex" | "claude" | "legacy";
   issueIds?: string[];
   intent?: AgentTaskIntent;
+  taskSkillIds?: string[];
+  skillOptions?: Record<string, string>;
+  validationMode?: "standard" | "strict";
 }
 
 export type AgentTaskIntent = "draft" | "continue" | "revise";
+
+export interface AgentTaskSkillDescriptor {
+  id: string;
+  version: string;
+  description: string;
+  supportedIntents: AgentTaskIntent[];
+  allowedScope: "project" | "file" | "section";
+  requiredEvidence: string[];
+  validationCommands: string[];
+  riskLevel: "low" | "medium" | "high";
+  allowNewFiles: boolean;
+  requiresReview: boolean;
+}
 
 export type AgentTaskStatus = "proposed" | "generating" | "waiting-approval" | "accepted" | "cancelled" | "failed";
 
@@ -646,6 +662,7 @@ export interface AgentTaskPlan {
   agentRunId: string;
   status: AgentTaskStatus;
   request: AgentTaskRequest;
+  taskSkills?: Array<{ id: string; version: string; digest: string }>;
   intent: AgentTaskIntent;
   steps: string[];
   affectedFiles: string[];

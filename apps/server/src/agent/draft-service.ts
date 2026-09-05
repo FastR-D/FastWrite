@@ -19,7 +19,7 @@ export class DraftService {
     private readonly provider?: AgentProvider | AgentGateway
   ) {}
 
-  private get agent(): AgentProvider | undefined { return this.provider && "provider" in this.provider ? this.provider.provider : this.provider; }
+  private get agent(): AgentProvider | undefined { return this.provider as AgentProvider | undefined; }
 
   async plan(projectId: string, request: DraftRequest, requestSignal?: AbortSignal): Promise<DraftPlanResponse> {
     if (!this.agent?.planDraft) throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable Draft Agent");

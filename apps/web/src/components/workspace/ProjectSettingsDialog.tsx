@@ -5,7 +5,7 @@ import { api } from "../../api/client";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
 import { PublicationTargetFields } from "../ui/PublicationTargetFields";
-import { agentSettingsSaveDecision, parseCodexProviderConfig, type AgentSettingsBaseline, type AgentSettingsDraft } from "./projectSettingsAgent";
+import { harnessSettingsSaveDecision, type HarnessSettingsBaseline, type HarnessSettingsDraft } from "./harnessSettings";
 
 interface ProjectSettingsDialogProps {
   open: boolean;
@@ -28,8 +28,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
   const [baseURL, setBaseURL] = useState("");
   const [model, setModel] = useState("");
   const [wireAPI, setWireAPI] = useState<AgentWireApi>("chat");
-  const [providerConfig, setProviderConfig] = useState("");
-  const [agentBaseline, setAgentBaseline] = useState<AgentSettingsBaseline>({ configured: null, baseURL: "", model: "", wireAPI: "chat" });
+  const [agentBaseline, setAgentBaseline] = useState<HarnessSettingsBaseline>({ configured: null, baseURL: "", model: "", wireAPI: "chat" });
   const [savingAgent, setSavingAgent] = useState(false);
   const [agentError, setAgentError] = useState("");
   const texFiles = useMemo(() => flattenFiles(tree).filter((path) => path.toLowerCase().endsWith(".tex") && !isIgnoredWorkspacePath(path)), [tree]);
@@ -47,7 +46,6 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     setBaseURL("");
     setModel("");
     setWireAPI("chat");
-    setProviderConfig("");
     setAgentBaseline({ configured: null, baseURL: "", model: "", wireAPI: "chat" });
     setAgentError("");
     void api.agentSettings.get().then((settings) => {
@@ -60,30 +58,18 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     }).catch(() => { setAgentConfigured(false); setAgentBaseline({ configured: false, baseURL: "", model: "", wireAPI: "chat" }); });
   }, [open, project, texFiles]);
 
-  const resolvedAgentDraft = (): { ok: true; draft: AgentSettingsDraft } | { ok: false; message: string } => {
-    const draft: AgentSettingsDraft = { apiKey, baseURL, model, wireAPI };
-    if (!providerConfig.trim()) return { ok: true, draft };
-    const parsed = parseCodexProviderConfig(providerConfig);
-    if (!parsed.ok) return parsed;
-    return { ok: true, draft: { ...draft, baseURL: parsed.value.baseURL, model: parsed.value.model, wireAPI: parsed.value.wireAPI } };
+  const resolvedAgentDraft = (): { ok: true; draft: HarnessSettingsDraft } | { ok: false; message: string } => {
+    const draft: HarnessSettingsDraft = { apiKey, baseURL, model, wireAPI };
+    return { ok: true, draft };
   };
 
-  const applyProviderConfig = () => {
-    setAgentError("");
-    const parsed = parseCodexProviderConfig(providerConfig);
-    if (!parsed.ok) { setAgentError(parsed.message); return; }
-    setBaseURL(parsed.value.baseURL);
-    setModel(parsed.value.model);
-    setWireAPI(parsed.value.wireAPI);
-    setProviderConfig("");
-  };
 
   const save = async () => {
     setError("");
     setAgentError("");
     const resolved = resolvedAgentDraft();
     if (!resolved.ok) { setAgentError(resolved.message); return; }
-    const agentDecision = agentSettingsSaveDecision(resolved.draft, agentBaseline);
+    const agentDecision = harnessSettingsSaveDecision(resolved.draft, agentBaseline);
     if (agentDecision.kind === "invalid") { setAgentError(agentDecision.message); return; }
     setLoading(true);
     try {
@@ -101,7 +87,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     setAgentError("");
     const resolved = resolvedAgentDraft();
     if (!resolved.ok) { setAgentError(resolved.message); return; }
-    const decision = agentSettingsSaveDecision(resolved.draft, agentBaseline);
+    const decision = harnessSettingsSaveDecision(resolved.draft, agentBaseline);
     if (decision.kind === "invalid") { setAgentError(decision.message); return; }
     if (decision.kind === "unchanged") return;
     setSavingAgent(true);
@@ -124,7 +110,6 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     setBaseURL(nextBaseURL);
     setModel(nextModel);
     setWireAPI(settings.wireAPI);
-    setProviderConfig("");
     setAgentBaseline({ configured: settings.configured, baseURL: nextBaseURL, model: nextModel, wireAPI: settings.wireAPI });
   };
 
@@ -143,13 +128,11 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
         <label className="field"><span>Research domain</span><select value={profile} onChange={(event) => { const next = event.target.value as WritingProfile; setProfile(next); if (publicationTarget?.domain !== next) setPublicationTarget(undefined); }}>{WRITING_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         <PublicationTargetFields profile={profile} value={publicationTarget} onChange={setPublicationTarget} />
         <section className="settings-agent" aria-labelledby="agent-settings-title">
-          <div><strong id="agent-settings-title">Agent provider</strong><span>{agentConfigured ? `Configured from ${agentSource === "environment" ? "server environment" : "this running server"}.` : "Add an OpenAI-compatible API key to enable Agent, Review, Revise, Draft, and completion."}</span></div>
+          <div><strong id="agent-settings-title">Harness</strong><span>{agentConfigured ? `Configured from ${agentSource === "environment" ? "server environment" : "this running server"}.` : "Configure a Harness model to enable Agent workflows."}</span></div>
           <label className="field"><span>API key</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={agentConfigured ? "Enter a replacement key" : "sk-…"} autoComplete="off" /></label>
           <label className="field"><span>Base URL <small>optional</small></span><input type="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder="https://api.openai.com/v1" autoComplete="off" /></label>
           <label className="field"><span>Model <small>optional</small></span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Use provider default" autoComplete="off" /></label>
           <label className="field"><span>Wire API</span><select value={wireAPI} onChange={(event) => setWireAPI(event.target.value as AgentWireApi)}><option value="chat">Chat Completions</option><option value="responses">Responses</option></select></label>
-          <label className="field"><span>Codex-style provider config <small>optional · TOML or YAML</small></span><textarea value={providerConfig} onChange={(event) => setProviderConfig(event.target.value)} placeholder={'model = "gpt-5.5"\nmodel_provider = "mirror"\n\n[model_providers.mirror]\nbase_url = "https://example.com/api/codex"\nwire_api = "responses"\nrequires_openai_auth = true'} /><small>Paste a Codex provider block. It fills Base URL, Model, and Wire API; enter the API key separately.</small></label>
-          <div className="settings-agent__actions"><Button size="small" variant="secondary" disabled={!providerConfig.trim() || loading || savingAgent} onClick={applyProviderConfig}>Apply provider config</Button></div>
           <div className="settings-agent__actions"><Button size="small" variant="secondary" loading={savingAgent} disabled={!apiKey.trim() || loading} onClick={() => void saveAgentSettings()}>{agentConfigured ? "Replace API key" : "Enable Agent"}</Button><small>The key is never returned or written to project files; it is cleared when the server restarts.</small></div>
           {agentError ? <div className="form-error" role="alert">{agentError}</div> : null}
         </section>

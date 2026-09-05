@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { loadProjectEnvironment } from "./environment";
 import type { AgentWireApi } from "@fastwrite/shared";
@@ -6,9 +6,9 @@ import type { AgentWireApi } from "@fastwrite/shared";
 export const loadedEnvironmentFile = loadProjectEnvironment();
 
 const configuredDataDirectory = process.env.FASTWRITE_DATA_DIR;
-const openAIKey = process.env.OPENAI_API_KEY ?? process.env.OPENAI_KEY;
-const openAIBaseURL = process.env.OPENAI_BASE_URL ?? process.env.OPENAI_API_BASE;
-const agentModel = process.env.FASTWRITE_OPENAI_MODEL;
+const harnessApiKey = process.env.FASTWRITE_HARNESS_API_KEY;
+const harnessBaseURL = process.env.FASTWRITE_HARNESS_BASE_URL;
+const harnessModel = process.env.FASTWRITE_HARNESS_MODEL;
 const packagedWebDirectory = resolve(import.meta.dir, "web");
 const embeddedWebDirectory = resolve(import.meta.dir, "../../web/dist");
 const releaseDirectory = dirname(process.execPath);
@@ -38,16 +38,16 @@ function configuredWireAPI(value?: string): AgentWireApi | undefined {
 
 export function agentProviderConfigurations(environment: NodeJS.ProcessEnv = process.env): Record<AgentWorkflow, AgentProviderConfiguration> {
   const global = {
-    apiKey: configured(environment, "OPENAI_API_KEY") ?? configured(environment, "OPENAI_KEY"),
-    baseURL: configured(environment, "OPENAI_BASE_URL") ?? configured(environment, "OPENAI_API_BASE"),
-    model: configured(environment, "FASTWRITE_OPENAI_MODEL"),
-    wireAPI: configuredWireAPI(configured(environment, "FASTWRITE_OPENAI_WIRE_API") ?? configured(environment, "OPENAI_WIRE_API"))
+    apiKey: configured(environment, "FASTWRITE_HARNESS_API_KEY"),
+    baseURL: configured(environment, "FASTWRITE_HARNESS_BASE_URL"),
+    model: configured(environment, "FASTWRITE_HARNESS_MODEL"),
+    wireAPI: configuredWireAPI(configured(environment, "FASTWRITE_HARNESS_WIRE_API"))
   };
   const forWorkflow = (workflow: Uppercase<AgentWorkflow>): AgentProviderConfiguration => ({
-    apiKey: configured(environment, `FASTWRITE_${workflow}_API_KEY`) ?? configured(environment, `FASTWRITE_${workflow}_OPENAI_API_KEY`) ?? global.apiKey,
-    baseURL: configured(environment, `FASTWRITE_${workflow}_BASE_URL`) ?? configured(environment, `FASTWRITE_${workflow}_OPENAI_BASE_URL`) ?? global.baseURL,
-    model: configured(environment, `FASTWRITE_${workflow}_MODEL`) ?? configured(environment, `FASTWRITE_${workflow}_OPENAI_MODEL`) ?? global.model,
-    wireAPI: configuredWireAPI(configured(environment, `FASTWRITE_${workflow}_WIRE_API`) ?? configured(environment, `FASTWRITE_${workflow}_OPENAI_WIRE_API`)) ?? global.wireAPI
+    apiKey: global.apiKey,
+    baseURL: global.baseURL,
+    model: global.model,
+    wireAPI: global.wireAPI
   });
   return {
     completion: forWorkflow("COMPLETION"),
@@ -59,9 +59,27 @@ export function agentProviderConfigurations(environment: NodeJS.ProcessEnv = pro
   };
 }
 
-export function configuredHarness(value?: string): "claude" | "codex" | "legacy" {
+export function configuredHarness(value?: string): "claude" | "codex" {
   const normalized = value?.trim().toLowerCase();
-  return normalized === "claude" || normalized === "codex" || normalized === "legacy" ? normalized : "codex";
+  return normalized === "claude" || normalized === "codex" ? normalized : "codex";
+}
+
+export interface HarnessDiscoveredConfiguration { harness: "claude" | "codex"; configured: boolean; source: "runtime" | "environment" | "user-config" | "none"; model?: string; baseURL?: string; configPath?: string }
+
+function discoveredCodex(): HarnessDiscoveredConfiguration {
+  const path = join(process.env.HOME ?? ".", ".codex", "config.toml");
+  try {
+    const text = readFileSync(path, "utf8");
+    const model = /^model\s*=\s*["']([^"']+)["']/m.exec(text)?.[1];
+    const baseURL = /base_url\s*=\s*["']([^"']+)["']/m.exec(text)?.[1];
+    return { harness: "codex", configured: true, source: "user-config", ...(model ? { model } : {}), ...(baseURL ? { baseURL } : {}), configPath: path };
+  } catch { return { harness: "codex", configured: false, source: "none", configPath: path }; }
+}
+
+export function discoverHarnessConfiguration(harness: "claude" | "codex"): HarnessDiscoveredConfiguration {
+  if (harness === "codex") return discoveredCodex();
+  const path = join(process.env.HOME ?? ".", ".claude", "settings.json");
+  try { readFileSync(path, "utf8"); return { harness, configured: true, source: "user-config", configPath: path }; } catch { return { harness, configured: false, source: "none", configPath: path }; }
 }
 
 export const config = {
@@ -75,8 +93,8 @@ export const config = {
   uploadTtlMs: 24 * 60 * 60 * 1000,
   skillsDirectory: resolve(process.env.FASTWRITE_SKILLS_DIR || defaultSkillsDirectory),
   templateDirectory: resolve(process.env.FASTWRITE_TEMPLATE_DIR || defaultTemplateDirectory),
-  agentModel,
-  openAIKey,
-  openAIBaseURL,
+  harnessApiKey,
+  harnessBaseURL,
+  harnessModel,
   agentProviders: agentProviderConfigurations()
 };

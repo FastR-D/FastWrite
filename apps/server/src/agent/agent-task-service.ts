@@ -11,6 +11,7 @@ import { createFileChange, replaceFileChange } from "./change-set";
 import { preserveLatexComments, stripLatexComments } from "./latex-comments";
 import { isAgentCancellation, runAgentOperation } from "./agent-operation";
 import type { ComplianceService } from "../compliance/compliance-service";
+import { createHash } from "node:crypto";
 import { citationFindings } from "./citation-findings";
 import { writingGuard } from "../writing/writing-guard";
 
@@ -39,7 +40,7 @@ function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap(
 
 export class AgentTaskService {
   constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider | AgentGateway, private readonly memories?: MemoryService, private readonly reviewProvider?: AgentProvider | AgentGateway, private readonly compliance?: ComplianceService) {}
-  private unwrap(provider?: AgentProvider | AgentGateway): AgentProvider | undefined { return provider && "provider" in provider ? provider.provider : provider; }
+  private unwrap(provider?: AgentProvider | AgentGateway): AgentProvider | undefined { return provider as AgentProvider | undefined; }
 
   async plan(projectId: string, request: AgentTaskRequest, requestSignal?: AbortSignal): Promise<AgentTaskPlanResponse & { resolution?: IssueResolution }> {
     const agent = this.unwrap(this.provider);
@@ -57,16 +58,21 @@ export class AgentTaskService {
     const intent = request.intent ?? commandIntent ?? (issues.length ? "revise" : classifyAgentIntent(objective, visibleDocuments));
     const normalizedRequest: AgentTaskRequest = { ...request, objective, intent };
     const workflow = /compile\s+repair|latex\s+error/i.test(objective) ? "compile-repair" : "revise";
-    const [skill, workflowInstructions] = await Promise.all([this.skills.load(project.skill, project.publicationTarget), this.skills.loadWorkflow(workflow)]);
+    const [skill, workflowInstructions, taskSkills] = await Promise.all([this.skills.load(project.skill, project.publicationTarget), this.skills.loadWorkflow(workflow), Promise.all((request.taskSkillIds ?? []).slice(0, 5).map((id) => this.skills.loadTask(id)))]);
+    for (const taskSkill of taskSkills) {
+      if (!taskSkill.descriptor.supportedIntents.includes(intent) || (request.scope.type !== taskSkill.descriptor.allowedScope && taskSkill.descriptor.allowedScope !== "project")) throw new ApiError(400, "agent_task_skill_scope_invalid", `Task Skill '${taskSkill.descriptor.id}' does not support this intent or scope`);
+    }
     const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };
     const complianceFindings = project.publicationTarget && this.compliance ? (await this.compliance.check(projectId, { verifyCitationsOnline: false })).findings : [];
-    const input = this.input(normalizedRequest, visibleDocuments, issues, project.skill, withMemory(`${workflowInstructions}\n\n${skill.instructions}`, memory.content), skill.venueInstructions, complianceFindings);
+    const taskInstructions = taskSkills.map((item) => `\n\n# Task Skill: ${item.descriptor.id} v${item.descriptor.version}\n${item.instructions}`).join("");
+    const input = this.input(normalizedRequest, visibleDocuments, issues, project.skill, withMemory(`${workflowInstructions}\n\n${skill.instructions}${taskInstructions}`, memory.content), skill.venueInstructions, complianceFindings);
     const createdAt = now();
     const searchMatches = searchDocumentPaths(visibleDocuments, objective);
     const run: AgentRun = { id: `run_${crypto.randomUUID()}`, projectId, type: "agent", status: "running", objective, skill: structuredClone(project.skill), ...(project.publicationTarget ? { publicationTarget: structuredClone(project.publicationTarget) } : {}), createdAt, updatedAt: createdAt, auditTrail: [
       { id: `audit_${crypto.randomUUID()}`, action: "context-read", summary: `Read ${documents.length} project source files within the context budget; LaTeX comments were omitted from Agent context`, paths: documents.map((document) => document.path), createdAt },
       { id: `audit_${crypto.randomUUID()}`, action: "context-search", summary: `Searched indexed source context; ${searchMatches.length} files matched objective terms`, ...(searchMatches.length ? { paths: searchMatches } : {}), createdAt }
     ], ...(memory.version ? { memoryVersion: memory.version } : {}) };
+    run.auditTrail?.push(...taskSkills.map((item) => ({ id: `audit_${crypto.randomUUID()}`, action: "skill-loaded" as const, summary: `Loaded Agent Task Skill ${item.descriptor.id} v${item.descriptor.version}`, createdAt })));
     await this.database.mutate((state) => state.agentRuns.push(run));
     try {
       const rawOutput: unknown = await runAgentOperation((signal) => agent.planAgentTask!(input, signal), { signal: requestSignal, label: "Agent planning" });
@@ -78,7 +84,8 @@ export class AgentTaskService {
       const affectedFiles = intent === "continue" ? prioritizeContinueFiles(output.affectedFiles, documents, this.database.snapshot().paperClaims.filter((claim) => claim.projectId === projectId), this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).flatMap((report) => report.issues.filter((issue) => issue.status !== "resolved" && issue.status !== "dismissed"))) : output.affectedFiles;
       if (!affectedFiles.length || affectedFiles.some((path) => !allowedPath(path)) || (request.scope.type === "file" && affectedFiles.some((path) => path !== request.scope.path))) throw new ApiError(502, "agent_plan_invalid", "Agent returned files outside the requested scope");
       const sectionContracts = request.scope.path ? [{ path: request.scope.path, purpose: objective, requiredClaimIds: (output.evidenceDependencies ?? []).flatMap((item) => item.requiredClaimIds), allowedEvidenceIds: [], requiredTablesOrFigures: [], terminology: [], openQuestions: output.missingEvidence ?? [] }] : undefined;
-      const plan: AgentTaskPlan = { id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { objective, scope: request.scope, intent, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, intent, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, ...(sectionContracts ? { sectionContracts } : {}), ...(output.sectionBudget ? { sectionBudget: output.sectionBudget } : {}), ...(output.venueChecks ? { venueChecks: output.venueChecks } : {}), ...(output.evidenceDependencies ? { evidenceDependencies: output.evidenceDependencies } : {}), ...(output.missingEvidence ? { missingEvidence: output.missingEvidence } : {}), createdAt, updatedAt: now() };
+      const taskSkillRecords = taskSkills.map((item) => ({ id: item.descriptor.id, version: item.descriptor.version, digest: createHash("sha256").update(item.instructions).digest("hex") }));
+      const plan: AgentTaskPlan = { id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { ...normalizedRequest, objective, scope: request.scope, intent, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, ...(taskSkillRecords.length ? { taskSkills: taskSkillRecords } : {}), intent, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, ...(sectionContracts ? { sectionContracts } : {}), ...(output.sectionBudget ? { sectionBudget: output.sectionBudget } : {}), ...(output.venueChecks ? { venueChecks: output.venueChecks } : {}), ...(output.evidenceDependencies ? { evidenceDependencies: output.evidenceDependencies } : {}), ...(output.missingEvidence ? { missingEvidence: output.missingEvidence } : {}), createdAt, updatedAt: now() };
       const reports = this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId);
       const reviewSnapshotIds = [...new Set(issues.flatMap((issue) => reports.find((report) => report.issues.some((candidate) => candidate.id === issue.id))?.snapshotId ?? []))];
       const resolution: IssueResolution | undefined = issues.length ? {
@@ -124,10 +131,13 @@ export class AgentTaskService {
     const plannedSkill = plannedRun?.skill ?? project.skill;
     const plannedTarget = plannedRun?.publicationTarget;
     const workflow = /compile\s+repair|latex\s+error/i.test(plan.request.objective) ? "compile-repair" : "revise";
-    const [skill, workflowInstructions] = await Promise.all([this.skills.load(plannedSkill, plannedTarget), this.skills.loadWorkflow(workflow)]);
+    const [skill, workflowInstructions, taskSkills] = await Promise.all([this.skills.load(plannedSkill, plannedTarget), this.skills.loadWorkflow(workflow), Promise.all((plan.request.taskSkillIds ?? []).slice(0, 5).map((id) => this.skills.loadTask(id)))]);
+    const currentTaskSkills = taskSkills.map((item) => ({ id: item.descriptor.id, version: item.descriptor.version, digest: createHash("sha256").update(item.instructions).digest("hex") }));
+    if ((plan.taskSkills ?? []).length !== currentTaskSkills.length || (plan.taskSkills ?? []).some((saved) => { const current = currentTaskSkills.find((item) => item.id === saved.id); return !current || current.version !== saved.version || current.digest !== saved.digest; })) throw new ApiError(409, "agent_task_skill_changed", "A selected Agent Task Skill changed; create a fresh plan before execution");
     const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };
     const visibleDocuments = agentVisibleDocuments(documents);
-    const input = this.input(plan.request, visibleDocuments, issues, plannedSkill, withMemory(`${workflowInstructions}\n\n${skill.instructions}`, memory.content), skill.venueInstructions);
+    const taskInstructions = taskSkills.map((item) => `\n\n# Task Skill: ${item.descriptor.id} v${item.descriptor.version}\n${item.instructions}`).join("");
+    const input = this.input(plan.request, visibleDocuments, issues, plannedSkill, withMemory(`${workflowInstructions}\n\n${skill.instructions}${taskInstructions}`, memory.content), skill.venueInstructions);
     const generationConcurrency = agent.fileGenerationConcurrency?.() ?? plan.affectedFiles.length;
     const generationMode = generationConcurrency <= 1 ? "sequentially" : "in parallel";
     await this.database.mutate((state) => { const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "generating"; stored.affectedFiles = [...plan.affectedFiles]; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "running"; delete run.error; run.steps = plan.affectedFiles.map((path, index) => ({ id: `generate-file-${index + 1}`, label: executionStepLabel(path), status: "running" })); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "execution-started", summary: `Started checking scoped context and updating ${plan.affectedFiles.length} planned files ${generationMode}`, paths: plan.affectedFiles, createdAt: now() }); for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "in_revision"); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.status = "in-revision"; resolution.updatedAt = now(); } });
@@ -200,7 +210,7 @@ export class AgentTaskService {
 
   async rereview(projectId: string, resolutionId: string, requestSignal?: AbortSignal): Promise<IssueResolution> {
     const provider = this.unwrap(this.reviewProvider ?? this.provider);
-    if (!provider?.rereviewIssues) throw new ApiError(503, "agent_not_configured", "Set OPENAI_API_KEY to enable targeted re-review");
+    if (!provider?.rereviewIssues) throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable targeted re-review");
     const resolution = this.database.snapshot().issueResolutions.find((item) => item.id === resolutionId && item.projectId === projectId);
     if (!resolution) throw new ApiError(404, "resolution_not_found", "Issue resolution not found");
     if (resolution.status !== "needs-review" && resolution.status !== "reopened") throw new ApiError(409, "resolution_not_reviewable", "Accept the revision before targeted re-review");
