@@ -291,7 +291,7 @@ export function AiWorkspace({ project, selection, paragraphSelection, sectionSel
           {error ? <div className="revision-error" role="alert">{error}</div> : null}
         </div>
         <form className="revise-composer" onSubmit={(event) => { event.preventDefault(); void propose(); }}>
-          <div className="revise-shortcuts" aria-label="Revision prompt shortcuts">{SHORTCUTS.map((shortcut) => <button type="button" key={shortcut.id} disabled={!selection || busy} onClick={() => void propose(shortcut.id)}>{shortcut.label}</button>)}</div>
+          <div className="revise-shortcuts" role="group" tabIndex={0} aria-label="Revision prompt shortcuts">{SHORTCUTS.map((shortcut) => <button type="button" key={shortcut.id} disabled={!selection || busy} onClick={() => void propose(shortcut.id)}>{shortcut.label}</button>)}</div>
           <div className="revise-composer__input"><textarea ref={inputRef} rows={2} value={instruction} onChange={(event) => setInstruction(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (selection && instruction.trim() && !busy) void propose(); } }} placeholder={selection ? "Ask for another revision…" : "Select text in the editor to start…"} disabled={!selection || busy} aria-label="Revision message" /><Button variant="primary" size="small" icon={<Send />} loading={busy} disabled={!selection || !instruction.trim() || busy} type="submit">Send</Button></div>
           <small>Each reply refines the current candidate. The file changes only after Accept.</small>
         </form>
