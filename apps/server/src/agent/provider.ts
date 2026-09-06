@@ -23,6 +23,7 @@ export interface ReviseAgentOutput {
 }
 
 export interface AgentProvider {
+  generateDiagram?(input: { instruction: string; svg: string; model: string; previous: unknown }, signal?: AbortSignal): Promise<unknown>;
   fileGenerationConcurrency?(): number;
   revise(input: ReviseAgentInput, signal?: AbortSignal): Promise<ReviseAgentOutput>;
   planDraft?(input: DraftAgentInput, signal?: AbortSignal): Promise<{ outline: DraftOutlineSection[] }>;

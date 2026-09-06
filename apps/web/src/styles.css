@@ -142,7 +142,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .ai-workspace__harness-status { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; }
 .harness-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border: 1px solid var(--border-subtle, #d9dee8); border-radius: 999px; background: var(--surface-muted, #f7f8fa); color: var(--text-secondary, #596273); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .harness-chip i { width: 6px; height: 6px; border-radius: 50%; background: #94a3b8; }
-.harness-chip em { font-style: normal; font-weight: 500; opacity: .75; }
+.harness-chip em { font-style: normal; font-weight: 500; }
 .harness-chip--ready i { background: #16a34a; }.harness-chip--degraded i { background: #d97706; }.harness-chip--unavailable i { background: #dc2626; }
 .harness-chip { cursor: pointer; font: inherit; }.harness-chip.is-selected { border-color: var(--blue-500, #3b82f6); background: var(--blue-50, #eff6ff); color: var(--blue-700, #1d4ed8); box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue-500, #3b82f6) 16%, transparent); }
 .topbar-actions { display: flex; align-items: center; gap: 6px; }

@@ -13,10 +13,10 @@ describe("harness core", () => {
 
   test("registers adapters and reports status", async () => {
     const adapter: HarnessAdapter = {
-      kind: "legacy",
-      async getStatus() { return { kind: "legacy", state: "ready" }; },
+      kind: "codex",
+      async getStatus() { return { kind: "codex", state: "ready" }; },
       async getCapabilities() { return { streaming: false, sessions: false, resume: false, approvals: false, skills: false, mcp: false }; },
-      async createSession() { return { harness: "legacy", sessionId: "test", cwd: "/tmp" }; },
+      async createSession() { return { harness: "codex", sessionId: "test", cwd: "/tmp" }; },
       async resumeSession(session) { return session; },
       async *sendMessage() { yield { type: "run.completed", runId: "run" }; },
       async cancelRun() {},
@@ -24,6 +24,6 @@ describe("harness core", () => {
     };
     const registry = new HarnessRegistry();
     registry.register(adapter);
-    expect(await registry.status()).toEqual([{ kind: "legacy", state: "ready" }]);
+    expect(await registry.status()).toEqual([{ kind: "codex", state: "ready" }]);
   });
 });

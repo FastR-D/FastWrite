@@ -1,4 +1,8 @@
 import { existsSync } from "node:fs";
+import { DiagramService } from "./diagrams/service";
+import { diagramProvider } from "./diagrams/provider";
+import { diagramPrompt, diagramSchema } from "./diagrams/scene";
+import { renderDrawio, renderPptx, renderSvg } from "./diagrams/render";
 import { stat } from "node:fs/promises";
 import { extname, join } from "node:path";
 import type {
@@ -58,6 +62,7 @@ import { McpToolService } from "./agent/mcp-tool-service";
 import type { HarnessAdapter, HarnessEvent } from "@fastwrite/harness-core";
 
 interface Services {
+  diagrams: DiagramService;
   database: JsonDatabase;
   workspaces: WorkspaceService;
   uploads: UploadService;
@@ -153,10 +158,10 @@ function harnessProvider(runs: HarnessRunService, kind: "codex" | "claude", cwd:
     const adapter = runs.adapter(kind);
     if (!adapter) throw new ApiError(503, "harness_unavailable", `Harness '${kind}' is unavailable`);
     const session = await adapter.createSession({ cwd, title: `FastWrite ${method}` });
-    const schema = method === "planAgentTask" ? '{"steps":[string],"affectedFiles":[string],"risks":[string],"validation":[string]}' : method === "generateAgentTask" ? '{"files":[{"path":string,"content":string,"rationale":string}]}' : method === "planDraft" ? '{"outline":[{"path":string,"title":string,"purpose":string}]}' : method === "generateDraft" ? '{"files":[{"path":string,"content":string,"rationale":string}]}' : method === "revise" ? '{"replacement":string,"rationale":string}' : method === "complete" ? '{"suggestion":string}' : '{"result":object}';
-    const content = `You are a structured academic writing engine. Execute operation '${method}'. Return ONLY one valid JSON object matching this exact schema: ${schema}. Do not echo the prompt. For file generation, content must be complete compilable LaTeX prose for the requested paper, with abstract, introduction, threat model, method, evaluation plan, and limitations as applicable. Never emit TODO, FIXME, placeholder brackets, template markers, or empty sections; if evidence is missing, state a concrete evaluation plan without claiming results. Input:\n${JSON.stringify(input)}`;
+    const schema = method === "generateDiagram" ? JSON.stringify(diagramSchema) : method === "planAgentTask" ? '{"steps":[string],"affectedFiles":[string],"risks":[string],"validation":[string]}' : method === "generateAgentTask" ? '{"files":[{"path":string,"content":string,"rationale":string}]}' : method === "planDraft" ? '{"outline":[{"path":string,"title":string,"purpose":string}]}' : method === "generateDraft" ? '{"files":[{"path":string,"content":string,"rationale":string}]}' : method === "revise" ? '{"replacement":string,"rationale":string}' : method === "complete" ? '{"suggestion":string}' : '{"result":object}';
+    const content = method === "generateDiagram" ? `${diagramPrompt}\nSchema: ${schema}\nInput: ${JSON.stringify(input)}` : `You are a structured academic writing engine. Execute operation '${method}'. Return ONLY one valid JSON object matching this exact schema: ${schema}. Do not echo the prompt. For file generation, content must be complete compilable LaTeX prose for the requested paper, with abstract, introduction, threat model, method, evaluation plan, and limitations as applicable. Never emit TODO, FIXME, placeholder brackets, template markers, or empty sections; if evidence is missing, state a concrete evaluation plan without claiming results. Input:\n${JSON.stringify(input)}`;
     const chunks: string[] = [];
-    for await (const event of runs.send({ kind, session, content, ...(model ? { model } : {}), ...(signal ? { signal } : {}) })) { if (event.type === "assistant.delta") chunks.push(event.text); if (event.type === "run.failed") throw new Error(event.error); }
+    for await (const event of runs.send({ kind, session, content, ...(method === "generateDiagram" ? { model: "gpt-6-astra" } : model ? { model } : {}), ...(signal ? { signal } : {}) })) { if (event.type === "assistant.delta") chunks.push(event.text); if (event.type === "run.failed") throw new Error(event.error); }
     const text = chunks.join("").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
     try { return JSON.parse(text); } catch {
       const candidates: string[] = []; let depth = 0; let start = -1; let quoted = false; let escaped = false;
@@ -216,7 +221,9 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const alignment = new AlignmentService(workspaces);
   const agentTasks = new AgentTaskService(database, workspaces, skillRegistry, asGateway(providers.agent), memories, asGateway(providers.review), compliance);
   const completions = new CompletionService(workspaces, skillRegistry, asGateway(providers.completion), memories);
-  const services: Services = { database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools };
+  const diagrams = new DiagramService(dataDirectory, options.agentProvider?.generateDiagram ? options.agentProvider : diagramProvider(dataDirectory));
+  await diagrams.initialize();
+  const services: Services = { diagrams, database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools };
   const routes = buildRoutes(services, {
     status: () => {
       const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
@@ -243,11 +250,24 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
 }
 
-function buildRoutes({ database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void }): Route[] {
+function buildRoutes({ diagrams, database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void }): Route[] {
   const collaborationDocuments = new Map<string, { document: Y.Doc; version: number }>();
   const presence = new Map<string, Map<string, { clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>();
   return [
     route("GET", "/api/health", async () => json({ status: "ok" })),
+    route("GET", "/api/diagrams/schema", () => json(diagramSchema)),
+    route("GET", "/api/diagrams", async () => json((await diagrams.list()).map(({scene,...record})=>({...record,title:scene?.title})))),
+    route("POST", "/api/diagrams", async request => {const body=await readJson<{scene:unknown;parentId?:string}>(request);return json(await diagrams.save(body.scene,body.parentId),201)}),
+    route("POST", "/api/diagrams/generate", async request => json(await diagrams.generate(await readJson(request)),202)),
+    route("GET", "/api/diagrams/:diagramId", async (_request,params)=>json(await diagrams.get(required(params,"diagramId")))),
+    route("GET", "/api/diagrams/:diagramId/export/:format", async (_request,params)=>{
+      const record=await diagrams.get(required(params,"diagramId"));if(!record.scene)throw new ApiError(409,"diagram_not_ready","图尚未生成完成");
+      const format=required(params,"format");
+      if(format==='svg')return new Response(renderSvg(record.scene),{headers:{'content-type':'image/svg+xml','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'",'content-disposition':'inline; filename="diagram.svg"'}});
+      if(format==='drawio')return new Response(renderDrawio(record.scene),{headers:{'content-type':'application/xml','content-disposition':'attachment; filename="diagram.drawio"'}});
+      if(format==='pptx')return new Response(await renderPptx(record.scene),{headers:{'content-type':'application/vnd.openxmlformats-officedocument.presentationml.presentation','content-disposition':'attachment; filename="diagram.pptx"'}});
+      throw new ApiError(400,'diagram_format_invalid','支持 SVG、draw.io 和 PPTX');
+    }),
     route("GET", "/api/harness-settings", async () => json(agentSettings.status())),
     route("PUT", "/api/harness-settings", async (request) => { agentSettings.configure(await readJson<AgentSettingsInput>(request)); return json(agentSettings.status()); }),
     route("GET", "/api/venues", async () => json(await skillRegistry.catalog())),
