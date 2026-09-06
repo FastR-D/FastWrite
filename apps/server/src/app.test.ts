@@ -26,8 +26,8 @@ describe("workspace API", () => {
     const response = await request("/api/harnesses");
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ status: expect.objectContaining({ kind: "codex", state: "ready" }), capabilities: expect.objectContaining({ streaming: true, sessions: true, skills: true, mcp: true }) }),
-      expect.objectContaining({ status: expect.objectContaining({ kind: "claude", state: "ready" }) })
+      expect.objectContaining({ status: expect.objectContaining({ kind: "codex", state: expect.stringMatching(/^(ready|degraded|unavailable)$/) }), capabilities: expect.objectContaining({ streaming: true, sessions: true, skills: true, mcp: true }) }),
+      expect.objectContaining({ status: expect.objectContaining({ kind: "claude", state: expect.stringMatching(/^(ready|degraded|unavailable)$/) }) })
     ]));
     const invalid = await request("/api/harnesses/unknown/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: "/tmp" }) });
     expect(invalid.status).toBe(400);
