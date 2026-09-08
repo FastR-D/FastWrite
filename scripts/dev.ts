@@ -6,6 +6,7 @@ const children: Bun.Subprocess[] = [];
 let shuttingDown = false;
 let shutdownPromise: Promise<never> | undefined;
 
+await buildWeb();
 await Promise.all([assertPortAvailable(webPort), assertPortAvailable(apiPort)]);
 
 const shared = start(["bun", "run", "--filter", "@fastwrite/shared", "dev"]);
@@ -41,6 +42,19 @@ function start(command: string[]): Bun.Subprocess {
   const child = Bun.spawn(command, { cwd: process.cwd(), stdin: "inherit", stdout: "inherit", stderr: "inherit", env: process.env });
   children.push(child);
   return child;
+}
+
+async function buildWeb(): Promise<void> {
+  console.log("Building FastWrite Web before starting development services…");
+  const build = Bun.spawn(["bun", "run", "--filter", "@fastwrite/web", "build"], {
+    cwd: process.cwd(),
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+    env: process.env
+  });
+  const exitCode = await build.exited;
+  if (exitCode !== 0) throw new Error(`FastWrite Web build failed (status ${exitCode}).`);
 }
 
 async function assertPortAvailable(port: number): Promise<void> {

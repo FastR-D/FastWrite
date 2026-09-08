@@ -10,6 +10,7 @@ import { ResearchDialog } from "./ResearchDialog";
 import { AgentTaskWorkspace, type AgentTaskSeed } from "./AgentTaskDialog";
 import type { CompileStateReport } from "./PdfPane";
 import { compileRepairObjective, compileRepairPath, type CompileRepairRequest } from "./compileRepair";
+import { responseLanguage } from "../../lib/responseLanguage";
 
 interface AiWorkspaceProps {
   project: PaperProject;
@@ -163,6 +164,7 @@ export function AiWorkspace({ project, selection, paragraphSelection, sectionSel
         ...(command ? { command } : { instruction: prompt }),
         ...(workingText !== selection.text ? { workingText } : {}),
         ...(history.length ? { history } : {})
+        ,responseLanguage: responseLanguage()
       }, controller.signal);
       if (changeSet?.status === "proposed") await api.revisions.reject(project.id, changeSet.id).catch(() => undefined);
       setChangeSet(result.changeSet);

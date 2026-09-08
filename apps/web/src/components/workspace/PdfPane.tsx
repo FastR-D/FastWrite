@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { AlertTriangle, CheckCircle2, FileOutput, LoaderCircle, LocateFixed, Maximize2, Minimize2, OctagonX, RotateCw, Scan, Search, Wrench, X, ZoomIn, ZoomOut } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, FileOutput, LoaderCircle, LocateFixed, Maximize2, Minimize2, OctagonX, RotateCw, Scan, Search, Wrench, X, ZoomIn, ZoomOut } from "lucide-react";
 import { parseLatexDiagnostics, parseSyncTex, pdfToSource, sourceToPdf, type PdfLocation, type SourceLocation, type SyncTexDocument, type WorkspaceTreeNode } from "@fastwrite/shared";
 import { Button, IconButton } from "../ui/Button";
-import { cancelCompiler, repairCompilerCache, subscribeCompilerProgress } from "../../services/latexCompiler";
-import { compileWorkspace } from "../../services/workspaceCompiler";
 import { api } from "../../api/client";
 import { fitPdfPageScale, MAX_PDF_SCALE, MIN_PDF_SCALE } from "./pdfScale";
-import { compilerLogExcerpt, shouldAutoCompile, type CompileEngine, type CompileFailureContext } from "./compileRepair";
+import { compilerLogExcerpt, shouldAutoCompile, type CompileFailureContext } from "./compileRepair";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
@@ -32,7 +30,6 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
   const [pageCount, setPageCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [scale, setScale] = useState(1);
-  const [compileEngine, setCompileEngine] = useState<CompileEngine>(() => localStorage.getItem(`fastwrite.compile-engine.${projectId}`) === "server" ? "server" : "browser");
   const [fitToPanel, setFitToPanel] = useState(true);
   const [state, setState] = useState<CompileState>("idle");
   const [progress, setProgress] = useState("Ready to compile");
@@ -50,27 +47,25 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
   // The WASM compiler can retain failed intermediate passes in its log even when a later pass produces a PDF.
   const visibleDiagnostics = useMemo(() => state === "success" ? diagnostics.filter((diagnostic) => diagnostic.severity !== "error") : diagnostics, [diagnostics, state]);
   const failure = useMemo<CompileFailureContext | undefined>(() => state === "error" ? {
-    engine: compileEngine,
+    engine: "server",
     mainDocument,
     summary: progress,
     diagnostics: visibleDiagnostics.map(({ severity, message, path, line }) => ({ severity, message, ...(path ? { path } : {}), ...(line ? { line } : {}) })),
     logExcerpt: compilerLogExcerpt(log || progress)
-  } : undefined, [compileEngine, log, mainDocument, progress, state, visibleDiagnostics]);
+  } : undefined, [log, mainDocument, progress, state, visibleDiagnostics]);
   const activeSyncTex = compiledVersion === projectVersion ? syncTex : null;
+  const downloadPdf = useCallback(() => {
+    if (!pdfUrl) return;
+    const link = document.createElement("a"); link.href = pdfUrl;
+    link.download = `${mainDocument.replace(/\.[^/.]+$/, "") || "paper"}.pdf`; link.click();
+  }, [mainDocument, pdfUrl]);
 
-  useEffect(() => { localStorage.setItem(`fastwrite.compile-engine.${projectId}`, compileEngine); }, [compileEngine, projectId]);
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement === paneRef.current);
     document.addEventListener("fullscreenchange", updateFullscreen);
     return () => document.removeEventListener("fullscreenchange", updateFullscreen);
   }, []);
 
-  useEffect(() => subscribeCompilerProgress(({ stage, detail, percent }) => {
-    if (!runningRef.current) return;
-    setProgress(detail || stage);
-    setResourcePercent(percent ?? null);
-    setState(stage.toLowerCase().includes("compile") ? "compiling" : "loading");
-  }), []);
 
   useEffect(() => () => {
     abortRef.current?.abort();
@@ -93,9 +88,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
     setResourcePercent(null);
     setLog("");
     try {
-      const result = compileEngine === "browser"
-        ? await compileWorkspace(projectId, mainDocument, controller.signal, setProgress)
-        : await api.compiler.compileOnServer(projectId, controller.signal).then((server) => ({ ...server, pdf: server.pdfBase64 ? base64ToBytes(server.pdfBase64) : undefined }));
+      const result = await api.compiler.compileOnServer(projectId, controller.signal).then((server) => ({ ...server, pdf: server.pdfBase64 ? base64ToBytes(server.pdfBase64) : undefined }));
       if (controller.signal.aborted) {
         if (abortRef.current === controller) {
           runningRef.current = false;
@@ -124,7 +117,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
       setState("success");
       setResourcePercent(null);
       setProgress("Compiled successfully");
-      void api.compileResults.record(projectId, { projectVersion, status: "success", summary: `Compiled successfully with ${compileEngine === "server" ? "server LaTeX" : "browser WASM"} engine` }).catch(() => undefined);
+      void api.compileResults.record(projectId, { projectVersion, status: "success", summary: "Compiled successfully with local LaTeX" }).catch(() => undefined);
     } catch (error) {
       if ((error as DOMException).name === "AbortError") {
         if (abortRef.current === controller) {
@@ -141,7 +134,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
       setDiagnosticsOpen(true);
       void api.compileResults.record(projectId, { projectVersion, status: "error", summary: error instanceof Error ? error.message : "Compilation failed" }).catch(() => undefined);
     }
-  }, [compileEngine, mainDocument, projectId, projectVersion]);
+  }, [mainDocument, projectId, projectVersion]);
 
   useEffect(() => {
     if (hasCompiledRef.current) return;
@@ -169,27 +162,11 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
   const cancel = () => {
     abortRef.current?.abort();
     runningRef.current = false;
-    cancelCompiler();
     setState(pdfUrl ? "success" : "idle");
     setProgress("Compilation cancelled");
     setResourcePercent(null);
   };
 
-  const repairAndRetry = async () => {
-    runningRef.current = true;
-    setState("loading");
-    setProgress("Repairing compiler cache…");
-    setResourcePercent(null);
-    try {
-      await repairCompilerCache();
-      runningRef.current = false;
-      await compile();
-    } catch (error) {
-      runningRef.current = false;
-      setState("error");
-      setProgress(error instanceof Error ? error.message : "Compiler cache repair failed");
-    }
-  };
 
   const scrollToPage = (page: number) => {
     const safe = Math.max(1, Math.min(pageCount, page));
@@ -255,6 +232,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
           <IconButton label="Zoom in" icon={<ZoomIn />} disabled={!pdfUrl || scale >= MAX_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.min(MAX_PDF_SCALE, value + .1)); }} />
           <span className="toolbar-separator" />
           <IconButton label="Fit PDF page to panel" icon={<Scan />} disabled={!pdfUrl} onClick={() => { setFitToPanel(true); window.requestAnimationFrame(applyFitToPanel); }} />
+          <IconButton label="Download PDF" icon={<Download />} disabled={!pdfUrl} onClick={downloadPdf} />
           <IconButton label="Locate editor selection in PDF" icon={<LocateFixed />} disabled={!activeSyncTex || !sourceLocation || pageCount === 0} onClick={locateSource} />
           <IconButton label={fullscreen ? "Exit PDF fullscreen" : "Enter PDF fullscreen"} icon={fullscreen ? <Minimize2 /> : <Maximize2 />} onClick={toggleFullscreen} />
           <IconButton label="Search PDF" icon={<Search />} disabled />
@@ -265,9 +243,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
         <CompileStatusIcon state={state} />
         <span>{progress}</span>
         {failure ? <button className="compile-fix-agent" onClick={() => onFixWithAgent(failure)}><Wrench />Fix with Agent</button> : null}
-        <label className="compile-engine"><span className="visually-hidden">Compilation engine</span><select id="compile-engine" name="compile-engine" value={compileEngine} disabled={isRunning} onChange={(event) => setCompileEngine(event.target.value as CompileEngine)}><option value="browser">Browser WASM</option><option value="server">Local LaTeX</option></select></label>
         {isRunning ? <button onClick={cancel}>Cancel</button> : <button onClick={() => void compile()}>{pdfUrl ? "Recompile" : "Compile"}</button>}
-        {compileEngine === "browser" && state === "error" ? <button onClick={() => void repairAndRetry()}>Repair cache</button> : null}
         {log ? <button onClick={() => setDiagnosticsOpen((value) => !value)}>{diagnosticLabel}</button> : null}
       </div>
       <div ref={containerRef} className={`pdf-canvas ${pdfUrl ? "" : "pdf-canvas--empty"}`} role="region" aria-label="PDF preview" tabIndex={0} onScroll={(event) => {
@@ -293,7 +269,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
           <div className="pdf-empty">
             <span className={`pdf-empty__icon ${state === "error" ? "pdf-empty__icon--error" : ""}`}>{state === "error" ? <OctagonX /> : <FileOutput />}</span>
             <h3>{state === "error" ? "Compilation failed" : "Compile your paper"}</h3>
-            <p>{state === "error" ? progress : compileEngine === "browser" ? <><code>{mainDocument}</code> will compile entirely in this browser.</> : <><code>{mainDocument}</code> will compile with the local LaTeX toolchain.</>}</p>
+            <p>{state === "error" ? progress : <><code>{mainDocument}</code> will compile with the local LaTeX toolchain.</>}</p>
             <Button variant="primary" icon={<RotateCw />} loading={isRunning} onClick={() => void compile()}>{isRunning ? "Compiling" : "Compile PDF"}</Button>
           </div>
         )}

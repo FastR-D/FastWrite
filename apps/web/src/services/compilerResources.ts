@@ -8,12 +8,18 @@ const FONT_PACKAGES = new Set(["times", "helvetic", "courier"]);
 const FONT_PACKAGE_DEPENDENCIES: Readonly<Record<string, readonly string[]>> = {
   times: ["helvetic", "courier"]
 };
+// TeX style names do not always match their TeX Live package names.
+const PACKAGE_ALIASES: Readonly<Record<string, string>> = {
+  CJKutf8: "cjk",
+  cjkutf8: "cjk",
+  algpseudocode: "algorithmicx"
+};
 
 export function compilerDependencyPackages(source: string, additionalFiles: Record<string, string | Uint8Array> = {}): string[] {
   const packages = new Set<string>();
   const scan = (content: string) => {
     for (const match of content.matchAll(PACKAGE_COMMAND)) {
-      for (const packageName of match[1]!.split(",").map((name) => name.trim())) if (packageName) packages.add(packageName);
+      for (const packageName of match[1]!.split(",").map((name) => name.trim())) if (packageName) packages.add(PACKAGE_ALIASES[packageName] ?? packageName);
     }
     for (const match of content.matchAll(FONT_COMMAND)) {
       const fontName = match[1]!.toLowerCase();

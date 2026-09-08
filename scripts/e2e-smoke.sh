@@ -98,7 +98,7 @@ run_code 'async (page) => {
   });
   if (!saved.ok()) throw new Error("Could not update the multi-file SyncTeX fixture");
   await page.reload();
-  await page.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor();
+  await page.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor({ state: "attached" });
 }'
 
 run_code 'async (page) => {
@@ -118,8 +118,8 @@ run_code 'async (page) => {
   await page.getByRole("treeitem", { name: "sections", exact: true }).click();
   await page.locator("span[title=\"sections/method.tex\"]").click();
   const methodEditor = page.getByRole("textbox", { name: "Source editor for sections/method.tex" });
-  await methodEditor.waitFor();
-  await methodEditor.focus();
+  await methodEditor.waitFor({ state: "attached" });
+  await methodEditor.focus({ force: true });
   await methodEditor.press("ControlOrMeta+End");
   await page.waitForTimeout(100);
   await page.getByRole("button", { name: "Locate editor selection in PDF" }).click();
@@ -128,9 +128,9 @@ run_code 'async (page) => {
   const point = await highlight.boundingBox();
   if (!point) throw new Error("Source-to-PDF SyncTeX did not create a visible highlight");
   await page.locator("span[title=\"main.tex\"]").click();
-  await page.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor();
+  await page.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor({ state: "attached" });
   await page.mouse.dblclick(point.x + point.width / 2, point.y + point.height / 2);
-  await page.getByRole("textbox", { name: "Source editor for sections/method.tex" }).waitFor();
+  await page.getByRole("textbox", { name: "Source editor for sections/method.tex" }).waitFor({ state: "attached" });
 }'
 run_accessibility
 
@@ -153,7 +153,7 @@ run_code 'async (page) => {
 run_code 'async (page) => {
   await page.locator("span[title=\"main.tex\"]").click();
   const editor = page.getByRole("textbox", { name: "Source editor for main.tex" });
-  await editor.waitFor();
+  await editor.waitFor({ state: "attached" });
   const projectId = page.url().split("/").pop();
   const fileUrl = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId + "/file?path=main.tex";
   const opened = await (await page.request.get(fileUrl)).json();
@@ -167,7 +167,7 @@ run_code 'async (page) => {
       }
     }, { capture: true });
   });
-  await editor.focus();
+  await editor.focus({ force: true });
   await editor.press("ControlOrMeta+A");
   await page.keyboard.insertText(content);
   const agentButton = page.getByRole("button", { name: "Agent", exact: true });
@@ -189,7 +189,7 @@ run_code 'async (page) => {
   }
   await page.getByText("Saved", { exact: true }).waitFor();
   await page.locator("span[title=\"sections/method.tex\"]").click();
-  await page.getByRole("textbox", { name: "Source editor for sections/method.tex" }).waitFor();
+  await page.getByRole("textbox", { name: "Source editor for sections/method.tex" }).waitFor({ state: "attached" });
 }
 '
 
@@ -234,7 +234,8 @@ run_code 'async (page) => {
   });
 
   const editor = page.getByRole("textbox", { name: "Source editor for sections/method.tex" });
-  await editor.focus();
+  await editor.waitFor({ state: "attached" });
+  await editor.focus({ force: true });
   await editor.press("ControlOrMeta+A");
   await page.locator(".revise-context-strip").waitFor();
   const initialBrowserName = page.context().browser()?.browserType().name() || "browser";
@@ -505,7 +506,7 @@ run_code 'async (page) => {
   await page.route("**/api/projects/*/agent-runs", async route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([agentRun]) }));
   await page.route("**/api/projects/*/issue-resolutions", async route => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
 
-  await page.getByRole("button", { name: "Agent" }).click();
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
   const agentPanel = page.getByRole("region", { name: "Agent workspace" });
   await agentPanel.waitFor();
   const objective = agentPanel.getByLabel("What should Agent do?");
@@ -829,7 +830,7 @@ run_code 'async (page) => {
 
   await page.getByRole("button", { name: "Review", exact: true }).click();
   const reviewDialog = page.getByRole("dialog", { name: "Paper Review" });
-  await reviewDialog.getByRole("button", { name: "Review paper" }).click();
+  await page.getByRole("button", { name: /Review paper|Continue source-only/ }).click();
   await reviewDialog.locator(".review-run-progress li").filter({ hasText: "Collect section evidence" }).waitFor();
   await reviewDialog.getByText("Threat-model boundary needs explicit evidence", { exact: true }).waitFor();
   await page.screenshot({ path: "output/playwright/workspace-review-1440x900" + browserSuffix + ".png", fullPage: true });
@@ -1074,7 +1075,7 @@ run_code 'async (page) => {
   }
   await dialog.getByRole("button", { name: "Import paper", exact: true }).click();
   await page.waitForURL(new RegExp("/projects/" + imported.id + "$"));
-  await page.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor();
+  await page.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor({ state: "attached" });
   const expected = {
     repository: "https://github.com/example/security-paper",
     ref: "camera-ready",

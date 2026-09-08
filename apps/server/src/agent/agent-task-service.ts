@@ -82,7 +82,7 @@ export class AgentTaskService {
       const output = normalizeAgentPlanOutput(rawOutput, request.scope.path ?? project.mainDocument, allowedPath, intent);
       output.venueChecks = mergeComplianceChecks(output.venueChecks ?? [], complianceFindings);
       const affectedFiles = intent === "continue" ? prioritizeContinueFiles(output.affectedFiles, documents, this.database.snapshot().paperClaims.filter((claim) => claim.projectId === projectId), this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).flatMap((report) => report.issues.filter((issue) => issue.status !== "resolved" && issue.status !== "dismissed"))) : output.affectedFiles;
-      if (!affectedFiles.length || affectedFiles.some((path) => !allowedPath(path)) || (request.scope.type === "file" && affectedFiles.some((path) => path !== request.scope.path))) throw new ApiError(502, "agent_plan_invalid", "Agent returned files outside the requested scope");
+      if (!affectedFiles.length || affectedFiles.some((path) => !allowedPath(path)) || (request.scope.type === "file" && affectedFiles.some((path) => path !== request.scope.path)) || affectedFiles.some((path) => request.scope.forbiddenPaths?.includes(path))) throw new ApiError(502, "agent_plan_invalid", "Agent returned files outside the requested scope");
       const sectionContracts = request.scope.path ? [{ path: request.scope.path, purpose: objective, requiredClaimIds: (output.evidenceDependencies ?? []).flatMap((item) => item.requiredClaimIds), allowedEvidenceIds: [], requiredTablesOrFigures: [], terminology: [], openQuestions: output.missingEvidence ?? [] }] : undefined;
       const taskSkillRecords = taskSkills.map((item) => ({ id: item.descriptor.id, version: item.descriptor.version, digest: createHash("sha256").update(item.instructions).digest("hex") }));
       const plan: AgentTaskPlan = { id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { ...normalizedRequest, objective, scope: request.scope, intent, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, ...(taskSkillRecords.length ? { taskSkills: taskSkillRecords } : {}), intent, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, ...(sectionContracts ? { sectionContracts } : {}), ...(output.sectionBudget ? { sectionBudget: output.sectionBudget } : {}), ...(output.venueChecks ? { venueChecks: output.venueChecks } : {}), ...(output.evidenceDependencies ? { evidenceDependencies: output.evidenceDependencies } : {}), ...(output.missingEvidence ? { missingEvidence: output.missingEvidence } : {}), createdAt, updatedAt: now() };
@@ -144,7 +144,7 @@ export class AgentTaskService {
     try {
       const generated = await mapWithConcurrency(plan.affectedFiles, generationConcurrency, async (path, index) => {
         const scopedDocuments = generationDocuments(visibleDocuments, path, project.mainDocument, issues, plan.request.objective);
-        const output = await runAgentOperation<{ files?: DraftGeneratedFile[] }>((signal) => agent.generateAgentTask!({ ...input, documents: scopedDocuments, steps: plan.steps, affectedFiles: [path], targetPath: path, risks: plan.risks, validation: plan.validation, sectionBudget: plan.sectionBudget ?? [], venueChecks: plan.venueChecks ?? [], evidenceDependencies: plan.evidenceDependencies ?? [], missingEvidence: plan.missingEvidence ?? [] }, signal), { signal: requestSignal, defaultTimeoutMs: 300_000, label: `Agent execution for ${path}` });
+        const output = await runAgentOperation<{ files?: DraftGeneratedFile[] }>((signal) => agent.generateAgentTask!({ ...input, documents: scopedDocuments, steps: plan.steps, affectedFiles: [path], targetPath: path, risks: plan.risks, validation: plan.validation, sectionBudget: plan.sectionBudget ?? [], venueChecks: plan.venueChecks ?? [], evidenceDependencies: plan.evidenceDependencies ?? [], missingEvidence: plan.missingEvidence ?? [] }, signal), { signal: requestSignal, defaultTimeoutMs: 180_000, label: `Agent execution for ${path}`, timeoutMessage: `Agent execution for ${path} timed out during file generation before producing an approvable result` });
         const files = this.validateGeneratedFiles(Array.isArray(output?.files) ? output.files : [], path, plan.intent);
         await this.database.mutate((state) => {
           const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!;
@@ -157,6 +157,16 @@ export class AgentTaskService {
         return { targetPath: path, files };
       });
       const files = mergeGeneratedFiles(generated, plan.affectedFiles);
+      if (plan.request.scope.type === "section" && typeof plan.request.scope.section?.startLine === "number" && typeof plan.request.scope.section.endLine === "number") {
+        const section = plan.request.scope.section;
+        const startLine = section.startLine;
+        const endLine = section.endLine;
+        for (const file of files) {
+          if (file.path !== plan.request.scope.path) throw new ApiError(422, "agent_scope_exceeded", `Section-scoped task returned an unexpected file '${file.path}'`);
+          const original = documents.find((document) => document.path === file.path)?.content;
+          if (original && !sameOutsideLineRange(original, file.content, startLine!, endLine!)) throw new ApiError(422, "agent_scope_exceeded", `Agent changed content outside section '${section.heading}'`);
+        }
+      }
       const changes: TextChange[] = [];
       for (const file of files) {
         const snapshot = documents.find((document) => document.path === file.path);
@@ -202,6 +212,8 @@ export class AgentTaskService {
       }
       const effectiveChanges = changes.filter((change) => change.hunks?.length);
       if (!effectiveChanges.length) throw new ApiError(502, "agent_no_changes", "Agent did not propose any file changes");
+      const changedLines = effectiveChanges.reduce((total, change) => total + (change.hunks ?? []).reduce((count, hunk) => count + hunk.before.split("\n").length + hunk.after.split("\n").length, 0), 0);
+      if (plan.request.scope.maxChangedLines !== undefined && changedLines > plan.request.scope.maxChangedLines) throw new ApiError(422, "agent_scope_exceeded", `Agent proposed ${changedLines} changed lines; the scope allows at most ${plan.request.scope.maxChangedLines}`);
       const changeSet: ChangeSet = { id: `change_${crypto.randomUUID()}`, projectId, agentRunId: plan.agentRunId, status: "proposed", approvalMode: "explicit-finish", summary: plan.request.objective, rationale: files.map((file) => `${file.path}: ${file.rationale}`).join("\n"), changes: effectiveChanges, createdAt: now(), updatedAt: now() };
       const result = await this.database.mutate((state) => { state.changeSets.push(changeSet); const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "waiting-approval"; stored.changeSetId = changeSet.id; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "waiting-approval"; run.changeSetId = changeSet.id; run.steps?.forEach((step) => { step.status = "completed"; }); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "changes-proposed", summary: `Proposed ${effectiveChanges.flatMap((change) => change.hunks ?? []).length} hunks across ${effectiveChanges.length} files`, paths: effectiveChanges.map((change) => change.path), createdAt: now() }); run.updatedAt = now(); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.changeSetId = changeSet.id; resolution.updatedAt = now(); } return { run, plan: stored, resolution }; });
       return { run: result.run, plan: result.plan, changeSet, ...(result.resolution ? { resolution: result.resolution } : {}) };
@@ -272,7 +284,7 @@ export class AgentTaskService {
 
   private async documents(projectId: string) { const paths = textPaths(await this.workspaces.tree(projectId)).filter((path) => path !== "memory.md"); const documents: Array<{ path: string; content: string; version: number }> = []; let bytes = 0; for (const path of paths) { const opened = await this.workspaces.readTextFile(projectId, path); const size = Buffer.byteLength(opened.content); if (bytes + size > 500_000) continue; bytes += size; documents.push({ path, content: opened.content, version: opened.file.version }); } return documents; }
   private issues(projectId: string, ids: string[]): ReviewIssue[] { const all = this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).flatMap((report) => report.issues); const issues = ids.map((id) => all.find((issue) => issue.id === id)).filter((issue): issue is ReviewIssue => Boolean(issue)); if (issues.length !== new Set(ids).size) throw new ApiError(404, "review_issue_not_found", "One or more review issues were not found"); return issues; }
-  private input(request: AgentTaskRequest, documents: Array<{ path: string; content: string; version: number }>, issues: ReviewIssue[], skill: AgentTaskInput["skill"], skillInstructions: string, venueInstructions: string, complianceFindings: ComplianceFinding[] = []): AgentTaskInput { return { objective: request.objective.trim(), intent: request.intent ?? "revise", scope: request.scope, issues: issues.map(toAgentIssue), documents, skill, skillInstructions, venueInstructions, ...(complianceFindings.length ? { complianceFindings } : {}) }; }
+  private input(request: AgentTaskRequest, documents: Array<{ path: string; content: string; version: number }>, issues: ReviewIssue[], skill: AgentTaskInput["skill"], skillInstructions: string, venueInstructions: string, complianceFindings: ComplianceFinding[] = []): AgentTaskInput { return { objective: request.objective.trim(), intent: request.intent ?? "revise", scope: request.scope, issues: issues.map(toAgentIssue), documents, skill, skillInstructions, venueInstructions, ...(request.responseLanguage ? { responseLanguage: request.responseLanguage } : {}), ...(complianceFindings.length ? { complianceFindings } : {}) }; }
   private getPlan(projectId: string, id: string) { const plan = this.database.snapshot().agentTaskPlans.find((item) => item.id === id && item.projectId === projectId); if (!plan) throw new ApiError(404, "agent_plan_not_found", "Agent plan not found"); return plan; }
   private validateGeneratedFiles(files: DraftGeneratedFile[], targetPath: string, intent: AgentTaskIntent) {
     const normalized = files.flatMap((file) => {
@@ -341,6 +353,13 @@ function mergeGeneratedFiles(generated: Array<{ targetPath: string; files: Draft
   const byTarget = new Map(generated.map((result) => [result.targetPath, result.files]));
   const allFiles = generated.flatMap((result) => result.files);
   return affectedFiles.map((path) => byTarget.get(path)?.find((file) => file.path === path) ?? allFiles.find((file) => file.path === path)).filter((file): file is DraftGeneratedFile => Boolean(file));
+}
+
+function sameOutsideLineRange(before: string, after: string, startLine: number, endLine: number): boolean {
+  const beforeLines = before.split("\n");
+  const afterLines = after.split("\n");
+  const outside = (lines: string[]) => [...lines.slice(0, Math.max(0, startLine - 1)), ...lines.slice(Math.max(startLine, endLine))];
+  return outside(beforeLines).join("\n") === outside(afterLines).join("\n");
 }
 
 function generationDocuments(

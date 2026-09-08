@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { compilerDependencyPackages, compilerFontPackages, compilerPackageProgress, compilerResourceProgress, resolveCompilerBundles, trackedCompilerResourceName } from "./compilerResources";
 
 describe("compiler resources", () => {
+  test("maps style names to their TeX Live package names", () => {
+    expect(compilerDependencyPackages("\\usepackage{CJKutf8}\\usepackage{algpseudocode}")).toEqual(["algorithmicx", "cjk"]);
+  });
   test("reports bounded byte progress with the current resource", () => {
     expect(compilerResourceProgress(1536, 4096, "booktabs.sty")).toEqual({
       percent: 38,

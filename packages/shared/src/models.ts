@@ -297,6 +297,7 @@ export interface ReviseRequest {
   /** Conversation context for the selected span. The server caps this before sending it to the provider. */
   history?: ReviseTurn[];
   issueIds?: string[];
+  responseLanguage?: "auto" | "zh-CN" | "en-US";
 }
 
 export interface ReviseTurn {
@@ -630,13 +631,23 @@ export interface PaperMemory {
 
 export interface AgentTaskRequest {
   objective: string;
-  scope: { type: "file" | "section" | "project"; path?: string };
+  scope: {
+    type: "file" | "section" | "project";
+    path?: string;
+    section?: { heading: string; level?: number; startLine?: number; endLine?: number };
+    forbiddenPaths?: string[];
+    forbiddenSections?: string[];
+    maxChangedLines?: number;
+    allowNewCitations?: boolean;
+    allowNewNumbers?: boolean;
+  };
   harness?: "codex" | "claude" | "legacy";
   issueIds?: string[];
   intent?: AgentTaskIntent;
   taskSkillIds?: string[];
   skillOptions?: Record<string, string>;
   validationMode?: "standard" | "strict";
+  responseLanguage?: "auto" | "zh-CN" | "en-US";
 }
 
 export type AgentTaskIntent = "draft" | "continue" | "revise";

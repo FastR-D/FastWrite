@@ -116,6 +116,7 @@ export class ReviseService {
         skill: project.skill,
         skillInstructions: withMemory(`${workflowInstructions}\n\n${loadedSkill.instructions}`, memory.content),
         venueInstructions: loadedSkill.venueInstructions,
+        ...(request.responseLanguage ? { responseLanguage: request.responseLanguage } : {}),
         ...context
       });
       if (!output.replacement.trim()) throw new Error("The agent returned an empty revision");

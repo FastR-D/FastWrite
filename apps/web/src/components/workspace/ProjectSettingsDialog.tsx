@@ -6,6 +6,7 @@ import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
 import { PublicationTargetFields } from "../ui/PublicationTargetFields";
 import { harnessSettingsSaveDecision, type HarnessSettingsBaseline, type HarnessSettingsDraft } from "./harnessSettings";
+import { responseLanguage, setResponseLanguage, type ResponseLanguage } from "../../lib/responseLanguage";
 
 interface ProjectSettingsDialogProps {
   open: boolean;
@@ -14,8 +15,10 @@ interface ProjectSettingsDialogProps {
   onClose: () => void;
   onSaved: (project: PaperProject) => void | Promise<void>;
 }
+interface RememberedHarnessSettings { baseURL?: string; model?: string; wireAPI?: AgentWireApi }
 
 export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }: ProjectSettingsDialogProps) {
+  const harnessDraftKey = "fastwrite.harness-settings";
   const [name, setName] = useState(project.name);
   const [mainDocument, setMainDocument] = useState(project.mainDocument);
   const [profile, setProfile] = useState<WritingProfile>(project.skill.venue);
@@ -28,6 +31,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
   const [baseURL, setBaseURL] = useState("");
   const [model, setModel] = useState("");
   const [wireAPI, setWireAPI] = useState<AgentWireApi>("chat");
+  const [language, setLanguage] = useState<ResponseLanguage>(() => responseLanguage());
   const [agentBaseline, setAgentBaseline] = useState<HarnessSettingsBaseline>({ configured: null, baseURL: "", model: "", wireAPI: "chat" });
   const [savingAgent, setSavingAgent] = useState(false);
   const [agentError, setAgentError] = useState("");
@@ -43,9 +47,12 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     setAgentConfigured(null);
     setAgentSource("none");
     setApiKey("");
-    setBaseURL("");
-    setModel("");
-    setWireAPI("chat");
+    let remembered: RememberedHarnessSettings | null = null;
+    try { remembered = JSON.parse(localStorage.getItem(harnessDraftKey) ?? "null") as RememberedHarnessSettings; } catch { localStorage.removeItem(harnessDraftKey); }
+    setBaseURL(remembered?.baseURL ?? "");
+    setModel(remembered?.model ?? "");
+    setWireAPI(remembered?.wireAPI === "responses" ? "responses" : "chat");
+    setLanguage(responseLanguage());
     setAgentBaseline({ configured: null, baseURL: "", model: "", wireAPI: "chat" });
     setAgentError("");
     void api.agentSettings.get().then((settings) => {
@@ -72,6 +79,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     const agentDecision = harnessSettingsSaveDecision(resolved.draft, agentBaseline);
     if (agentDecision.kind === "invalid") { setAgentError(agentDecision.message); return; }
     setLoading(true);
+    setResponseLanguage(language);
     try {
       if (agentDecision.kind === "save") await persistAgentSettings(agentDecision.body);
       const updated = await api.projects.update(project.id, { name: name.trim(), mainDocument, venue: profile, publicationTarget: publicationTarget ?? null });
@@ -110,6 +118,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     setBaseURL(nextBaseURL);
     setModel(nextModel);
     setWireAPI(settings.wireAPI);
+    localStorage.setItem(harnessDraftKey, JSON.stringify({ baseURL: nextBaseURL, model: nextModel, wireAPI: settings.wireAPI }));
     setAgentBaseline({ configured: settings.configured, baseURL: nextBaseURL, model: nextModel, wireAPI: settings.wireAPI });
   };
 
@@ -127,6 +136,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
         <label className="field"><span>Main document</span><select value={mainDocument} onChange={(event) => setMainDocument(event.target.value)}>{texFiles.map((path) => <option key={path} value={path}>{path}</option>)}</select></label>
         <label className="field"><span>Research domain</span><select value={profile} onChange={(event) => { const next = event.target.value as WritingProfile; setProfile(next); if (publicationTarget?.domain !== next) setPublicationTarget(undefined); }}>{WRITING_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         <PublicationTargetFields profile={profile} value={publicationTarget} onChange={setPublicationTarget} />
+        <label className="field"><span>AI response language</span><select value={language} onChange={(event) => setLanguage(event.target.value as ResponseLanguage)}><option value="auto">Follow user</option><option value="zh-CN">中文</option><option value="en-US">English</option></select></label>
         <section className="settings-agent" aria-labelledby="agent-settings-title">
           <div><strong id="agent-settings-title">Harness</strong><span>{agentConfigured ? `Configured from ${agentSource === "environment" ? "server environment" : "this running server"}.` : "Configure a Harness model to enable Agent workflows."}</span></div>
           <label className="field"><span>API key</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={agentConfigured ? "Enter a replacement key" : "sk-…"} autoComplete="off" /></label>

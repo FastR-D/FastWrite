@@ -1,4 +1,4 @@
-import type { AgentWireApi, ComplianceFinding, DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection, EvidenceDependency } from "@fastwrite/shared";
+import type { AgentTaskRequest, AgentWireApi, ComplianceFinding, DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection, EvidenceDependency } from "@fastwrite/shared";
 
 export interface ReviseAgentInput {
   instruction: string;
@@ -15,6 +15,7 @@ export interface ReviseAgentInput {
   skill: PaperSkillRef;
   skillInstructions: string;
   venueInstructions: string;
+  responseLanguage?: "auto" | "zh-CN" | "en-US";
 }
 
 export interface ReviseAgentOutput {
@@ -44,13 +45,14 @@ export interface AgentTaskIssue { id: string; title: string; rationale: string; 
 export interface AgentTaskInput {
   objective: string;
   intent: "draft" | "continue" | "revise";
-  scope: { type: "file" | "section" | "project"; path?: string };
+  scope: AgentTaskRequest["scope"];
   issues: AgentTaskIssue[];
   documents: Array<{ path: string; content: string; version: number }>;
   skill: PaperSkillRef;
   skillInstructions: string;
   venueInstructions: string;
   complianceFindings?: ComplianceFinding[];
+  responseLanguage?: "auto" | "zh-CN" | "en-US";
 }
 export interface AgentTaskPlanOutput {
   steps: string[];

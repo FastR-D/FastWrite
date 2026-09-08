@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowRight, BookOpenText, Clock3, FilePlus2, FolderGit2, Plus } from "lucide-react";
+import { ArrowRight, BookOpenText, Clock3, FilePlus2, FolderGit2, Plus, Trash2 } from "lucide-react";
 import type { PaperProject, PublicationTarget, PublicationVenueOption, WritingProfile } from "@fastwrite/shared";
 import { WRITING_PROFILES } from "@fastwrite/shared";
 import { api } from "../api/client";
@@ -17,6 +17,7 @@ export function ProjectsPage() {
   const [error, setError] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const loadProjects = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -37,6 +38,13 @@ export function ProjectsPage() {
   }, [loadProjects]);
 
   const openProject = (project: PaperProject) => navigate(projectPath(project.id));
+  const deleteProject = async (project: PaperProject) => {
+    if (!window.confirm(`Move project "${project.name}" to trash?`)) return;
+    setDeleting(project.id); setError("");
+    try { await api.projects.delete(project.id); await loadProjects(); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "Could not delete project"); }
+    finally { setDeleting(null); }
+  };
 
   return (
     <div className="projects-page">
@@ -76,10 +84,10 @@ export function ProjectsPage() {
           ) : (
             <div className="project-grid">
               {projects.map((project) => (
-                <button key={project.id} className="project-card" onClick={() => openProject(project)}>
+                <div key={project.id} className="project-card" role="group" onClick={() => openProject(project)}>
                   <div className="project-card__top">
                     <span className="project-card__icon"><BookOpenText /></span>
-                    <ArrowRight className="project-card__arrow" />
+                    <span className="project-card__actions"><ArrowRight className="project-card__arrow" /><button type="button" className="project-card__delete" aria-label={`Delete ${project.name}`} title="Move project to trash" disabled={deleting === project.id} onClick={(event) => { event.stopPropagation(); void deleteProject(project); }}><Trash2 /></button></span>
                   </div>
                   <h3>{project.name}</h3>
                   <code>{project.mainDocument}</code>
@@ -87,7 +95,7 @@ export function ProjectsPage() {
                     <span><Clock3 /> {relativeTime(project.updatedAt)}</span>
                     <span>{publicationTargetAbbreviation(project.publicationTarget, project.skill.id)}</span>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           )}

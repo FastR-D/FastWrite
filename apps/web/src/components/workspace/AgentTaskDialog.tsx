@@ -8,6 +8,7 @@ import type { CompileStateReport } from "./PdfPane";
 import { EditableChangeReview } from "./EditableChangeReview";
 import { ChangeSetConflictDialog } from "./ChangeSetConflictDialog";
 import { activeAgentChangeSetStage, activeAgentIntentCommand, AGENT_INTENT_COMMANDS, applyAgentIntentCommand, recoverableAgentPlan, restoredAgentReviewStage } from "./agentCommands";
+import { responseLanguage } from "../../lib/responseLanguage";
 import { changeSetHunkCounts, fileReviewState, hunkCounts, pendingDecisions } from "./agentReview";
 
 type Stage = "input" | "planning" | "plan" | "generating" | "diff" | "applying" | "accepted" | "rereviewing";
@@ -113,7 +114,7 @@ export function AgentTaskWorkspace({ open, project, seed, compileState, onReques
   const reviewCounts = changeSet ? changeSetHunkCounts(changeSet) : null;
   const parts = useMemo(() => selectedChange ? diffWords(selectedChange.before, selectedChange.after) : [], [selectedChange]);
 
-  const createPlan = async () => { const controller = beginRequest(requestRef); setStage("planning"); setError(""); try { const result = await api.agentTasks.plan(project.id, { objective, scope: { type: "project" }, ...(taskSkillIds.length ? { taskSkillIds } : {}), ...(seed.issueIds?.length ? { issueIds: seed.issueIds } : {}), ...(seed.harness ? { harness: seed.harness } : {}) }, controller.signal); setRun(result.run); setPlan(result.plan); setResolution(result.resolution ?? null); setStage("plan"); } catch (failure) { setError(cancelMessage(failure, "Agent planning")); setStage("input"); } finally { finishRequest(requestRef, controller); } };
+  const createPlan = async () => { const controller = beginRequest(requestRef); setStage("planning"); setError(""); try { const result = await api.agentTasks.plan(project.id, { objective, scope: { type: "project" }, responseLanguage: responseLanguage(), ...(taskSkillIds.length ? { taskSkillIds } : {}), ...(seed.issueIds?.length ? { issueIds: seed.issueIds } : {}), ...(seed.harness ? { harness: seed.harness } : {}) }, controller.signal); setRun(result.run); setPlan(result.plan); setResolution(result.resolution ?? null); setStage("plan"); } catch (failure) { setError(cancelMessage(failure, "Agent planning")); setStage("input"); } finally { finishRequest(requestRef, controller); } };
   const generate = async () => { if (!plan) return; const controller = beginRequest(requestRef); setStage("generating"); setError(""); try { const result = await api.agentTasks.confirm(project.id, plan.id, controller.signal); setRun(result.run); setPlan(result.plan); setChangeSet(result.changeSet); setResolution(result.resolution ?? resolution); setActiveFile(0); setStage("diff"); } catch (failure) { setError(cancelMessage(failure, "Agent execution")); setStage("plan"); } finally { finishRequest(requestRef, controller); } };
   const reset = () => { setStage("input"); setPlan(null); setRun(null); setChangeSet(null); setResolution(null); setError(""); setPendingConflict(null); setActiveFile(0); };
   const startNewTask = () => { setDismissedPlanId(plan?.id ?? null); setObjective(""); reset(); };
