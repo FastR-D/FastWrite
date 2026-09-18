@@ -17,6 +17,7 @@ interface FileTreeProps {
   nodes: WorkspaceTreeNode[];
   selectedPath: string | null;
   mainDocument: string;
+  onPin?: (node: WorkspaceTreeNode) => void;
   onSelect: (node: WorkspaceTreeNode) => void;
   onExpand?: (path: string) => Promise<void>;
 }
@@ -29,7 +30,7 @@ interface VisibleNode {
 const ROW_HEIGHT = 27;
 const OVERSCAN = 8;
 
-export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand }: FileTreeProps) {
+export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand, onPin }: FileTreeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState<Set<string>>(() => new Set());
@@ -121,7 +122,7 @@ export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand
             );
           }
           return (
-            <button key={node.path} className={`tree-row tree-row--file file-tree__virtual-row ${selectedPath === node.path ? "is-selected" : ""}`} style={rowStyle} role="treeitem" aria-selected={selectedPath === node.path} onClick={() => onSelect(node)}>
+            <button key={node.path} className={`tree-row tree-row--file file-tree__virtual-row ${selectedPath === node.path ? "is-selected" : ""}`} style={rowStyle} role="treeitem" aria-selected={selectedPath === node.path} onClick={() => onSelect(node)} onDoubleClick={() => onPin?.(node)}>
               <FileIcon path={node.path} kind={node.kind} />
               <span title={node.path}>{node.name}</span>
               {node.path === mainDocument ? <BookOpen className="tree-row__main" aria-label="Main document" /> : null}

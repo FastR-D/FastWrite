@@ -9,6 +9,17 @@ const configuredDataDirectory = process.env.FASTWRITE_DATA_DIR;
 const harnessApiKey = process.env.FASTWRITE_HARNESS_API_KEY;
 const harnessBaseURL = process.env.FASTWRITE_HARNESS_BASE_URL;
 const harnessModel = process.env.FASTWRITE_HARNESS_MODEL;
+const collaborationRoomTokenSecret = process.env.FASTWRITE_COLLABORATION_ROOM_TOKEN_SECRET;
+const oidcIssuer = process.env.FASTWRITE_OIDC_ISSUER?.trim();
+const oidcClientId = process.env.FASTWRITE_OIDC_CLIENT_ID?.trim();
+const oidcRedirectUri = process.env.FASTWRITE_OIDC_REDIRECT_URI?.trim();
+const oidcClientSecret = process.env.FASTWRITE_OIDC_CLIENT_SECRET?.trim();
+const casServerUrl = process.env.FASTWRITE_CAS_SERVER_URL?.trim();
+const casServiceUrl = process.env.FASTWRITE_CAS_SERVICE_URL?.trim();
+const smtpUrl = process.env.FASTWRITE_SMTP_URL?.trim();
+const mailFrom = process.env.FASTWRITE_MAIL_FROM?.trim();
+const bootstrapAdminEmail = process.env.FASTWRITE_BOOTSTRAP_ADMIN_EMAIL?.trim() || "admin@qq.com";
+const bootstrapAdminPassword = process.env.FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD?.trim() || "admin123456789";
 const packagedWebDirectory = resolve(import.meta.dir, "web");
 const embeddedWebDirectory = resolve(import.meta.dir, "../../web/dist");
 const releaseDirectory = dirname(process.execPath);
@@ -24,6 +35,10 @@ export interface AgentProviderConfiguration {
   model?: string | undefined;
   wireAPI?: AgentWireApi | undefined;
 }
+
+export interface OidcConfiguration { issuer: string; clientId: string; redirectUri: string; clientSecret?: string; }
+export interface CasConfiguration { serverUrl: string; serviceUrl: string; }
+export interface MailConfiguration { smtpUrl: string; from: string; }
 
 function configured(environment: NodeJS.ProcessEnv, key: string): string | undefined {
   return environment[key]?.trim() || undefined;
@@ -96,5 +111,18 @@ export const config = {
   harnessApiKey,
   harnessBaseURL,
   harnessModel,
-  agentProviders: agentProviderConfigurations()
+  collaborationRoomTokenSecret,
+  oidc: oidcIssuer && oidcClientId && oidcRedirectUri ? { issuer: oidcIssuer, clientId: oidcClientId, redirectUri: oidcRedirectUri, ...(oidcClientSecret ? { clientSecret: oidcClientSecret } : {}) } satisfies OidcConfiguration : undefined,
+  cas: casServerUrl && casServiceUrl ? { serverUrl: casServerUrl, serviceUrl: casServiceUrl } satisfies CasConfiguration : undefined,
+  mail: smtpUrl && mailFrom ? { smtpUrl, from: mailFrom } satisfies MailConfiguration : undefined,
+  bootstrapAdmin: { email: bootstrapAdminEmail, password: bootstrapAdminPassword },
+  agentProviders: agentProviderConfigurations(),
+  features: {
+    serverAuth: process.env.FASTWRITE_SERVER_AUTH === "true",
+    teams: process.env.FASTWRITE_TEAMS === "true",
+    scopedHarness: process.env.FASTWRITE_SCOPED_HARNESS === "true",
+    realtimeV2: process.env.FASTWRITE_REALTIME_V2 === "true",
+    commentsV2: process.env.FASTWRITE_COMMENTS_V2 === "true",
+    pwaOffline: process.env.FASTWRITE_PWA_OFFLINE === "true"
+  }
 };

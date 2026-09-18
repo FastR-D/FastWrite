@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { WRITING_PROFILES, paperSkillForProfile } from "@fastwrite/shared";
 import { join } from "node:path";
-import { SkillRegistry } from "./skill-registry";
+import { parseSkillManifest, SkillRegistry } from "./skill-registry";
 
 describe("SkillRegistry publication targets", () => {
   const registry = new SkillRegistry(join(import.meta.dir, "..", "skills"));
@@ -44,5 +44,17 @@ describe("SkillRegistry publication targets", () => {
     const loaded = await registry.load(paperSkillForProfile("network-information-security"), { domain: "artificial-intelligence", venueId: "neurips", stage: "submission" });
     expect(loaded.venueInstructions).toContain("# Network and information security");
     expect(loaded.venueInstructions).not.toContain("id: neurips");
+  });
+});
+
+describe("published Skill manifests", () => {
+  const registry = new SkillRegistry(join(import.meta.dir, "..", "skills"));
+  test("publishes versioned, capability-bounded core workflow skills", async () => {
+    const releases = await registry.publishedCatalog();
+    expect(releases).toEqual(expect.arrayContaining([expect.objectContaining({ id: "review", version: "1.0.0", scope: "system", capabilities: ["workspace.read"], requiresReview: true })]));
+    expect(releases.map((release) => release.id).sort()).toEqual(["compile-repair", "completion", "draft", "memory-extract", "memory-polish", "review", "revise"]);
+  });
+  test("rejects a manifest with an unbounded or mismatched release identity", () => {
+    expect(() => parseSkillManifest(JSON.stringify({ id: "review", version: "1.0.0", scope: "system", owner: "FastWrite", license: "Apache-2.0", workflows: ["review"], requiredEvidence: [], capabilities: [], maxContextChars: 0, riskLevel: "low", requiresReview: true, references: [] }), "different")).toThrow();
   });
 });

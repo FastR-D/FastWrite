@@ -116,7 +116,119 @@ export interface PaperProject {
   createdAt: string;
   updatedAt: string;
   version: number;
+  /** Ownership metadata is optional while importing legacy single-user projects. */
+  teamId?: string;
+  personalOwnerUserId?: string;
+  visibility?: "private" | "team";
 }
+
+export type PlatformRole = "platform_admin" | "support_auditor" | "user";
+export type TeamRole = "owner" | "admin" | "member";
+export type ProjectRole = "owner" | "maintainer" | "editor" | "commenter" | "viewer";
+
+export interface AccountUser {
+  id: string;
+  emailNormalized: string;
+  displayName: string;
+  platformRole: PlatformRole;
+  status: "active" | "disabled";
+  authzVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExternalIdentity {
+  id: string;
+  userId: string;
+  issuer: string;
+  subject: string;
+  email?: string;
+  username?: string;
+  createdAt: string;
+}
+
+export interface TeamHarnessPolicy {
+  personalHarness: boolean;
+  allowedProviders?: HarnessProfile["provider"][];
+  allowedModels?: string[];
+  allowedTools?: string[];
+  maxConcurrentRuns?: number;
+  dailyBudgetUsd?: number;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  slug: string;
+  personalUserId?: string;
+  harnessPolicy?: TeamHarnessPolicy;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamMember { teamId: string; userId: string; role: TeamRole; idpGroupBindingIds?: string[]; createdAt: string; updatedAt: string; }
+export interface TeamGroupBinding { id: string; teamId: string; idpGroup: string; role: Exclude<TeamRole, "owner">; createdByUserId: string; createdAt: string; updatedAt: string; }
+export interface ProjectMember { projectId: string; userId: string; role: ProjectRole; createdAt: string; updatedAt: string; }
+export type ProjectAclAction = "read" | "comment" | "edit" | "manage" | "run_ai" | "manage_harness" | "export" | "sync_github";
+export interface ProjectAclRule { id: string; projectId: string; pathPrefix: string; subjectType: "user" | "project_role" | "team_role" | "idp_group"; subjectId: string; action: ProjectAclAction; effect: "allow" | "deny"; createdByUserId: string; createdAt: string; updatedAt: string; }
+export interface Invitation { id: string; resourceType: "team" | "project"; resourceId: string; emailNormalized: string; role: TeamRole | ProjectRole; tokenHash: string; invitedByUserId: string; expiresAt: string; message?: string; acceptedAt?: string; revokedAt?: string; createdAt: string; }
+export interface AccessRequest { id: string; projectId: string; requesterUserId: string; requestedRole: Exclude<ProjectRole, "owner">; message?: string; status: "pending" | "approved" | "rejected"; decidedByUserId?: string; decidedAt?: string; createdAt: string; updatedAt: string; }
+export type UserNotificationType = "access_request" | "access_request_decision" | "mention";
+export interface UserNotification { id: string; userId: string; type: UserNotificationType; title: string; body?: string; projectId?: string; accessRequestId?: string; inApp: boolean; readAt?: string; createdAt: string; }
+export interface NotificationPreference { userId: string; type: UserNotificationType; inApp: boolean; email: boolean; updatedAt: string; }
+export interface NotificationDelivery { id: string; notificationId: string; userId: string; channel: "email"; status: "pending" | "sent" | "failed" | "suppressed"; attempts: number; recipientEmail: string; subject: string; text: string; nextAttemptAt?: string; lastError?: string; sentAt?: string; createdAt: string; updatedAt: string; }
+export interface AuditEvent { id: string; actorUserId?: string; action: string; resourceType: string; resourceId: string; requestId?: string; metadata?: Record<string, string>; createdAt: string; }
+
+export type HarnessProfileScope = "system" | "team" | "user";
+export interface HarnessProfile {
+  id: string;
+  scope: HarnessProfileScope;
+  teamId?: string;
+  userId?: string;
+  name: string;
+  provider: "codex" | "claude" | "openai-compatible";
+  model?: string;
+  baseUrl?: string;
+  wireApi: "responses" | "chat";
+  secretId?: string;
+  allowedTools: string[];
+  maxConcurrentRuns: number;
+  dailyBudgetUsd?: number;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt?: string;
+}
+
+export interface ResolvedHarnessProfile {
+  profileId: string;
+  version: number;
+  provider: HarnessProfile["provider"];
+  model?: string;
+  baseUrl?: string;
+  wireApi: HarnessProfile["wireApi"];
+  allowedTools: string[];
+  sourceChain: Array<{ scope: HarnessProfileScope; profileId: string; version: number }>;
+  fingerprint: string;
+  hasSecret: boolean;
+}
+
+export interface CommentThread {
+  id: string;
+  projectId: string;
+  documentId: string;
+  path: string;
+  startRelativePosition: string;
+  endRelativePosition: string;
+  quote: string;
+  contextHash: string;
+  fileVersion: number;
+  status: "open" | "resolved" | "orphaned";
+  authorUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface CommentMessage { id: string; threadId: string; authorUserId: string; body: string; mentionedUserIds?: string[]; createdAt: string; updatedAt: string; }
 
 export type PaperFileKind = "text" | "image" | "binary";
 
@@ -229,6 +341,7 @@ export interface CreateProjectRequest {
   venue?: TargetVenue;
   publicationTarget?: PublicationTarget;
   initializeFromTemplate?: boolean;
+  teamId?: string;
 }
 
 export interface GithubImportRequest {
@@ -915,6 +1028,23 @@ export interface CompileRecord {
   createdAt: string;
 }
 
+/** Durable compile work item. Results remain separate so retries are auditable. */
+export interface CompileJob {
+  id: string;
+  projectId: string;
+  projectVersion: number;
+  actorUserId: string;
+  authorizationPolicyVersion: number;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "dead-letter";
+  attempts: number;
+  maxAttempts: number;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  cancelRequestedAt?: string;
+  error?: string;
+}
+
 export type CompletionKind = "auto";
 export interface CompletionRequest { path: string; cursor: number; fileVersion: number; kind: CompletionKind }
 export interface CompletionResponse { suggestion: string; path: string; cursor: number; fileVersion: number; kind: CompletionKind }
@@ -968,4 +1098,63 @@ function legacyVenueDomain(venueId: string): ResearchDomainId | undefined {
   if (["aaai", "neurips", "acl", "cvpr", "iccv", "icml", "ijcai", "artificial-intelligence", "tpami", "ijcv", "jmlr"].includes(venueId)) return "artificial-intelligence";
   if (["ccs", "eurocrypt", "sp", "crypto", "usenix-security", "ndss", "tdsc", "tifs", "journal-of-cryptology"].includes(venueId)) return "network-information-security";
   return undefined;
+}
+
+export interface HistoryCommit {
+  oid: string;
+  parentOids: string[];
+  message: string;
+  createdAt: string;
+  source: "manual" | "automatic" | "system";
+}
+export interface HistoryChangedFile {
+  path: string;
+  oldPath?: string;
+  status: "A" | "M" | "D" | "R" | "T";
+  binary: boolean;
+  additions: number | null;
+  deletions: number | null;
+}
+export interface HistorySummary extends HistoryCommit {
+  paths: string[];
+  files: HistoryChangedFile[];
+}
+export interface HistoryPage { commits: HistoryCommit[]; nextCursor: string | null; }
+export interface HistoryTreeEntry { path: string; oid: string; size: number; mode: string; }
+export interface HistoryFileSide {
+  ref: string;
+  path: string;
+  exists: boolean;
+  binary: boolean;
+  size: number;
+  content?: string;
+}
+export interface HistoryComparison { original: HistoryFileSide; modified: HistoryFileSide; }
+
+/** Full CRDT state captured at flush invocation, including deletion metadata. */
+export interface CollaborationPersistRequest {
+  path: string;
+  documentId: string;
+  update: string;
+}
+
+export interface CollaborationPersistResponse {
+  path: string;
+  documentId: string;
+  fileVersion: number;
+  update: string;
+  content: string;
+}
+
+export interface HistoryChanges { baseRef: string; targetRef: string; files: HistoryChangedFile[]; }
+
+export interface HistoryWorkingChanges {
+  baseRef: string;
+  projectVersion: number;
+  snapshotId: string;
+  files: HistoryChangedFile[];
+}
+export interface HistoryWorkingComparison extends HistoryComparison {
+  projectVersion: number;
+  snapshotId: string;
 }

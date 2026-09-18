@@ -1,0 +1,16 @@
+{
+  "id": "review",
+  "version": "1.0.0",
+  "scope": "system",
+  "owner": "FastWrite",
+  "license": "Apache-2.0",
+  "workflows": ["review"],
+  "requiredEvidence": ["manuscript", "publication-target"],
+  "capabilities": ["workspace.read"],
+  "maxContextChars": 120000,
+  "riskLevel": "medium",
+  "requiresReview": true,
+  "references": [
+    { "url": "https://fastwrite.local/docs/RDA.md", "license": "internal", "verifiedAt": "2026-09-16" }
+  ]
+}

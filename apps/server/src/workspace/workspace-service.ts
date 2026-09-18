@@ -12,6 +12,7 @@ import {
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, join, relative } from "node:path";
 import type {
+  HistoryCommit, HistorySummary, HistoryPage, HistoryTreeEntry, HistoryFileSide, HistoryComparison,
   DirectoryTreeNode,
   FileContentResponse,
   FileTreeNode,
@@ -32,6 +33,7 @@ import type { JsonDatabase } from "../storage/database";
 import { buildLatexOutline, parseLatexDocumentEntries } from "./outline";
 import { resolveWorkspacePath } from "./path";
 import { GitHistory } from "./git-history";
+import { ProjectQueue } from "./project-queue";
 
 function now(): string {
   return new Date().toISOString();
@@ -44,6 +46,7 @@ function projectId(): string {
 export class WorkspaceService {
   private readonly projectsDirectory: string;
   private readonly gitHistory = new GitHistory();
+  private readonly projectQueue = new ProjectQueue();
   private readonly historyTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly dataDirectory: string, private readonly database: JsonDatabase) {
@@ -67,10 +70,12 @@ export class WorkspaceService {
   }
 
   async deleteProject(id: string): Promise<void> {
-    this.getProject(id);
-    const projectDirectory = join(this.projectsDirectory, id);
-    await rm(projectDirectory, { recursive: true, force: true });
-    await this.database.deleteProject(id);
+    return this.projectQueue.run(id, async () => {
+      this.getProject(id);
+      const projectDirectory = join(this.projectsDirectory, id);
+      await rm(projectDirectory, { recursive: true, force: true });
+      await this.database.deleteProject(id);
+    });
   }
 
   workspaceRoot(id: string): string {
@@ -155,15 +160,17 @@ export class WorkspaceService {
   }
 
   async readTextFile(id: string, requestedPath: string): Promise<FileContentResponse> {
-    const root = this.workspaceRoot(id);
-    const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
-    if (!isTextFile(relativePath)) throw new ApiError(415, "binary_file", "This file cannot be opened in the source editor");
-    const info = await this.safeFileStat(absolutePath);
-    const versions = this.database.snapshot().fileVersions[id] ?? {};
-    return {
-      file: this.paperFile(relativePath, info.size, versions[relativePath]?.version ?? 1, versions[relativePath]?.updatedAt ?? info.mtime.toISOString()),
-      content: await readFile(absolutePath, "utf8")
-    };
+    return this.projectQueue.run(id, async () => {
+      const root = this.workspaceRoot(id);
+      const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
+      if (!isTextFile(relativePath)) throw new ApiError(415, "binary_file", "This file cannot be opened in the source editor");
+      const info = await this.safeFileStat(absolutePath);
+      const versions = this.database.snapshot().fileVersions[id] ?? {};
+      return {
+        file: this.paperFile(relativePath, info.size, versions[relativePath]?.version ?? 1, versions[relativePath]?.updatedAt ?? info.mtime.toISOString()),
+        content: await readFile(absolutePath, "utf8")
+      };
+    });
   }
 
   async fileExists(id: string, requestedPath: string): Promise<boolean> {
@@ -189,140 +196,150 @@ export class WorkspaceService {
   }
 
   async saveTextFile(id: string, requestedPath: string, request: SaveFileRequest): Promise<SaveFileResponse> {
-    const project = this.getProject(id);
-    const root = this.workspaceRoot(id);
-    const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
-    if (!isTextFile(relativePath)) throw new ApiError(415, "binary_file", "Binary files cannot be saved as source text");
-    await this.safeFileStat(absolutePath);
-    const currentVersion = this.database.snapshot().fileVersions[id]?.[relativePath]?.version ?? 1;
-    if (request.baseVersion !== currentVersion) {
-      throw new ApiError(409, "version_conflict", "The file changed since it was opened", { currentVersion });
-    }
-    const timestamp = now();
-    await writeFile(absolutePath, request.content, "utf8");
-    const nextFileVersion = currentVersion + 1;
-    const nextProjectVersion = project.version + 1;
-    await this.database.mutate((state) => {
-      const fileVersions = state.fileVersions[id] ?? {};
-      fileVersions[relativePath] = { version: nextFileVersion, updatedAt: timestamp };
-      state.fileVersions[id] = fileVersions;
-      const storedProject = state.projects.find((candidate) => candidate.id === id);
-      if (storedProject) {
-        storedProject.version = nextProjectVersion;
-        storedProject.updatedAt = timestamp;
+    return this.projectQueue.run(id, async () => {
+      const project = this.getProject(id);
+      const root = this.workspaceRoot(id);
+      const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
+      if (!isTextFile(relativePath)) throw new ApiError(415, "binary_file", "Binary files cannot be saved as source text");
+      await this.safeFileStat(absolutePath);
+      const currentVersion = this.database.snapshot().fileVersions[id]?.[relativePath]?.version ?? 1;
+      if (request.baseVersion !== currentVersion) {
+        throw new ApiError(409, "version_conflict", "The file changed since it was opened", { currentVersion });
       }
+      const timestamp = now();
+      await writeFile(absolutePath, request.content, "utf8");
+      const nextFileVersion = currentVersion + 1;
+      const nextProjectVersion = project.version + 1;
+      await this.database.mutate((state) => {
+        const fileVersions = state.fileVersions[id] ?? {};
+        fileVersions[relativePath] = { version: nextFileVersion, updatedAt: timestamp };
+        state.fileVersions[id] = fileVersions;
+        const storedProject = state.projects.find((candidate) => candidate.id === id);
+        if (storedProject) {
+          storedProject.version = nextProjectVersion;
+          storedProject.updatedAt = timestamp;
+        }
+      });
+      this.scheduleHistorySnapshot(id, `Autosave ${relativePath}`);
+      return {
+        file: this.paperFile(relativePath, Buffer.byteLength(request.content), nextFileVersion, timestamp),
+        projectVersion: nextProjectVersion
+      };
     });
-    this.scheduleHistorySnapshot(id, `Autosave ${relativePath}`);
-    return {
-      file: this.paperFile(relativePath, Buffer.byteLength(request.content), nextFileVersion, timestamp),
-      projectVersion: nextProjectVersion
-    };
   }
 
-  async createFile(id: string, requestedPath: string, content = ""): Promise<PaperFile> {
-    const root = this.workspaceRoot(id);
-    const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
-    this.assertPaperSourcePath(relativePath);
-    try {
-      await lstat(absolutePath);
-      throw new ApiError(409, "file_exists", "A file or folder already exists at this path");
-    } catch (error) {
-      if (error instanceof ApiError) throw error;
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    await mkdir(dirname(absolutePath), { recursive: true });
-    await writeFile(absolutePath, content, "utf8");
-    const timestamp = now();
-    await this.touchProject(id, relativePath, 1, timestamp);
-    await this.snapshotHistory(id, `Create ${relativePath}`);
-    return this.paperFile(relativePath, Buffer.byteLength(content), 1, timestamp);
+  async createFile(id: string, requestedPath: string, content = "", checkpoint = true): Promise<PaperFile> {
+    return this.projectQueue.run(id, async () => {
+      const root = this.workspaceRoot(id);
+      const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
+      this.assertPaperSourcePath(relativePath);
+      try {
+        await lstat(absolutePath);
+        throw new ApiError(409, "file_exists", "A file or folder already exists at this path");
+      } catch (error) {
+        if (error instanceof ApiError) throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await mkdir(dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, content, "utf8");
+      const timestamp = now();
+      await this.touchProject(id, relativePath, 1, timestamp);
+      if (checkpoint) await this.snapshotHistory(id, `Create ${relativePath}`);
+      return this.paperFile(relativePath, Buffer.byteLength(content), 1, timestamp);
+    });
   }
 
   async addFile(id: string, requestedPath: string, content: ArrayBuffer): Promise<PaperFile> {
-    const root = this.workspaceRoot(id);
-    const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
-    this.assertPaperSourcePath(relativePath);
-    try {
-      await lstat(absolutePath);
-      throw new ApiError(409, "file_exists", "A file or folder already exists at this path");
-    } catch (error) {
-      if (error instanceof ApiError) throw error;
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    await mkdir(dirname(absolutePath), { recursive: true });
-    await writeFile(absolutePath, new Uint8Array(content));
-    const timestamp = now();
-    await this.touchProject(id, relativePath, 1, timestamp);
-    await this.snapshotHistory(id, `Add ${relativePath}`);
-    return this.paperFile(relativePath, content.byteLength, 1, timestamp);
+    return this.projectQueue.run(id, async () => {
+      const root = this.workspaceRoot(id);
+      const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
+      this.assertPaperSourcePath(relativePath);
+      try {
+        await lstat(absolutePath);
+        throw new ApiError(409, "file_exists", "A file or folder already exists at this path");
+      } catch (error) {
+        if (error instanceof ApiError) throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await mkdir(dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, new Uint8Array(content));
+      const timestamp = now();
+      await this.touchProject(id, relativePath, 1, timestamp);
+      await this.snapshotHistory(id, `Add ${relativePath}`);
+      return this.paperFile(relativePath, content.byteLength, 1, timestamp);
+    });
   }
 
   async renamePath(id: string, fromPath: string, toPath: string): Promise<void> {
-    const root = this.workspaceRoot(id);
-    const from = resolveWorkspacePath(root, fromPath);
-    const to = resolveWorkspacePath(root, toPath);
-    this.assertPaperSourcePath(to.relativePath);
-    await this.safeFileStat(from.absolutePath);
-    try {
-      await lstat(to.absolutePath);
-      throw new ApiError(409, "file_exists", "A file or folder already exists at the destination path");
-    } catch (error) {
-      if (error instanceof ApiError) throw error;
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    await mkdir(dirname(to.absolutePath), { recursive: true });
-    await rename(from.absolutePath, to.absolutePath);
-    const timestamp = now();
-    await this.database.mutate((state) => {
-      const versions = state.fileVersions[id] ?? {};
-      for (const key of Object.keys(versions)) {
-        if (key === from.relativePath || key.startsWith(`${from.relativePath}/`)) {
-          const nextKey = `${to.relativePath}${key.slice(from.relativePath.length)}`;
-          versions[nextKey] = versions[key]!;
-          delete versions[key];
+    return this.projectQueue.run(id, async () => {
+      const root = this.workspaceRoot(id);
+      const from = resolveWorkspacePath(root, fromPath);
+      const to = resolveWorkspacePath(root, toPath);
+      this.assertPaperSourcePath(to.relativePath);
+      await this.safeFileStat(from.absolutePath);
+      try {
+        await lstat(to.absolutePath);
+        throw new ApiError(409, "file_exists", "A file or folder already exists at the destination path");
+      } catch (error) {
+        if (error instanceof ApiError) throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await mkdir(dirname(to.absolutePath), { recursive: true });
+      await rename(from.absolutePath, to.absolutePath);
+      const timestamp = now();
+      await this.database.mutate((state) => {
+        const versions = state.fileVersions[id] ?? {};
+        for (const key of Object.keys(versions)) {
+          if (key === from.relativePath || key.startsWith(`${from.relativePath}/`)) {
+            const nextKey = `${to.relativePath}${key.slice(from.relativePath.length)}`;
+            versions[nextKey] = versions[key]!;
+            delete versions[key];
+          }
         }
-      }
-      const project = state.projects.find((candidate) => candidate.id === id);
-      if (project) {
-        if (project.mainDocument === from.relativePath) project.mainDocument = to.relativePath;
-        project.updatedAt = timestamp;
-        project.version += 1;
-      }
-      for (const claim of state.paperClaims.filter((candidate) => candidate.projectId === id && (candidate.anchor.path === from.relativePath || candidate.anchor.path.startsWith(`${from.relativePath}/`)))) {
-        claim.anchorStatus = "stale";
-        claim.updatedAt = timestamp;
-      }
+        const project = state.projects.find((candidate) => candidate.id === id);
+        if (project) {
+          if (project.mainDocument === from.relativePath) project.mainDocument = to.relativePath;
+          project.updatedAt = timestamp;
+          project.version += 1;
+        }
+        for (const claim of state.paperClaims.filter((candidate) => candidate.projectId === id && (candidate.anchor.path === from.relativePath || candidate.anchor.path.startsWith(`${from.relativePath}/`)))) {
+          claim.anchorStatus = "stale";
+          claim.updatedAt = timestamp;
+        }
+      });
+      await this.snapshotHistory(id, `Rename ${from.relativePath} to ${to.relativePath}`);
     });
-    await this.snapshotHistory(id, `Rename ${from.relativePath} to ${to.relativePath}`);
   }
 
   async deletePath(id: string, requestedPath: string): Promise<void> {
-    const project = this.getProject(id);
-    const root = this.workspaceRoot(id);
-    const target = resolveWorkspacePath(root, requestedPath);
-    if (target.relativePath === project.mainDocument) {
-      throw new ApiError(409, "main_document", "Choose another main document before deleting this file");
-    }
-    await this.safeFileStat(target.absolutePath);
-    const trashTarget = join(this.projectsDirectory, id, "trash", `${Date.now()}-${basename(target.relativePath)}`);
-    await mkdir(dirname(trashTarget), { recursive: true });
-    await rename(target.absolutePath, trashTarget);
-    await this.database.mutate((state) => {
-      const versions = state.fileVersions[id] ?? {};
-      for (const key of Object.keys(versions)) {
-        if (key === target.relativePath || key.startsWith(`${target.relativePath}/`)) delete versions[key];
+    return this.projectQueue.run(id, async () => {
+      const project = this.getProject(id);
+      const root = this.workspaceRoot(id);
+      const target = resolveWorkspacePath(root, requestedPath);
+      if (target.relativePath === project.mainDocument) {
+        throw new ApiError(409, "main_document", "Choose another main document before deleting this file");
       }
-      const stored = state.projects.find((candidate) => candidate.id === id);
-      if (stored) {
-        stored.updatedAt = now();
-        stored.version += 1;
-      }
-      for (const claim of state.paperClaims.filter((candidate) => candidate.projectId === id && (candidate.anchor.path === target.relativePath || candidate.anchor.path.startsWith(`${target.relativePath}/`)))) {
-        claim.anchorStatus = "orphaned";
-        claim.updatedAt = now();
-      }
+      await this.safeFileStat(target.absolutePath);
+      const trashTarget = join(this.projectsDirectory, id, "trash", `${Date.now()}-${basename(target.relativePath)}`);
+      await mkdir(dirname(trashTarget), { recursive: true });
+      await rename(target.absolutePath, trashTarget);
+      await this.database.mutate((state) => {
+        const versions = state.fileVersions[id] ?? {};
+        for (const key of Object.keys(versions)) {
+          if (key === target.relativePath || key.startsWith(`${target.relativePath}/`)) delete versions[key];
+        }
+        const stored = state.projects.find((candidate) => candidate.id === id);
+        if (stored) {
+          stored.updatedAt = now();
+          stored.version += 1;
+        }
+        for (const claim of state.paperClaims.filter((candidate) => candidate.projectId === id && (candidate.anchor.path === target.relativePath || candidate.anchor.path.startsWith(`${target.relativePath}/`)))) {
+          claim.anchorStatus = "orphaned";
+          claim.updatedAt = now();
+        }
+      });
+      await this.snapshotHistory(id, `Delete ${target.relativePath}`);
     });
-    await this.snapshotHistory(id, `Delete ${target.relativePath}`);
   }
 
   async outline(id: string): Promise<OutlineItem[]> {
@@ -350,89 +367,99 @@ export class WorkspaceService {
   }
 
   async createHistoryCheckpoint(id: string): Promise<{ createdAt: string }> {
-    this.getProject(id);
-    this.clearHistoryTimer(id);
-    await this.snapshotHistory(id, "Manual checkpoint");
-    return { createdAt: now() };
+    return this.projectQueue.run(id, async () => {
+      this.getProject(id);
+      this.clearHistoryTimer(id);
+      await this.snapshotHistory(id, "Manual checkpoint");
+      return { createdAt: now() };
+    });
   }
 
   async createSyncCheckpoint(id: string): Promise<void> {
-    this.getProject(id);
-    this.clearHistoryTimer(id);
-    await this.snapshotHistory(id, "Before GitHub sync");
+    return this.projectQueue.run(id, async () => {
+      this.getProject(id);
+      this.clearHistoryTimer(id);
+      await this.snapshotHistory(id, "Before GitHub sync");
+    });
   }
 
   async applyGithubSyncTree(id: string, sourceDirectory: string): Promise<PaperProject> {
-    const project = this.getProject(id);
-    const root = this.workspaceRoot(id);
-    const syncedMain = resolveWorkspacePath(sourceDirectory, project.mainDocument).absolutePath;
-    await this.safeFileStat(syncedMain).catch(() => {
-      throw new ApiError(409, "github_sync_main_document_deleted", `GitHub sync would remove the main document '${project.mainDocument}'`);
-    });
+    return this.projectQueue.run(id, async () => {
+      const project = this.getProject(id);
+      const root = this.workspaceRoot(id);
+      const syncedMain = resolveWorkspacePath(sourceDirectory, project.mainDocument).absolutePath;
+      await this.safeFileStat(syncedMain).catch(() => {
+        throw new ApiError(409, "github_sync_main_document_deleted", `GitHub sync would remove the main document '${project.mainDocument}'`);
+      });
 
-    const beforeFiles = await this.listRelativeFiles(root);
-    const beforeHashes = await this.fileHashes(root, beforeFiles);
-    await this.removeManagedTree(root, root);
-    await this.copySafeTree(sourceDirectory, root);
-    const afterFiles = await this.listRelativeFiles(root);
-    const afterHashes = await this.fileHashes(root, afterFiles);
-    const changedPaths = new Set([...beforeFiles, ...afterFiles].filter((path) => beforeHashes.get(path) !== afterHashes.get(path)));
-    if (changedPaths.size === 0) return project;
+      const beforeFiles = await this.listRelativeFiles(root);
+      const beforeHashes = await this.fileHashes(root, beforeFiles);
+      await this.removeManagedTree(root, root);
+      await this.copySafeTree(sourceDirectory, root);
+      const afterFiles = await this.listRelativeFiles(root);
+      const afterHashes = await this.fileHashes(root, afterFiles);
+      const changedPaths = new Set([...beforeFiles, ...afterFiles].filter((path) => beforeHashes.get(path) !== afterHashes.get(path)));
+      if (changedPaths.size === 0) return project;
 
-    const timestamp = now();
-    const updated = await this.database.mutate((state) => {
-      const versions = state.fileVersions[id] ?? {};
-      for (const path of Object.keys(versions)) if (!afterHashes.has(path)) delete versions[path];
-      for (const path of afterFiles) {
-        if (!versions[path]) versions[path] = { version: 1, updatedAt: timestamp };
-        else if (changedPaths.has(path)) versions[path] = { version: versions[path]!.version + 1, updatedAt: timestamp };
-      }
-      state.fileVersions[id] = versions;
-      const stored = state.projects.find((candidate) => candidate.id === id);
-      if (!stored) throw new ApiError(404, "project_not_found", "Project not found");
-      stored.version += 1;
-      stored.updatedAt = timestamp;
-      return stored;
+      const timestamp = now();
+      const updated = await this.database.mutate((state) => {
+        const versions = state.fileVersions[id] ?? {};
+        for (const path of Object.keys(versions)) if (!afterHashes.has(path)) delete versions[path];
+        for (const path of afterFiles) {
+          if (!versions[path]) versions[path] = { version: 1, updatedAt: timestamp };
+          else if (changedPaths.has(path)) versions[path] = { version: versions[path]!.version + 1, updatedAt: timestamp };
+        }
+        state.fileVersions[id] = versions;
+        const stored = state.projects.find((candidate) => candidate.id === id);
+        if (!stored) throw new ApiError(404, "project_not_found", "Project not found");
+        stored.version += 1;
+        stored.updatedAt = timestamp;
+        return stored;
+      });
+      await this.snapshotHistory(id, "Apply GitHub sync");
+      return updated;
     });
-    await this.snapshotHistory(id, "Apply GitHub sync");
-    return updated;
   }
 
   async updateGithubSyncSource(id: string, branch: string, commit: string): Promise<PaperProject> {
-    return this.database.mutate((state) => {
-      const project = state.projects.find((candidate) => candidate.id === id);
-      if (!project) throw new ApiError(404, "project_not_found", "Project not found");
-      if (project.source.type !== "github") throw new ApiError(409, "github_sync_unavailable", "This paper is not linked to a GitHub repository");
-      project.source.ref = branch;
-      project.source.commit = commit;
-      project.updatedAt = now();
-      return project;
+    return this.projectQueue.run(id, async () => {
+      return this.database.mutate((state) => {
+        const project = state.projects.find((candidate) => candidate.id === id);
+        if (!project) throw new ApiError(404, "project_not_found", "Project not found");
+        if (project.source.type !== "github") throw new ApiError(409, "github_sync_unavailable", "This paper is not linked to a GitHub repository");
+        project.source.ref = branch;
+        project.source.commit = commit;
+        project.updatedAt = now();
+        return project;
+      });
     });
   }
 
   async updateProject(id: string, updates: { name?: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget | null }): Promise<PaperProject> {
-    if (updates.mainDocument) {
-      const normalizedMain = normalizeWorkspacePath(updates.mainDocument);
-      if (!normalizedMain.toLowerCase().endsWith(".tex") || isIgnoredWorkspacePath(normalizedMain)) {
-        throw new ApiError(400, "invalid_main_document", "The main document must be a .tex file");
+    return this.projectQueue.run(id, async () => {
+      if (updates.mainDocument) {
+        const normalizedMain = normalizeWorkspacePath(updates.mainDocument);
+        if (!normalizedMain.toLowerCase().endsWith(".tex") || isIgnoredWorkspacePath(normalizedMain)) {
+          throw new ApiError(400, "invalid_main_document", "The main document must be a .tex file");
+        }
+        await this.safeFileStat(resolveWorkspacePath(this.workspaceRoot(id), normalizedMain).absolutePath);
       }
-      await this.safeFileStat(resolveWorkspacePath(this.workspaceRoot(id), normalizedMain).absolutePath);
-    }
-    return this.database.mutate((state) => {
-      const project = state.projects.find((candidate) => candidate.id === id);
-      if (!project) throw new ApiError(404, "project_not_found", "Project not found");
-      if (updates.name?.trim()) project.name = updates.name.trim();
-      if (updates.mainDocument) project.mainDocument = normalizeWorkspacePath(updates.mainDocument);
-      if (updates.venue) project.skill = paperSkillForProfile(updates.venue);
-      if (updates.publicationTarget === null) delete project.publicationTarget;
-      else if (updates.publicationTarget) {
-        const normalized = normalizePublicationTarget(updates.publicationTarget, project.skill.id);
-        if (normalized) project.publicationTarget = normalized;
-        else delete project.publicationTarget;
-      } else if (updates.venue && project.publicationTarget && !normalizePublicationTarget(project.publicationTarget, project.skill.id)) delete project.publicationTarget;
-      project.updatedAt = now();
-      project.version += 1;
-      return project;
+      return this.database.mutate((state) => {
+        const project = state.projects.find((candidate) => candidate.id === id);
+        if (!project) throw new ApiError(404, "project_not_found", "Project not found");
+        if (updates.name?.trim()) project.name = updates.name.trim();
+        if (updates.mainDocument) project.mainDocument = normalizeWorkspacePath(updates.mainDocument);
+        if (updates.venue) project.skill = paperSkillForProfile(updates.venue);
+        if (updates.publicationTarget === null) delete project.publicationTarget;
+        else if (updates.publicationTarget) {
+          const normalized = normalizePublicationTarget(updates.publicationTarget, project.skill.id);
+          if (normalized) project.publicationTarget = normalized;
+          else delete project.publicationTarget;
+        } else if (updates.venue && project.publicationTarget && !normalizePublicationTarget(project.publicationTarget, project.skill.id)) delete project.publicationTarget;
+        project.updatedAt = now();
+        project.version += 1;
+        return project;
+      });
     });
   }
 
@@ -637,35 +664,74 @@ export class WorkspaceService {
   }
 
   private async snapshotHistory(id: string, message: string): Promise<string | undefined> {
-    const projectDirectory = join(this.projectsDirectory, id);
-    return this.gitHistory.snapshot(projectDirectory, join(projectDirectory, "workspace"), message).catch((error) => {
-      logServerError("managed Git history update failed", error);
-      return undefined;
+    return this.projectQueue.run(id, async () => {
+      const projectDirectory = join(this.projectsDirectory, id);
+      return this.gitHistory.snapshot(projectDirectory, join(projectDirectory, "workspace"), message).catch((error) => {
+        logServerError("managed Git history update failed", error);
+        return undefined;
+      });
     });
   }
 
-  async commitHistory(id: string, message: string): Promise<string | undefined> {
-    this.getProject(id);
-    this.clearHistoryTimer(id);
-    return this.snapshotHistory(id, message);
+  async commitHistory(id: string, message: string, allowEmpty = false): Promise<string | undefined> {
+    return this.projectQueue.run(id, async () => {
+      this.getProject(id);
+      this.clearHistoryTimer(id);
+      const projectDirectory = join(this.projectsDirectory, id);
+      return this.gitHistory.snapshot(projectDirectory, this.workspaceRoot(id), message, allowEmpty);
+    });
   }
 
-  async history(id: string, limit?: number): Promise<Array<{ oid: string; message: string; createdAt: string }>> {
+  async history(id: string, limit?: number): Promise<HistoryCommit[]> {
     const project = this.getProject(id);
     return this.gitHistory.list(join(this.projectsDirectory, project.id), limit);
   }
 
-  async historySummary(id: string, oid: string): Promise<{ oid: string; message: string; createdAt: string; paths: string[] }> {
-    const project = this.getProject(id);
-    try {
-      return await this.gitHistory.summary(join(this.projectsDirectory, project.id), oid);
-    } catch {
-      const history = await this.gitHistory.list(join(this.projectsDirectory, project.id), 200);
-      const entry = history.find((item) => item.oid === oid || item.oid.startsWith(oid));
-      if (entry) return { ...entry, paths: [] };
-      if (!/^[0-9a-f]{7,64}$/i.test(oid)) throw new ApiError(404, "history_checkpoint_not_found", "History checkpoint not found");
-      return { oid, message: "", createdAt: "", paths: [] };
-    }
+  async historySummary(id: string, oid: string): Promise<HistorySummary> {
+    this.getProject(id);
+    return this.gitHistory.summary(join(this.projectsDirectory, id), oid);
+  }
+
+  async historyPage(id: string, options: { limit?: number; cursor?: string; path?: string }): Promise<HistoryPage> {
+    this.getProject(id);
+    return this.gitHistory.page(join(this.projectsDirectory, id), options);
+  }
+
+  async historyTree(id: string, oid: string): Promise<HistoryTreeEntry[]> {
+    this.getProject(id);
+    return this.gitHistory.tree(join(this.projectsDirectory, id), oid);
+  }
+
+  async historySide(id: string, oid: string, path: string): Promise<HistoryFileSide> {
+    this.getProject(id);
+    return this.gitHistory.side(join(this.projectsDirectory, id), oid, path);
+  }
+
+  async historyWorkingChanges(id: string, baseRef: string) {
+    return this.projectQueue.run(id, async () => {
+      const project = this.getProject(id);
+      const changes = await this.gitHistory.workingChanges(join(this.projectsDirectory, id), this.workspaceRoot(id), baseRef);
+      return { ...changes, projectVersion: project.version };
+    });
+  }
+
+  async historyWorkingComparison(id: string, baseRef: string, path: string, expectedVersion: number, oldPath?: string) {
+    return this.projectQueue.run(id, async () => {
+      const project = this.getProject(id);
+      if (project.version !== expectedVersion) throw new ApiError(409, "version_conflict", "The working tree changed. Refresh the changes list before comparing.", { currentVersion: project.version });
+      const comparison = await this.gitHistory.workingComparison(join(this.projectsDirectory, id), this.workspaceRoot(id), baseRef, path, oldPath);
+      return { ...comparison, projectVersion: project.version };
+    });
+  }
+
+  async historyChanges(id: string, baseRef: string, targetRef: string) {
+    this.getProject(id);
+    return this.gitHistory.changes(join(this.projectsDirectory, id), baseRef, targetRef);
+  }
+
+  async historyCompare(id: string, baseRef: string, targetRef: string, path: string, oldPath?: string): Promise<HistoryComparison> {
+    this.getProject(id);
+    return this.gitHistory.compare(join(this.projectsDirectory, id), baseRef, targetRef, path, oldPath);
   }
 
   async historyFile(id: string, oid: string, path: string): Promise<string> {
@@ -673,13 +739,36 @@ export class WorkspaceService {
     return this.gitHistory.fileAt(join(this.projectsDirectory, project.id), oid, path);
   }
 
-  async restoreHistoryFiles(id: string, oid: string, paths: string[]): Promise<{ oid?: string; restored: string[] }> {
-    const targets = [...new Set(paths)];
-    const files = await Promise.all(targets.map(async (path) => ({ path, content: await this.historyFile(id, oid, path), opened: await this.readTextFile(id, path) })));
-    for (const file of files) await this.saveTextFile(id, file.path, { content: file.content, baseVersion: file.opened.file.version });
-    const restored = files.map((file) => file.path);
-    const checkpoint = await this.commitHistory(id, `Restore history checkpoint ${oid}`);
-    return { ...(checkpoint ? { oid: checkpoint } : {}), restored };
+  async restoreHistoryFiles(id: string, oid: string, paths: string[], expectedVersion?: number): Promise<{ oid?: string; restored: string[] }> {
+    return this.projectQueue.run(id, async () => {
+      const project = this.getProject(id);
+      if (expectedVersion !== undefined && expectedVersion !== project.version)
+        throw new ApiError(409, "version_conflict", "The project changed before history restoration", { currentVersion: project.version });
+      const targets = [...new Set(paths.map(path => resolveWorkspacePath(this.workspaceRoot(id), path).relativePath))];
+      // Read and validate every source before modifying the working tree.
+      const files = await Promise.all(targets.map(async (path) => {
+        const content = await this.historyFile(id, oid, path);
+        const opened = await this.fileExists(id, path) ? await this.readTextFile(id, path) : null;
+        this.assertPaperSourcePath(path);
+        return { path, content, opened };
+      }));
+      for (const file of files) {
+        if (file.opened) await this.saveTextFile(id, file.path, { content: file.content, baseVersion: file.opened.file.version });
+        else await this.createFile(id, file.path, file.content, false);
+      }
+      const restored = files.map((file) => file.path);
+      const checkpoint = await this.commitHistory(id, `Restore history checkpoint ${oid}`, true);
+      return { ...(checkpoint ? { oid: checkpoint } : {}), restored };
+    });
+  }
+
+  /** A consistent source copy and identity for compilation. */
+  async copySnapshot(id: string, destination: string): Promise<{ projectVersion: number; mainDocument: string }> {
+    return this.projectQueue.run(id, async () => {
+      const project = this.getProject(id);
+      await cp(this.workspaceRoot(id), destination, { recursive: true, dereference: false });
+      return { projectVersion: project.version, mainDocument: project.mainDocument };
+    });
   }
 
   private scheduleHistorySnapshot(id: string, message: string): void {
@@ -687,7 +776,8 @@ export class WorkspaceService {
     if (current) clearTimeout(current);
     const timer = setTimeout(() => {
       this.historyTimers.delete(id);
-      void this.snapshotHistory(id, message);
+      // A timer is a new operation even when it inherits an active async scope.
+      void this.projectQueue.run(id, () => this.snapshotHistory(id, message), false);
     }, 2 * 60 * 1000);
     timer.unref?.();
     this.historyTimers.set(id, timer);

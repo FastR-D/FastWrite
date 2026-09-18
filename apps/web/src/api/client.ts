@@ -1,4 +1,6 @@
 import type {
+  CollaborationPersistRequest, CollaborationPersistResponse,
+  HistoryWorkingChanges, HistoryWorkingComparison, HistoryChanges, HistoryCommit, HistorySummary, HistoryPage, HistoryTreeEntry, HistoryFileSide, HistoryComparison,
   FileContentResponse,
   ChangeSet,
   ChangeSetEditRequest,
@@ -53,7 +55,19 @@ export class ApiClientError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const headers = new Headers(init?.headers);
+  const token = localStorage.getItem("fastwrite.session-token");
+  if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
+  let response = await fetch(path, { ...init, headers });
+  if (response.status === 401 && token && !path.startsWith("/api/auth/")) {
+    const refreshed = await fetch("/api/auth/refresh", { method: "POST" });
+    if (refreshed.ok) {
+      const session = await refreshed.json() as { token: string };
+      localStorage.setItem("fastwrite.session-token", session.token);
+      headers.set("authorization", `Bearer ${session.token}`);
+      response = await fetch(path, { ...init, headers });
+    } else localStorage.removeItem("fastwrite.session-token");
+  }
   if (!response.ok) {
     let body: { error?: { code?: string; message?: string; details?: unknown } } = {};
     try {
@@ -77,6 +91,49 @@ function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestI
 }
 
 export const api = {
+  auth: {
+    register: (body: { email: string; password: string; displayName?: string }) => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/register", jsonInit("POST", body)),
+    login: (body: { email: string; password: string }) => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/login", jsonInit("POST", body)),
+    providers: () => request<{ local: boolean; oidc: boolean; cas: boolean }>("/api/auth/providers"),
+    refresh: () => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/refresh", { method: "POST" }),
+    me: (signal?: AbortSignal) => request<{ id: string; emailNormalized: string; displayName: string; platformRole: string }>("/api/auth/me", signal ? { signal } : undefined),
+    logout: () => request<void>("/api/auth/logout", { method: "POST" })
+  },
+  admin: {
+    health: () => request<{ users: number; activeSessions: number; teams: number; projects: number; collaborationDocuments: number; pendingInvitations: number }>("/api/admin/health"),
+    identityProviders: () => request<{ oidc: { configured: boolean; issuer?: string; redirectUri?: string; clientId?: string }; cas: { configured: boolean; serverUrl?: string; serviceUrl?: string }; local: { configured: boolean } }>("/api/admin/identity-providers"),
+    users: () => request<Array<{ id: string; emailNormalized: string; displayName: string; platformRole: string; status: string; createdAt: string; updatedAt: string; activeSessionCount: number }>>("/api/admin/users"),
+    audits: (limit = 100) => request<Array<{ id: string; actorUserId?: string; action: string; resourceType: string; resourceId: string; metadata?: Record<string, string>; createdAt: string }>>(`/api/admin/audit-events?limit=${limit}`),
+    disableUser: (userId: string, reason: string) => request<void>(`/api/admin/users/${encodeURIComponent(userId)}/disable`, jsonInit("POST", { reason })),
+    revokeSessions: (userId: string, reason: string) => request<void>(`/api/admin/users/${encodeURIComponent(userId)}/sessions/revoke`, jsonInit("POST", { reason })),
+    updatePlatformRole: (userId: string, role: "platform_admin" | "support_auditor" | "user", reason: string) => request<{ id: string; platformRole: string }>(`/api/admin/users/${encodeURIComponent(userId)}/platform-role`, jsonInit("PATCH", { role, reason }))
+  },
+  teams: {
+    list: (signal?: AbortSignal) => request<Array<{ id: string; name: string; slug: string; personalUserId?: string }>>("/api/teams", signal ? { signal } : undefined),
+    create: (name: string) => request<{ id: string; name: string; slug: string }>("/api/teams", jsonInit("POST", { name })),
+    policy: (teamId: string) => request<{ personalHarness: boolean; allowedProviders?: Array<"codex" | "claude" | "openai-compatible">; maxConcurrentRuns?: number; dailyBudgetUsd?: number }>(`/api/teams/${encodeURIComponent(teamId)}/harness-policy`),
+    updatePolicy: (teamId: string, body: { personalHarness: boolean; allowedProviders?: Array<"codex" | "claude" | "openai-compatible">; maxConcurrentRuns?: number; dailyBudgetUsd?: number }) => request<unknown>(`/api/teams/${encodeURIComponent(teamId)}/harness-policy`, jsonInit("PATCH", body)),
+    groupBindings: (teamId: string) => request<Array<{ id: string; idpGroup: string; role: "admin" | "member" }>>(`/api/teams/${encodeURIComponent(teamId)}/group-bindings`),
+    saveGroupBinding: (teamId: string, bindingId: string, body: { idpGroup: string; role: "admin" | "member" }) => request<unknown>(`/api/teams/${encodeURIComponent(teamId)}/group-bindings/${encodeURIComponent(bindingId)}`, jsonInit("PUT", body)),
+    deleteGroupBinding: (teamId: string, bindingId: string) => request<void>(`/api/teams/${encodeURIComponent(teamId)}/group-bindings/${encodeURIComponent(bindingId)}`, { method: "DELETE" }),
+    previewGroupBindings: (teamId: string, groups: string[]) => request<Array<{ id: string; idpGroup: string; role: "admin" | "member" }>>(`/api/teams/${encodeURIComponent(teamId)}/group-bindings/preview`, jsonInit("POST", { groups })),
+    invite: (teamId: string, body: { email: string; role: "admin" | "member"; expiresAt?: string; message?: string }) => request<{ invitation: { id: string; expiresAt: string; message?: string }; token: string }>(`/api/teams/${encodeURIComponent(teamId)}/invitations`, jsonInit("POST", body)),
+    members: (teamId: string) => request<{ members: Array<{ userId: string; role: "owner" | "admin" | "member"; user: { id: string; displayName: string; emailNormalized: string } }>; canManage: boolean; canManageInvitations: boolean }>(`/api/teams/${encodeURIComponent(teamId)}/members`),
+    updateMember: (teamId: string, userId: string, role: "admin" | "member") => request<unknown>(`/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, jsonInit("PATCH", { role })),
+    removeMember: (teamId: string, userId: string) => request<void>(`/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, { method: "DELETE" }),
+    invitations: (teamId: string) => request<Array<{ id: string; emailNormalized: string; role: string; expiresAt: string; message?: string; createdAt: string; acceptedAt?: string; revokedAt?: string }>>(`/api/teams/${encodeURIComponent(teamId)}/invitations`),
+    resendInvitation: (invitationId: string) => request<{ token: string }>(`/api/invitations/${encodeURIComponent(invitationId)}/resend`, { method: "POST" }),
+    revokeInvitation: (invitationId: string) => request<void>(`/api/invitations/${encodeURIComponent(invitationId)}`, { method: "DELETE" })
+  },
+  invitations: {
+    accept: (token: string) => request<unknown>(`/api/invitations/${encodeURIComponent(token)}/accept`, { method: "POST" })
+  },
+  notifications: {
+    list: () => request<Array<{ id: string; type: string; title: string; body?: string; projectId?: string; accessRequestId?: string; readAt?: string; createdAt: string }>>("/api/notifications"),
+    markRead: (id: string) => request<unknown>(`/api/notifications/${encodeURIComponent(id)}/read`, { method: "POST" }),
+    preferences: () => request<Array<{ type: "access_request" | "access_request_decision" | "mention"; inApp: boolean; email: boolean }>>("/api/notification-preferences"),
+    updatePreference: (type: "access_request" | "access_request_decision" | "mention", input: { inApp?: boolean; email?: boolean }) => request<unknown>(`/api/notification-preferences/${encodeURIComponent(type)}`, { method: "PUT", body: JSON.stringify(input) })
+  },
   harness: {
     sessions: (signal?: AbortSignal) => request<Array<{ harness: string; sessionId: string; cwd: string; title?: string; createdAt: string; updatedAt: string }>>("/api/harness-sessions", signal ? { signal } : undefined),
     createSession: (kind: string, body: { cwd: string; title?: string }) => request<{ harness: string; sessionId: string; cwd: string }>(`/api/harnesses/${encodeURIComponent(kind)}/sessions`, jsonInit("POST", body)),
@@ -107,26 +164,66 @@ export const api = {
   },
   agentSkills: { list: (signal?: AbortSignal) => request<AgentTaskSkillDescriptor[]>("/api/agent-skills", signal ? { signal } : undefined) },
   projects: {
+    accessRequestInfo: (id: string) => request<{ id: string; name: string }>(`/api/access-requests/${encodeURIComponent(id)}`),
+    requestAccess: (id: string, body: { role: "maintainer" | "editor" | "commenter" | "viewer"; message?: string }) => request<{ id: string; status: "pending" }>(`/api/projects/${encodeURIComponent(id)}/access-requests`, jsonInit("POST", body)),
     list: (signal?: AbortSignal) => request<PaperProject[]>("/api/projects", signal ? { signal } : undefined),
     get: (id: string, signal?: AbortSignal) => request<PaperProject>(`/api/projects/${id}`, signal ? { signal } : undefined),
-    create: (body: { name: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget; initializeFromTemplate?: boolean }) => request<PaperProject>("/api/projects", jsonInit("POST", body)),
+    create: (body: { name: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget; initializeFromTemplate?: boolean; teamId?: string }) => request<PaperProject>("/api/projects", jsonInit("POST", body)),
     update: (id: string, body: Partial<Pick<PaperProject, "name" | "mainDocument">> & { venue?: TargetVenue; publicationTarget?: PublicationTarget | null }) => request<PaperProject>(`/api/projects/${id}`, jsonInit("PATCH", body)),
     exportUrl: (id: string) => `/api/projects/${id}/export`,
     checkpoint: (id: string) => request<{ createdAt: string }>(`/api/projects/${id}/history/checkpoint`, { method: "POST" }),
-    history: (id: string, limit = 50, signal?: AbortSignal) => request<Array<{ oid: string; message: string; createdAt: string }>>(`/api/projects/${id}/history?limit=${limit}`, signal ? { signal } : undefined),
-    historySummary: (id: string, oid: string, signal?: AbortSignal) => request<{ oid: string; message: string; createdAt: string; paths: string[] }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}`, signal ? { signal } : undefined),
+    history: (id: string, limit = 50, signal?: AbortSignal) => request<HistoryCommit[]>(`/api/projects/${id}/history?limit=${limit}`, signal ? { signal } : undefined),
+    historySummary: (id: string, oid: string, signal?: AbortSignal) => request<HistorySummary>(`/api/projects/${id}/history/${encodeURIComponent(oid)}`, signal ? { signal } : undefined),
+    historyPage: (id: string, options: { cursor?: string; path?: string; limit?: number } = {}, signal?: AbortSignal) => {
+      const query = new URLSearchParams();
+      if (options.cursor) query.set("cursor", options.cursor);
+      if (options.path) query.set("path", options.path);
+      if (options.limit !== undefined) query.set("limit", String(options.limit));
+      return request<HistoryPage>(`/api/projects/${id}/history-page?${query}`, signal ? { signal } : undefined);
+    },
+    historyTree: (id: string, oid: string, signal?: AbortSignal) => request<HistoryTreeEntry[]>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/tree`, signal ? { signal } : undefined),
+    historySide: (id: string, oid: string, path: string, signal?: AbortSignal) => request<HistoryFileSide>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/side?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined),
+    historyWorkingChanges: (id: string, baseRef: string, signal?: AbortSignal) => request<HistoryWorkingChanges>(`/api/projects/${id}/history-working-changes?${new URLSearchParams({ baseRef })}`, signal ? { signal } : undefined),
+    historyWorkingCompare: (id: string, baseRef: string, path: string, projectVersion: number, oldPath?: string, signal?: AbortSignal) => request<HistoryWorkingComparison>(`/api/projects/${id}/history-working-compare?${new URLSearchParams({ baseRef, path, projectVersion: String(projectVersion), ...(oldPath ? { oldPath } : {}) })}`, signal ? { signal } : undefined),
+    historyChanges: (id: string, baseRef: string, targetRef: string, signal?: AbortSignal) => request<HistoryChanges>(`/api/projects/${id}/history-changes?${new URLSearchParams({ baseRef, targetRef })}`, signal ? { signal } : undefined),
+    historyCompare: (id: string, baseRef: string, targetRef: string, path: string, oldPath?: string, signal?: AbortSignal) => {
+      const query = new URLSearchParams({ baseRef, targetRef, path, ...(oldPath ? { oldPath } : {}) });
+      return request<HistoryComparison>(`/api/projects/${id}/history-compare?${query}`, signal ? { signal } : undefined);
+    },
     historyFile: (id: string, oid: string, path: string, signal?: AbortSignal) => request<{ path: string; content: string }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/file?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined),
-    restoreHistory: (id: string, oid: string, paths: string[]) => request<{ oid?: string; restored: string[] }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/restore`, jsonInit("POST", { paths })),
+    restoreHistory: (id: string, oid: string, paths: string[], expectedVersion?: number) => request<{ oid?: string; restored: string[] }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/restore`, jsonInit("POST", { paths, ...(expectedVersion !== undefined ? { expectedVersion } : {}) })),
     provenance: (id: string, signal?: AbortSignal) => request<unknown>(`/api/projects/${id}/provenance`, signal ? { signal } : undefined),
     createShare: (id: string, permission: "read" | "comment") => request<{ id: string; token: string; permission: "read" | "comment"; createdAt: string }>(`/api/projects/${id}/shares`, jsonInit("POST", { permission })),
     shares: (id: string) => request<Array<{ id: string; permission: "read" | "comment"; label?: string; expiresAt?: string; revokedAt?: string; createdAt: string }>>(`/api/projects/${id}/shares`),
     revokeShare: (id: string, shareId: string) => request<void>(`/api/projects/${id}/shares/${shareId}`, { method: "DELETE" }),
-    collaboration: (id: string, path: string) => request<{ path: string; fileVersion: number; update: string; presence: Array<{ clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }> }>(`/api/projects/${id}/collaboration?path=${encodeURIComponent(path)}`),
-    collaborationUpdate: (id: string, body: { path: string; update: string; baseVersion: number; clientId: string; name: string; color?: string; line?: number }) => request<{ path: string; fileVersion: number; update: string; presence: Array<{ clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }> }>(`/api/projects/${id}/collaboration`, jsonInit("POST", body)),
+    collaboration: (id: string, path: string) => request<{ documentId: string; path: string; fileVersion: number; update: string; presence: Array<{ clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }> }>(`/api/projects/${id}/collaboration?path=${encodeURIComponent(path)}`),
+    collaborationPersist: (id: string, body: CollaborationPersistRequest) => request<CollaborationPersistResponse>(`/api/projects/${id}/collaboration/persist`, jsonInit("POST", body)),
+    collaborationFlush: (id: string, path: string) => request<FileContentResponse>(`/api/projects/${id}/collaboration/flush`, jsonInit("POST", { path })),
+    collaborationUpdate: (id: string, body: { path: string; update: string; baseVersion: number; clientId: string; name: string; color?: string; line?: number }) => request<{ documentId: string; path: string; fileVersion: number; update: string; presence: Array<{ clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }> }>(`/api/projects/${id}/collaboration`, jsonInit("POST", body)),
     collaborationPresence: (id: string, body: { clientId: string; name: string; path: string; line?: number; color?: string }) => request<Array<{ clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>(`/api/projects/${id}/collaboration/presence`, jsonInit("POST", body)),
+    collaborationToken: (projectId: string, path: string) => request<{ token: string; expiresAt: string; projectId: string; path: string; scope: "read" | "write" }>("/api/collaboration/tokens", jsonInit("POST", { projectId, path })),
+    acl: (id: string) => request<Array<{ id: string; pathPrefix: string; subjectType: "user" | "project_role" | "team_role" | "idp_group"; subjectId: string; action: "read" | "comment" | "edit" | "manage" | "run_ai" | "manage_harness" | "export" | "sync_github"; effect: "allow" | "deny" }>>(`/api/projects/${encodeURIComponent(id)}/acl`),
+    saveAcl: (projectId: string, ruleId: string, body: { pathPrefix: string; subjectType: "user" | "project_role" | "team_role" | "idp_group"; subjectId: string; action: "read" | "comment" | "edit" | "manage" | "run_ai" | "manage_harness" | "export" | "sync_github"; effect: "allow" | "deny" }) => request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/acl/${encodeURIComponent(ruleId)}`, jsonInit("PUT", body)),
+    deleteAcl: (projectId: string, ruleId: string) => request<void>(`/api/projects/${encodeURIComponent(projectId)}/acl/${encodeURIComponent(ruleId)}`, { method: "DELETE" }),
+    comments: (id: string, signal?: AbortSignal) => request<Array<{ id: string; path: string; quote: string; status: "open" | "resolved" | "orphaned"; anchorStatus: "attached" | "orphaned"; from?: number; to?: number; messages: Array<{ id: string; authorUserId: string; body: string; mentionedUserIds?: string[]; createdAt: string }> }>>(`/api/projects/${id}/comments`, signal ? { signal } : undefined),
+    createComment: (id: string, body: { path: string; from: number; to: number; body: string }) => request<unknown>(`/api/projects/${id}/comments`, jsonInit("POST", body)),
+    replyComment: (id: string, threadId: string, body: string) => request<unknown>(`/api/projects/${id}/comments/${encodeURIComponent(threadId)}/messages`, jsonInit("POST", { body })),
+    updateComment: (id: string, threadId: string, status: "open" | "resolved") => request<unknown>(`/api/projects/${id}/comments/${encodeURIComponent(threadId)}`, jsonInit("PATCH", { status })),
+    reanchorComment: (id: string, threadId: string, body: { path: string; from: number; to: number }) => request<unknown>(`/api/projects/${id}/comments/${encodeURIComponent(threadId)}/reanchor`, jsonInit("POST", body)),
+    invite: (id: string, body: { email: string; role: "maintainer" | "editor" | "commenter" | "viewer"; expiresAt?: string; message?: string }) => request<{ invitation: { id: string; expiresAt: string; message?: string }; token: string }>(`/api/projects/${id}/invitations`, jsonInit("POST", body)),
+    invitations: (id: string) => request<Array<{ id: string; emailNormalized: string; role: string; expiresAt: string; message?: string; createdAt: string; acceptedAt?: string; revokedAt?: string }>>(`/api/projects/${id}/invitations`),
+    resendInvitation: (invitationId: string) => request<{ invitation: { id: string; expiresAt: string }; token: string }>(`/api/invitations/${encodeURIComponent(invitationId)}/resend`, { method: "POST" }),
+    revokeInvitation: (invitationId: string) => request<void>(`/api/invitations/${encodeURIComponent(invitationId)}`, { method: "DELETE" }),
+    members: (id: string) => request<{ members: Array<{ userId: string; role: "owner" | "maintainer" | "editor" | "commenter" | "viewer"; createdAt: string; user: { displayName: string; emailNormalized: string } }>; canManage: boolean }>(`/api/projects/${id}/members`),
+    updateMember: (id: string, userId: string, role: "maintainer" | "editor" | "commenter" | "viewer") => request<unknown>(`/api/projects/${id}/members/${encodeURIComponent(userId)}`, jsonInit("PATCH", { role })),
+    removeMember: (id: string, userId: string) => request<void>(`/api/projects/${id}/members/${encodeURIComponent(userId)}`, { method: "DELETE" }),
+    accessRequests: (id: string) => request<Array<{ id: string; requesterUserId: string; requester: { id: string; displayName: string; emailNormalized: string }; requestedRole: "maintainer" | "editor" | "commenter" | "viewer"; message?: string; status: "pending" | "approved" | "rejected"; createdAt: string }>>(`/api/projects/${id}/access-requests`),
+    audit: (id: string) => request<Array<{ id: string; action: string; resourceType: string; resourceId: string; actorUserId?: string; createdAt: string }>>(`/api/projects/${id}/audit`),
+    decideAccessRequest: (id: string, requestId: string, approved: boolean) => request<unknown>(`/api/projects/${id}/access-requests/${encodeURIComponent(requestId)}/decision`, jsonInit("POST", { approved })),
     tree: (id: string, signal?: AbortSignal) => request<WorkspaceTreeNode[]>(`/api/projects/${id}/files`, signal ? { signal } : undefined),
     treeLevel: (id: string, directory = "", signal?: AbortSignal) => request<WorkspaceTreeNode[]>(`/api/projects/${id}/files?directory=${encodeURIComponent(directory)}`, signal ? { signal } : undefined),
     outline: (id: string, signal?: AbortSignal) => request<OutlineItem[]>(`/api/projects/${id}/outline`, signal ? { signal } : undefined),
+    search: (id: string, query: string, signal?: AbortSignal) => request<{ query: string; matches: Array<{ path: string; line: number; excerpt: string }>; truncated: boolean }>(`/api/projects/${id}/search?query=${encodeURIComponent(query)}`, signal ? { signal } : undefined),
     readFile: (id: string, path: string, signal?: AbortSignal) => request<FileContentResponse>(`/api/projects/${id}/file?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined),
     saveFile: (id: string, path: string, body: SaveFileRequest, signal?: AbortSignal) => request<SaveFileResponse>(`/api/projects/${id}/file?path=${encodeURIComponent(path)}`, jsonInit("PUT", body, signal)),
     createFile: (id: string, path: string, content = "") => request<PaperFile>(`/api/projects/${id}/files`, jsonInit("POST", { path, content })),
@@ -202,7 +299,7 @@ export const api = {
     record: (projectId: string, body: { projectVersion: number; status: "success" | "error"; summary: string }) => request<CompileRecord>(`/api/projects/${projectId}/compile-results`, jsonInit("POST", body))
   },
   compiler: {
-    compileOnServer: (projectId: string, signal?: AbortSignal) => request<{ success: boolean; engine: "server"; log: string; error?: string; pdfBase64?: string; syncTexData?: string; workspacePaths: string[] }>(`/api/projects/${projectId}/compile`, { method: "POST", ...(signal ? { signal } : {}) })
+    compileOnServer: (projectId: string, signal?: AbortSignal) => request<{ success: boolean; projectVersion: number; snapshotId: string; engine: "server"; log: string; error?: string; pdfBase64?: string; syncTexData?: string; workspacePaths: string[] }>(`/api/projects/${projectId}/compile`, { method: "POST", ...(signal ? { signal } : {}) })
   },
   completions: {
     suggest: (projectId: string, body: CompletionRequest, signal?: AbortSignal) => request<CompletionResponse>(`/api/projects/${projectId}/completions`, jsonInit("POST", body, signal))

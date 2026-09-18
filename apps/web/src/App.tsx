@@ -1,18 +1,24 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { FASTWRITE_SAVE_EVENT, isSaveShortcut } from "./lib/keyboard";
 import { applyTheme, initialTheme } from "./lib/theme";
+import { api } from "./api/client";
 
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const DiagramsPage = lazy(() => import("./pages/DiagramsPage").then((module) => ({ default: module.DiagramsPage })));
 const WorkspacePage = lazy(() => import("./pages/WorkspacePage").then((module) => ({ default: module.WorkspacePage })));
 const UiGalleryPage = lazy(() => import("./pages/UiGalleryPage").then((module) => ({ default: module.UiGalleryPage })));
 const SharedReviewPage = lazy(() => import("./pages/SharedReviewPage").then((module) => ({ default: module.SharedReviewPage })));
+const AccessRequestPage = lazy(() => import("./pages/AccessRequestPage").then((module) => ({ default: module.AccessRequestPage })));
+const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
 
-function routeFromLocation(): { name: "diagrams" } | { name: "projects" } | { name: "gallery" } | { name: "workspace"; projectId: string } | { name: "shared"; token: string } {
+function routeFromLocation(): { name: "admin" } | { name: "diagrams" } | { name: "projects" } | { name: "gallery" } | { name: "workspace"; projectId: string } | { name: "shared"; token: string } | { name: "access-request"; projectId: string } {
+  if (window.location.pathname === "/admin") return { name: "admin" };
   if (window.location.pathname === "/diagrams") return { name: "diagrams" };
   if (window.location.pathname === "/components") return { name: "gallery" };
   const shared = window.location.pathname.match(/^\/shared\/([^/]+)\/?$/);
   if (shared?.[1]) return { name: "shared", token: decodeURIComponent(shared[1]) };
+  const accessRequest = window.location.pathname.match(/^\/request-access\/([^/]+)\/?$/);
+  if (accessRequest?.[1]) return { name: "access-request", projectId: decodeURIComponent(accessRequest[1]) };
   const match = window.location.pathname.match(/^\/projects\/([^/]+)\/?$/);
   if (match?.[1]) return { name: "workspace", projectId: decodeURIComponent(match[1]) };
   return { name: "projects" };
@@ -21,6 +27,15 @@ function routeFromLocation(): { name: "diagrams" } | { name: "projects" } | { na
 export function App() {
   const [route, setRoute] = useState(routeFromLocation);
   useEffect(() => { applyTheme(initialTheme()); }, []);
+  useEffect(() => {
+    const parameters = new URLSearchParams(window.location.search);
+    if (parameters.get("oidc") !== "complete" && parameters.get("cas") !== "complete") return;
+    void api.auth.refresh().then((session) => {
+      localStorage.setItem("fastwrite.session-token", session.token);
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }).catch(() => window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`));
+  }, []);
   useEffect(() => {
     const update = () => setRoute(routeFromLocation());
     window.addEventListener("popstate", update);
@@ -31,11 +46,17 @@ export function App() {
       if (!isSaveShortcut(event)) return;
       event.preventDefault();
       event.stopPropagation();
+      const dialog = event.target instanceof Element ? event.target.closest('[role="dialog"]') : null;
+      if (dialog) {
+        const command = dialog.querySelector<HTMLButtonElement>("button[data-save-command]");
+        if (command && !command.disabled) command.click();
+        return;
+      }
       window.dispatchEvent(new Event(FASTWRITE_SAVE_EVENT));
     };
     window.addEventListener("keydown", save, { capture: true });
     return () => window.removeEventListener("keydown", save, { capture: true });
   }, []);
-  const page = route.name === "diagrams" ? <DiagramsPage /> : route.name === "workspace" ? <WorkspacePage projectId={route.projectId} /> : route.name === "shared" ? <SharedReviewPage token={route.token} /> : route.name === "gallery" ? <UiGalleryPage /> : <ProjectsPage />;
+  const page = route.name === "admin" ? <AdminPage /> : route.name === "diagrams" ? <DiagramsPage /> : route.name === "workspace" ? <WorkspacePage projectId={route.projectId} /> : route.name === "shared" ? <SharedReviewPage token={route.token} /> : route.name === "access-request" ? <AccessRequestPage projectId={route.projectId} /> : route.name === "gallery" ? <UiGalleryPage /> : <ProjectsPage />;
   return <Suspense fallback={<main className="app-loading" aria-live="polite">Loading FastWrite…</main>}>{route.name !== "diagrams" && <a href="/diagrams" style={{position:"fixed",bottom:18,right:24,zIndex:100,background:"#244f3d",color:"white",padding:"10px 18px",borderRadius:8}}>科研绘图</a>}{page}</Suspense>;
 }

@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { Check, Pencil, X } from "lucide-react";
 import type { TextChange } from "@fastwrite/shared";
+import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import { Button } from "../ui/Button";
 import { ChangeHunkReview } from "./ChangeHunkReview";
+import { TextModelComparison } from "../workbench/TextModelComparison";
+import { configureMonaco, languageForPath } from "../../lib/editor/monaco";
 
 interface EditableChangeReviewProps {
   change: TextChange;
@@ -43,6 +46,7 @@ export function EditableChangeReview({ change, busy, readOnly = false, editingDi
 
   if (!editing) return <div className="editable-change-review">
     {!readOnly && onSave ? <div className="editable-change-review__bar"><span>{editingDisabled ? "This file has decided hunks; continue reviewing them below." : "Review the generated Diff, or edit the proposed text before accepting."}</span>{!editingDisabled ? <Button size="small" variant="secondary" icon={<Pencil />} disabled={busy} onClick={() => setEditing(true)}>Edit proposal</Button> : null}</div> : null}
+    <ProposalMonacoDiff change={change} readOnly={readOnly} />
     <ChangeHunkReview change={change} busy={busy} readOnly={readOnly} showToolbar={showHunkToolbar} onDecide={onDecide} {...(onEditHunk ? { onEditHunk } : {})} {...(onNavigate ? { onNavigate } : {})} />
   </div>;
 
@@ -52,4 +56,17 @@ export function EditableChangeReview({ change, busy, readOnly = false, editingDi
     {error ? <div className="form-error" role="alert">{error}</div> : null}
     <footer><Button size="small" variant="ghost" icon={<X />} disabled={saving} onClick={() => { setDraft(change.after); setEditing(false); setError(""); }}>Cancel edit</Button><Button size="small" variant="primary" icon={<Check />} loading={saving} disabled={saving || draft === change.after || draft === change.before} onClick={() => void save()}>Save proposal</Button></footer>
   </div>;
+}
+
+function ProposalMonacoDiff({ change, readOnly }: { change: TextChange; readOnly: boolean }) {
+  const [models, setModels] = useState<{ original: monaco.editor.ITextModel; modified: monaco.editor.ITextModel } | null>(null);
+  useEffect(() => {
+    configureMonaco();
+    const identity = crypto.randomUUID();
+    const original = monaco.editor.createModel(change.before, languageForPath(change.path), monaco.Uri.from({ scheme: "fastwrite-agent", authority: "proposal", path: `/${change.path}`, query: `${identity}-before` }));
+    const modified = monaco.editor.createModel(change.after, languageForPath(change.path), monaco.Uri.from({ scheme: "fastwrite-agent", authority: "proposal", path: `/${change.path}`, query: `${identity}-after` }));
+    setModels({ original, modified });
+    return () => { setModels(null); original.dispose(); modified.dispose(); };
+  }, [change.path, change.before, change.after]);
+  return models ? <TextModelComparison original={models.original} modified={models.modified} originalLabel={`Original proposal ${change.path}`} modifiedLabel={`Agent proposal ${change.path}`} readOnly={readOnly} /> : null;
 }

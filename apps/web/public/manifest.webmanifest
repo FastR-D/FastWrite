@@ -1,0 +1,12 @@
+{
+  "name": "FastWrite",
+  "short_name": "FastWrite",
+  "description": "Collaborative academic writing workspace",
+  "start_url": "/projects",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1557b0",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

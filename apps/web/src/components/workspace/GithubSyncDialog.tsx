@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import { AlertTriangle, CheckCircle2, GitMerge, LoaderCircle, RefreshCw } from "lucide-react";
 import type { GithubSyncResolution, GithubSyncResolutionChoice, GithubSyncRun, PaperProject } from "@fastwrite/shared";
 import { api } from "../../api/client";
@@ -6,6 +7,8 @@ import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
 import type { CompileStateReport } from "./PdfPane";
 import { createPendingResolutions, editTextResolution, keepConflictSide, type PendingGithubSyncResolution } from "./github-sync-resolution";
+import { TextModelComparison } from "../workbench/TextModelComparison";
+import { configureMonaco, languageForPath } from "../../lib/editor/monaco";
 
 interface GithubSyncDialogProps {
   open: boolean;
@@ -144,11 +147,7 @@ export function GithubSyncDialog({ open, project, compileState, onClose, onFlush
         const resolution = resolutions[conflict.path] ?? { choice: "", content: "" };
         return <article className="sync-conflict" key={conflict.path}>
           <header><code>{conflict.path}</code><span>{conflict.kind === "text" ? "Text conflict" : conflict.kind === "binary" ? "Binary conflict" : "Delete / modify conflict"}</span></header>
-          {conflict.kind === "text" ? <div className="sync-conflict__comparison">
-            <section><strong>Base</strong><pre>{conflict.baseContent ?? "No common base"}</pre></section>
-            <section><strong>FastWrite</strong><pre>{conflict.fastwriteContent ?? "Deleted"}</pre></section>
-            <section><strong>GitHub</strong><pre>{conflict.githubContent ?? "Deleted"}</pre></section>
-          </div> : null}
+          {conflict.kind === "text" ? <GithubTextConflictComparison path={conflict.path} base={conflict.baseContent} fastwrite={conflict.fastwriteContent} github={conflict.githubContent} /> : null}
           <div className="sync-resolution" role="group" aria-label={`Resolution for ${conflict.path}`}>
             <button className={resolution.choice === "fastwrite" ? "is-active" : ""} onClick={() => setResolutions((current) => ({ ...current, [conflict.path]: keepConflictSide(conflict, resolution, "fastwrite") }))}>Keep FastWrite</button>
             <button className={resolution.choice === "github" ? "is-active" : ""} onClick={() => setResolutions((current) => ({ ...current, [conflict.path]: keepConflictSide(conflict, resolution, "github") }))}>Keep GitHub</button>
@@ -169,3 +168,16 @@ function SyncProgress({ icon, title, detail, tone = "neutral" }: { icon: ReactNo
 }
 
 function shortCommit(commit: string): string { return commit.slice(0, 7); }
+
+function GithubTextConflictComparison({ path, base, fastwrite, github }: { path: string; base: string | undefined; fastwrite: string | undefined; github: string | undefined }) {
+  const [models, setModels] = useState<{ fastwrite: monaco.editor.ITextModel; github: monaco.editor.ITextModel } | null>(null);
+  useEffect(() => {
+    configureMonaco();
+    const identity = crypto.randomUUID();
+    const create = (side: string, content: string) => monaco.editor.createModel(content, languageForPath(path), monaco.Uri.from({ scheme: "fastwrite-github-conflict", path: `/${path}`, query: `${identity}-${side}` }));
+    const created = { fastwrite: create("fastwrite", fastwrite ?? "Deleted"), github: create("github", github ?? "Deleted") };
+    setModels(created);
+    return () => { setModels(null); created.fastwrite.dispose(); created.github.dispose(); };
+  }, [fastwrite, github, path]);
+  return <div className="sync-conflict__comparison"><section><strong>Common base</strong><pre>{base ?? "No common base"}</pre></section><section className="sync-conflict__diff">{models ? <TextModelComparison original={models.fastwrite} modified={models.github} originalLabel="FastWrite" modifiedLabel="GitHub" /> : null}</section></div>;
+}

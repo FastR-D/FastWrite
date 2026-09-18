@@ -18,7 +18,9 @@
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-pdf": "^10.3.0",
-    "xzwasm": "^0.1.2"
+    "vscrui": "^1.1.0",
+    "xzwasm": "^0.1.2",
+    "y-indexeddb": "^9.0.12"
   },
   "devDependencies": {
     "@types/react": "^19.2.8",

@@ -12,6 +12,7 @@ export interface LoadedSkill {
 export type WorkflowSkill = "draft" | "revise" | "review" | "completion" | "memory-extract" | "memory-polish" | "compile-repair";
 
 export interface WorkflowSkillDescriptor { id: WorkflowSkill; version: string; instructions: string }
+export interface SkillManifest { id: string; version: string; scope: "system" | "team" | "project"; owner: string; license: string; workflows: string[]; requiredEvidence: string[]; capabilities: string[]; maxContextChars: number; riskLevel: "low" | "medium" | "high"; requiresReview: boolean; references: Array<{ url: string; license: string; verifiedAt: string }> }
 
 export class SkillRegistry {
   constructor(private readonly skillsDirectory: string) {}
@@ -27,6 +28,15 @@ export class SkillRegistry {
       const version = /^version:\s*([^\s]+)\s*$/m.exec(instructions)?.[1] ?? "unversioned";
       return { id, version, instructions };
     }));
+  }
+
+  async publishedCatalog(): Promise<SkillManifest[]> {
+    const entries = await readdir(this.skillsDirectory, { withFileTypes: true });
+    const manifests = await Promise.all(entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith("_")).map(async (entry) => {
+      const raw = await readFile(join(this.skillsDirectory, entry.name, "manifest.json"), "utf8").catch(() => undefined);
+      return raw ? parseSkillManifest(raw, entry.name) : undefined;
+    }));
+    return manifests.filter((manifest): manifest is SkillManifest => Boolean(manifest)).sort((a, b) => a.id.localeCompare(b.id));
   }
 
   async taskCatalog(): Promise<AgentTaskSkillDescriptor[]> {
@@ -85,6 +95,23 @@ export class SkillRegistry {
     }
     return entries;
   }
+}
+
+export function parseSkillManifest(raw: string, directoryName?: string): SkillManifest {
+  let input: unknown;
+  try { input = JSON.parse(raw); } catch { throw new Error("Skill manifest must be valid JSON"); }
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Skill manifest must be an object");
+  const value = input as Record<string, unknown>;
+  const string = (key: string, pattern?: RegExp) => { const item = value[key]; if (typeof item !== "string" || !item.trim() || (pattern && !pattern.test(item))) throw new Error(`Skill manifest field '${key}' is invalid`); return item.trim(); };
+  const list = (key: string) => { const item = value[key]; if (!Array.isArray(item) || item.some((value) => typeof value !== "string" || !value.trim())) throw new Error(`Skill manifest field '${key}' must be a string array`); return [...new Set(item.map((value) => value.trim()))]; };
+  const id = string("id", /^[a-z0-9][a-z0-9-]{0,79}$/);
+  if (directoryName && id !== directoryName) throw new Error("Skill manifest id must match its directory");
+  const scope = string("scope"); if (scope !== "system" && scope !== "team" && scope !== "project") throw new Error("Skill manifest scope is invalid");
+  const riskLevel = string("riskLevel"); if (riskLevel !== "low" && riskLevel !== "medium" && riskLevel !== "high") throw new Error("Skill manifest riskLevel is invalid");
+  const maxContextChars = value.maxContextChars; if (!Number.isInteger(maxContextChars) || (maxContextChars as number) < 1 || (maxContextChars as number) > 1_000_000) throw new Error("Skill manifest maxContextChars is invalid");
+  if (typeof value.requiresReview !== "boolean") throw new Error("Skill manifest requiresReview is invalid");
+  const references = value.references; if (!Array.isArray(references) || references.some((reference) => !reference || typeof reference !== "object" || Array.isArray(reference) || typeof (reference as Record<string, unknown>).url !== "string" || typeof (reference as Record<string, unknown>).license !== "string" || typeof (reference as Record<string, unknown>).verifiedAt !== "string")) throw new Error("Skill manifest references are invalid");
+  return { id, version: string("version", /^\d+\.\d+\.\d+$/), scope, owner: string("owner"), license: string("license"), workflows: list("workflows"), requiredEvidence: list("requiredEvidence"), capabilities: list("capabilities"), maxContextChars: maxContextChars as number, riskLevel, requiresReview: value.requiresReview, references: references.map((reference) => { const item = reference as Record<string, string>; return { url: item.url!, license: item.license!, verifiedAt: item.verifiedAt! }; }) };
 }
 
 function parseVenueFrontmatter(content: string, expectedDomain: ResearchDomainId): PublicationVenueOption | undefined {

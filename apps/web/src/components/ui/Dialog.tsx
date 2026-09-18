@@ -31,6 +31,7 @@ export function Dialog({ open, title, description, children, footer, headerActio
       if (!dialogRef.current?.contains(document.activeElement)) (dialogRef.current?.querySelector<HTMLElement>("[autofocus]") ?? focusable()[0])?.focus();
     });
     const listener = (event: KeyboardEvent) => {
+      if (event.isComposing) return;
       if (event.key === "Escape") onCloseRef.current();
       if (event.key !== "Tab") return;
       const elements = focusable();

@@ -1,7 +1,9 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, ComponentType, ReactNode } from "react";
 import { LoaderCircle } from "lucide-react";
+import { Button as VscrButton } from "vscrui";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+const NativeVscrButton = VscrButton as unknown as ComponentType<ButtonHTMLAttributes<HTMLButtonElement> & { appearance?: "primary" | "secondary" | "icon" }>;
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -11,6 +13,12 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export function Button({ variant = "secondary", size = "medium", loading = false, icon, children, className = "", disabled, ...props }: ButtonProps) {
+  if (variant === "primary" || variant === "secondary") {
+    return <NativeVscrButton type="button" appearance={variant} className={`fw-vscr-button fw-vscr-button--${size} ${className}`} disabled={disabled || loading} {...props}>
+      {loading ? <LoaderCircle className="button__spinner" aria-hidden="true" /> : icon}
+      {children ? <span>{children}</span> : null}
+    </NativeVscrButton>;
+  }
   return (
     <button className={`button button--${variant} button--${size} ${className}`} disabled={disabled || loading} {...props}>
       {loading ? <LoaderCircle className="button__spinner" aria-hidden="true" /> : icon}

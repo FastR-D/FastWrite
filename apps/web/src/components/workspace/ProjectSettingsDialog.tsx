@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Save } from "lucide-react";
-import { isIgnoredWorkspacePath, WRITING_PROFILES, type AgentWireApi, type PaperProject, type PublicationTarget, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
+import { isIgnoredWorkspacePath, WRITING_PROFILES, type AgentWireApi, type PaperProject, type ProjectAclAction, type PublicationTarget, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
@@ -16,6 +16,8 @@ interface ProjectSettingsDialogProps {
   onSaved: (project: PaperProject) => void | Promise<void>;
 }
 interface RememberedHarnessSettings { baseURL?: string; model?: string; wireAPI?: AgentWireApi }
+type AclRule = { id: string; pathPrefix: string; subjectType: "user" | "project_role" | "team_role" | "idp_group"; subjectId: string; action: ProjectAclAction; effect: "allow" | "deny" };
+const ACL_ACTIONS: ProjectAclAction[] = ["read", "comment", "edit", "manage", "run_ai", "manage_harness", "export", "sync_github"];
 
 export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }: ProjectSettingsDialogProps) {
   const harnessDraftKey = "fastwrite.harness-settings";
@@ -35,6 +37,11 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
   const [agentBaseline, setAgentBaseline] = useState<HarnessSettingsBaseline>({ configured: null, baseURL: "", model: "", wireAPI: "chat" });
   const [savingAgent, setSavingAgent] = useState(false);
   const [agentError, setAgentError] = useState("");
+  const [aclRules, setAclRules] = useState<AclRule[]>([]);
+  const [aclAvailable, setAclAvailable] = useState<boolean | null>(null);
+  const [aclDraft, setAclDraft] = useState<Omit<AclRule, "id">>({ pathPrefix: "", subjectType: "project_role", subjectId: "editor", action: "read", effect: "deny" });
+  const [aclBusy, setAclBusy] = useState(false);
+  const [aclError, setAclError] = useState("");
   const texFiles = useMemo(() => flattenFiles(tree).filter((path) => path.toLowerCase().endsWith(".tex") && !isIgnoredWorkspacePath(path)), [tree]);
 
   useEffect(() => {
@@ -55,6 +62,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     setLanguage(responseLanguage());
     setAgentBaseline({ configured: null, baseURL: "", model: "", wireAPI: "chat" });
     setAgentError("");
+    setAclRules([]); setAclAvailable(null); setAclError("");
     void api.agentSettings.get().then((settings) => {
       setAgentConfigured(settings.configured);
       setAgentSource(settings.source);
@@ -63,6 +71,7 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
       setWireAPI(settings.wireAPI);
       setAgentBaseline({ configured: settings.configured, baseURL: settings.baseURL ?? "", model: settings.model ?? "", wireAPI: settings.wireAPI });
     }).catch(() => { setAgentConfigured(false); setAgentBaseline({ configured: false, baseURL: "", model: "", wireAPI: "chat" }); });
+    void api.projects.acl(project.id).then((rules) => { setAclRules(rules); setAclAvailable(true); }).catch(() => setAclAvailable(false));
   }, [open, project, texFiles]);
 
   const resolvedAgentDraft = (): { ok: true; draft: HarnessSettingsDraft } | { ok: false; message: string } => {
@@ -122,6 +131,20 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
     setAgentBaseline({ configured: settings.configured, baseURL: nextBaseURL, model: nextModel, wireAPI: settings.wireAPI });
   };
 
+  const saveAcl = async () => {
+    setAclError("");
+    setAclBusy(true);
+    try { await api.projects.saveAcl(project.id, "new", aclDraft); setAclRules(await api.projects.acl(project.id)); setAclDraft((current) => ({ ...current, pathPrefix: "" })); }
+    catch (failure) { setAclError(failure instanceof Error ? failure.message : "Could not save path rule"); }
+    finally { setAclBusy(false); }
+  };
+  const removeAcl = async (ruleId: string) => {
+    setAclError(""); setAclBusy(true);
+    try { await api.projects.deleteAcl(project.id, ruleId); setAclRules((rules) => rules.filter((rule) => rule.id !== ruleId)); }
+    catch (failure) { setAclError(failure instanceof Error ? failure.message : "Could not remove path rule"); }
+    finally { setAclBusy(false); }
+  };
+
   return (
     <Dialog
       open={open}
@@ -146,6 +169,17 @@ export function ProjectSettingsDialog({ open, project, tree, onClose, onSaved }:
           <div className="settings-agent__actions"><Button size="small" variant="secondary" loading={savingAgent} disabled={!apiKey.trim() || loading} onClick={() => void saveAgentSettings()}>{agentConfigured ? "Replace API key" : "Enable Agent"}</Button><small>The key is never returned or written to project files; it is cleared when the server restarts.</small></div>
           {agentError ? <div className="form-error" role="alert">{agentError}</div> : null}
         </section>
+        {aclAvailable ? <section className="settings-agent" aria-labelledby="acl-settings-title">
+          <div><strong id="acl-settings-title">Path access rules</strong><span>Deny rules take precedence. A read denial also blocks editing and collaboration for that path.</span></div>
+          <label className="field"><span>File or directory prefix</span><input value={aclDraft.pathPrefix} onChange={(event) => setAclDraft((current) => ({ ...current, pathPrefix: event.target.value }))} placeholder="restricted or restricted/results.tex" /></label>
+          <label className="field"><span>Subject</span><select value={aclDraft.subjectType} onChange={(event) => { const subjectType = event.target.value as AclRule["subjectType"]; setAclDraft((current) => ({ ...current, subjectType, subjectId: subjectType === "project_role" ? "editor" : subjectType === "team_role" ? "member" : "" })); }}><option value="project_role">Project role</option><option value="team_role">Team role</option><option value="idp_group">IdP group</option><option value="user">User ID</option></select></label>
+          {aclDraft.subjectType === "project_role" ? <label className="field"><span>Project role</span><select value={aclDraft.subjectId} onChange={(event) => setAclDraft((current) => ({ ...current, subjectId: event.target.value }))}><option value="viewer">Viewer</option><option value="commenter">Commenter</option><option value="editor">Editor</option><option value="maintainer">Maintainer</option><option value="owner">Owner</option></select></label> : aclDraft.subjectType === "team_role" ? <label className="field"><span>Team role</span><select value={aclDraft.subjectId} onChange={(event) => setAclDraft((current) => ({ ...current, subjectId: event.target.value }))}><option value="member">Member</option><option value="admin">Admin</option><option value="owner">Owner</option></select></label> : aclDraft.subjectType === "idp_group" ? <label className="field"><span>IdP group</span><input value={aclDraft.subjectId} onChange={(event) => setAclDraft((current) => ({ ...current, subjectId: event.target.value }))} placeholder="https://idp.example:researchers" /></label> : <label className="field"><span>User ID</span><input value={aclDraft.subjectId} onChange={(event) => setAclDraft((current) => ({ ...current, subjectId: event.target.value }))} placeholder="user_…" /></label>}
+          <label className="field"><span>Action</span><select value={aclDraft.action} onChange={(event) => setAclDraft((current) => ({ ...current, action: event.target.value as ProjectAclAction }))}>{ACL_ACTIONS.map((action) => <option key={action} value={action}>{action}</option>)}</select></label>
+          <label className="field"><span>Effect</span><select value={aclDraft.effect} onChange={(event) => setAclDraft((current) => ({ ...current, effect: event.target.value as AclRule["effect"] }))}><option value="deny">Deny</option><option value="allow">Allow</option></select></label>
+          <div className="settings-agent__actions"><Button size="small" variant="secondary" loading={aclBusy} disabled={!aclDraft.subjectId.trim()} onClick={() => void saveAcl()}>Add rule</Button></div>
+          {aclRules.map((rule) => <div className="settings-export" key={rule.id}><div><strong>{rule.effect} {rule.action}: {rule.pathPrefix || "/"}</strong><span>{rule.subjectType.replace("_", " ")}: {rule.subjectId}</span></div><Button size="small" variant="ghost" disabled={aclBusy} onClick={() => void removeAcl(rule.id)}>Remove</Button></div>)}
+          {aclError ? <div className="form-error" role="alert">{aclError}</div> : null}
+        </section> : null}
         <div className="settings-export"><div><strong>Automatic Git history</strong><span>Accepted saves create local Git checkpoints in the FastWrite project history.</span></div></div>
         <div className="settings-export"><div><strong>Workspace snapshot</strong><span>Download all source files as a portable tar.gz archive.</span></div><a className="button button--secondary button--medium" href={api.projects.exportUrl(project.id)} download><Download />Export</a></div>
       </div>

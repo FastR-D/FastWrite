@@ -35,7 +35,7 @@ export default defineConfig(({ mode }) => {
         "Cross-Origin-Embedder-Policy": "require-corp"
       },
       proxy: {
-        "/api": apiOrigin
+        "/api": { target: apiOrigin, ws: true }
       }
     },
     clearScreen: false,
