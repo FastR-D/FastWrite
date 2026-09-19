@@ -1,6 +1,6 @@
 import type {
   CollaborationPersistRequest, CollaborationPersistResponse,
-  HistoryWorkingChanges, HistoryWorkingComparison, HistoryChanges, HistoryCommit, HistorySummary, HistoryPage, HistoryTreeEntry, HistoryFileSide, HistoryComparison,
+  HistoryWorkingComparison, HistoryChanges, HistoryCommit, HistorySummary, HistoryPage, HistoryTreeEntry, HistoryFileSide, HistoryComparison,
   FileContentResponse,
   ChangeSet,
   ChangeSetEditRequest,
@@ -42,6 +42,7 @@ import type {
   PublicationVenueOption,
   ComplianceReport,
   TargetVenue,
+  WorkingStatus,
   WorkspaceTreeNode
   ,AgentWireApi
   ,ResearchWork, ResearchRun, ProjectResearchWork, ProjectResearchWorkDetails, PaperClaim, SourceEvidence, FastReadBundleReceipt, ClaimEvidenceLink
@@ -183,7 +184,16 @@ export const api = {
     },
     historyTree: (id: string, oid: string, signal?: AbortSignal) => request<HistoryTreeEntry[]>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/tree`, signal ? { signal } : undefined),
     historySide: (id: string, oid: string, path: string, signal?: AbortSignal) => request<HistoryFileSide>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/side?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined),
-    historyWorkingChanges: (id: string, baseRef: string, signal?: AbortSignal) => request<HistoryWorkingChanges>(`/api/projects/${id}/history-working-changes?${new URLSearchParams({ baseRef })}`, signal ? { signal } : undefined),
+    workingStatus: (id: string, signal?: AbortSignal) =>
+      request<WorkingStatus>(`/api/projects/${id}/history/working-status`, signal ? { signal } : undefined),
+    stagePaths: (id: string, paths: string[]) =>
+      request<void>(`/api/projects/${id}/history/stage`, jsonInit("POST", { paths })),
+    unstagePaths: (id: string, paths: string[]) =>
+      request<void>(`/api/projects/${id}/history/unstage`, jsonInit("POST", { paths })),
+    discardPaths: (id: string, paths: string[]) =>
+      request<void>(`/api/projects/${id}/history/discard`, jsonInit("POST", { paths })),
+    commitWorking: (id: string, message: string) =>
+      request<{ oid: string }>(`/api/projects/${id}/history/commit`, jsonInit("POST", { message })),
     historyWorkingCompare: (id: string, baseRef: string, path: string, projectVersion: number, oldPath?: string, signal?: AbortSignal) => request<HistoryWorkingComparison>(`/api/projects/${id}/history-working-compare?${new URLSearchParams({ baseRef, path, projectVersion: String(projectVersion), ...(oldPath ? { oldPath } : {}) })}`, signal ? { signal } : undefined),
     historyChanges: (id: string, baseRef: string, targetRef: string, signal?: AbortSignal) => request<HistoryChanges>(`/api/projects/${id}/history-changes?${new URLSearchParams({ baseRef, targetRef })}`, signal ? { signal } : undefined),
     historyCompare: (id: string, baseRef: string, targetRef: string, path: string, oldPath?: string, signal?: AbortSignal) => {

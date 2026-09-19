@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { CheckCircle2, Download, FileOutput, LoaderCircle, LocateFixed, Maximize2, Minimize2, OctagonX, RotateCw, Scan, Search, Wrench, ZoomIn, ZoomOut } from "lucide-react";
 import { parseLatexDiagnostics, parseSyncTex, pdfToSource, sourceToPdf, type LatexDiagnostic, type PdfLocation, type SourceLocation, type SyncTexDocument, type WorkspaceTreeNode } from "@fastwrite/shared";
-import { Button, IconButton } from "../ui/Button";
+/*
+ * Every IconButton here comes from the library, and the toolbar's dark-strip
+ * metrics reach them through `.pdf-toolbar__controls button` in styles.css —
+ * a descendant selector outranks the component's own hashed rule.
+ */
+import { Button, Icon, IconButton, TextField, icons } from "../ui";
 import { api } from "../../api/client";
 import { fitPdfPageScale, MAX_PDF_SCALE, MIN_PDF_SCALE } from "./pdfScale";
 import { compilerLogExcerpt, shouldAutoCompile, type CompileFailureContext } from "./compileRepair";
@@ -231,26 +235,26 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
   return (
     <section ref={paneRef} className="pdf-pane" aria-label="PDF preview">
       <header className="pdf-toolbar">
-        <div className="pdf-toolbar__title"><FileOutput /><span>PDF Preview</span></div>
+        <div className="pdf-toolbar__title"><Icon name={icons.filePdf} /><span>PDF Preview</span></div>
         <div className="pdf-toolbar__controls" aria-label="PDF controls">
-          {pageCount > 0 ? <><input id="pdf-current-page" name="pdf-current-page" className="pdf-page-input" aria-label="Current PDF page" value={currentPage} onChange={(event) => scrollToPage(Number(event.target.value))} /><span className="pdf-page-count">/ {pageCount}</span><span className="toolbar-separator" /></> : null}
-          <IconButton label="Zoom out" icon={<ZoomOut />} disabled={!pdfUrl || scale <= MIN_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.max(MIN_PDF_SCALE, value - .1)); }} />
+          {pageCount > 0 ? <><TextField id="pdf-current-page" name="pdf-current-page" className="pdf-page-input" aria-label="Current PDF page" value={String(currentPage)} onChange={(value) => scrollToPage(Number(value))} /><span className="pdf-page-count">/ {pageCount}</span><span className="toolbar-separator" /></> : null}
+          <IconButton label="Zoom out" icon={<Icon name={icons.zoomOut} />} disabled={!pdfUrl || scale <= MIN_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.max(MIN_PDF_SCALE, value - .1)); }} />
           <span className="pdf-toolbar__zoom">{Math.round(scale * 100)}%</span>
-          <IconButton label="Zoom in" icon={<ZoomIn />} disabled={!pdfUrl || scale >= MAX_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.min(MAX_PDF_SCALE, value + .1)); }} />
+          <IconButton label="Zoom in" icon={<Icon name={icons.zoomIn} />} disabled={!pdfUrl || scale >= MAX_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.min(MAX_PDF_SCALE, value + .1)); }} />
           <span className="toolbar-separator" />
-          <IconButton label="Fit PDF page to panel" icon={<Scan />} disabled={!pdfUrl} onClick={() => { setFitToPanel(true); window.requestAnimationFrame(applyFitToPanel); }} />
-          <IconButton label="Download PDF" icon={<Download />} disabled={!pdfUrl} onClick={downloadPdf} />
-          <IconButton label="Locate editor selection in PDF" icon={<LocateFixed />} disabled={!activeSyncTex || !sourceLocation || pageCount === 0} onClick={locateSource} />
-          <IconButton label={fullscreen ? "Exit PDF fullscreen" : "Enter PDF fullscreen"} icon={fullscreen ? <Minimize2 /> : <Maximize2 />} onClick={toggleFullscreen} />
-          <IconButton label="Search PDF" icon={<Search />} disabled />
+          <IconButton label="Fit PDF page to panel" icon={<Icon name={icons.arrowBoth} />} disabled={!pdfUrl} onClick={() => { setFitToPanel(true); window.requestAnimationFrame(applyFitToPanel); }} />
+          <IconButton label="Download PDF" icon={<Icon name={icons.cloudDownload} />} disabled={!pdfUrl} onClick={downloadPdf} />
+          <IconButton label="Locate editor selection in PDF" icon={<Icon name={icons.target} />} disabled={!activeSyncTex || !sourceLocation || pageCount === 0} onClick={locateSource} />
+          <IconButton label={fullscreen ? "Exit PDF fullscreen" : "Enter PDF fullscreen"} icon={fullscreen ? <Icon name={icons.screenNormal} /> : <Icon name={icons.screenFull} />} onClick={toggleFullscreen} />
+          <IconButton label="Search PDF" icon={<Icon name={icons.search} />} disabled />
         </div>
       </header>
       <div className={`compile-strip compile-strip--${state}`} aria-live="polite">
         {resourcePercent !== null ? <div className="compile-strip__meter" role="progressbar" aria-label="Compiler resource loading" aria-valuemin={0} aria-valuemax={100} aria-valuenow={resourcePercent} style={{ width: `${resourcePercent}%` }} /> : null}
         <CompileStatusIcon state={state} />
         <span>{buffersDirty ? "Unsaved changes · PDF mapping is stale" : progress}</span>
-        {failure ? <button className="compile-fix-agent" onClick={() => onFixWithAgent(failure)}><Wrench />Fix with Agent</button> : null}
-        {isRunning ? <button onClick={cancel}>Cancel</button> : <button onClick={() => void compile()}>{buffersDirty ? "Save and compile" : pdfUrl ? "Recompile" : "Compile"}</button>}
+        {failure ? <Button variant="ghost" className="compile-fix-agent" icon={<Icon name={icons.tools} />} onClick={() => onFixWithAgent(failure)}>Fix with Agent</Button> : null}
+        {isRunning ? <Button variant="ghost" onClick={cancel}>Cancel</Button> : <Button variant="ghost" onClick={() => void compile()}>{buffersDirty ? "Save and compile" : pdfUrl ? "Recompile" : "Compile"}</Button>}
         {log ? <span className="compile-strip__diagnostics">{diagnosticLabel}</span> : null}
       </div>
       <div ref={containerRef} className={`pdf-canvas ${pdfUrl ? "" : "pdf-canvas--empty"}`} role="region" aria-label="PDF preview" tabIndex={0} onScroll={(event) => {
@@ -281,10 +285,10 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
           </Document>
         ) : (
           <div className="pdf-empty">
-            <span className={`pdf-empty__icon ${state === "error" ? "pdf-empty__icon--error" : ""}`}>{state === "error" ? <OctagonX /> : <FileOutput />}</span>
+            <span className={`pdf-empty__icon ${state === "error" ? "pdf-empty__icon--error" : ""}`}>{state === "error" ? <Icon name={icons.error} /> : <Icon name={icons.filePdf} />}</span>
             <h3>{state === "error" ? "Compilation failed" : "Compile your paper"}</h3>
             <p>{state === "error" ? progress : <><code>{mainDocument}</code> will compile with the local LaTeX toolchain.</>}</p>
-            <Button variant="primary" icon={<RotateCw />} loading={isRunning} onClick={() => void compile()}>{isRunning ? "Compiling" : "Compile PDF"}</Button>
+            <Button variant="primary" icon={<Icon name={icons.refresh} />} loading={isRunning} onClick={() => void compile()}>{isRunning ? "Compiling" : "Compile PDF"}</Button>
           </div>
         )}
       </div>
@@ -292,14 +296,14 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
   );
 }
 
-function PdfLoading({ label }: { label: string }) { return <div className="pdf-document-state"><RotateCw className="spin" /><span>{label}</span></div>; }
-function PdfError({ label }: { label: string }) { return <div className="pdf-document-state pdf-document-state--error"><OctagonX /><span>{label}</span></div>; }
+function PdfLoading({ label }: { label: string }) { return <div className="pdf-document-state"><Icon name={icons.refresh} spin /><span>{label}</span></div>; }
+function PdfError({ label }: { label: string }) { return <div className="pdf-document-state pdf-document-state--error"><Icon name={icons.error} /><span>{label}</span></div>; }
 
 function CompileStatusIcon({ state }: { state: CompileState }) {
-  if (state === "error") return <OctagonX className="compile-status-icon compile-status-icon--error" aria-label="Compilation error" />;
-  if (state === "success") return <CheckCircle2 className="compile-status-icon" aria-hidden="true" />;
-  if (state === "loading" || state === "compiling") return <LoaderCircle className="compile-status-icon spin" aria-hidden="true" />;
-  return <FileOutput className="compile-status-icon" aria-hidden="true" />;
+  if (state === "error") return <Icon name={icons.error} className="compile-status-icon compile-status-icon--error" aria-label="Compilation error" />;
+  if (state === "success") return <Icon name={icons.passFilled} className="compile-status-icon" />;
+  if (state === "loading" || state === "compiling") return <Icon name={icons.loading} className="compile-status-icon" spin />;
+  return <Icon name={icons.filePdf} className="compile-status-icon" />;
 }
 
 function flattenWorkspacePaths(nodes: WorkspaceTreeNode[]): string[] {

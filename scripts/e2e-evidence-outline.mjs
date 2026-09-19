@@ -7,6 +7,16 @@ await context.addInitScript(() => { localStorage.setItem('fastwrite.completion.e
 const page = await context.newPage(), errors = [];
 page.on('pageerror', error => errors.push(error.stack));
 const until = async (predicate, label) => { const end = Date.now() + 15000; while (!(await predicate())) { assert.ok(Date.now() < end, label); await page.waitForTimeout(40); } };
+/*
+ * The evidence filters are library Select components now, not native <select>.
+ * Playwright's selectOption() only works on a real <select>, so each becomes a
+ * click to open the listbox, then a click on the option.
+ */
+async function choose(scope, label, option) {
+  await scope.getByRole('combobox', { name: label }).click();
+  await scope.getByRole('option', { name: option, exact: true }).click();
+}
+
 try {
   const project = await (await context.request.post(`${base}/api/projects`, { data: { name: 'Evidence and outline regression' } })).json();
   const root = `${base}/api/projects/${project.id}`;
@@ -22,12 +32,12 @@ try {
   const evidence = page.locator('#sidebar-evidence');
   await evidence.locator('.claim-ledger-item').filter({ hasText: 'improves accuracy' }).waitFor();
   const allClaims = await evidence.locator('.claim-ledger-item').count();
-  await evidence.getByLabel('Evidence status').selectOption('needs-review');
-  await evidence.getByLabel('Evidence source').selectOption('main.tex');
+  await choose(evidence, 'Evidence status', 'Needs review');
+  await choose(evidence, 'Evidence source', 'main.tex');
   await page.waitForTimeout(150);
   assert.ok(await evidence.locator('.claim-ledger-item').count() <= allClaims, 'status filter narrows or preserves claim results');
-  await evidence.getByLabel('Evidence status').selectOption('all');
-  await evidence.getByLabel('Evidence source').selectOption('all');
+  await choose(evidence, 'Evidence status', 'All');
+  await choose(evidence, 'Evidence source', 'All files');
   await evidence.locator('.claim-ledger-item').filter({ hasText: 'improves accuracy' }).waitFor();
   await nav.getByRole('button', { name: 'Outline', exact: true }).click();
   await page.getByText('Saved workspace version', { exact: true }).waitFor();

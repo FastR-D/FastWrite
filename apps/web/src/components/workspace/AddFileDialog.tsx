@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
-import { UploadCloud } from "lucide-react";
 import { api } from "../../api/client";
-import { Button } from "../ui/Button";
-import { Dialog } from "../ui/Dialog";
+import { Button, Dialog, Field, FileField, Icon, icons, TextField } from "../ui";
 
 interface AddFileDialogProps {
   open: boolean;
@@ -39,10 +37,14 @@ export function AddFileDialog({ open, projectId, onClose, onAdded }: AddFileDial
   };
 
   return (
-    <Dialog open={open} title="Add a file" description="The selected file is copied into this managed Workspace." onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon={<UploadCloud />} loading={loading} disabled={!file || !path.trim()} onClick={() => void upload()}>Add file</Button></>}>
+    <Dialog open={open} title="Add a file" description="The selected file is copied into this managed Workspace." onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon={<Icon name={icons.cloudUpload} />} loading={loading} disabled={!file || !path.trim()} onClick={() => void upload()}>Add file</Button></>}>
       <div className="form-stack">
-        <label className="field"><span>Source file</span><input className="file-input" type="file" onChange={(event) => { const selected = event.target.files?.[0] ?? null; setFile(selected); if (selected) setPath(selected.name); }} /></label>
-        <label className="field"><span>Workspace path</span><input value={path} onChange={(event) => setPath(event.target.value)} placeholder="figures/architecture.png" /></label>
+        <Field label="Source file">
+          <FileField label="Source file" onSelect={(files) => { const selected = files[0] ?? null; setFile(selected); if (selected) setPath(selected.name); }} />
+        </Field>
+        <Field label="Workspace path">
+          <TextField value={path} onChange={setPath} placeholder="figures/architecture.png" />
+        </Field>
       </div>
       {error ? <div className="form-error" role="alert">{error}</div> : null}
     </Dialog>

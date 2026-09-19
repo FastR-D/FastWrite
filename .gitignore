@@ -24,3 +24,8 @@ apps/web/public/bundles/
 # Local sample papers
 sample-papers/
 output/
+
+# Superpowers brainstorming mockups
+.superpowers/
+/docs/superpowers
+/evalution

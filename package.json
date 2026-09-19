@@ -26,6 +26,7 @@
     "e2e:editor": "node scripts/e2e-editor-reliability.mjs",
     "e2e:compile-snapshot": "node scripts/e2e-compile-snapshot.mjs",
     "e2e:workbench": "node scripts/e2e-workbench.mjs",
+    "e2e:settings-editor": "node scripts/e2e-settings-editor.mjs",
     "e2e:shared-buffer": "node scripts/e2e-shared-buffer.mjs",
     "e2e:collaboration-barrier": "node scripts/e2e-collaboration-barrier.mjs",
     "e2e:collaboration-provider": "node scripts/e2e-collaboration-provider.mjs",

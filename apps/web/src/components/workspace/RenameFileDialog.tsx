@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
-import { Pencil } from "lucide-react";
 import { api } from "../../api/client";
-import { Button } from "../ui/Button";
-import { Dialog } from "../ui/Dialog";
+import { Button, Dialog, Field, Icon, icons, TextField } from "../ui";
 
 interface RenameFileDialogProps {
   open: boolean;
@@ -45,9 +43,11 @@ export function RenameFileDialog({ open, projectId, path, onClose, onRenamed }: 
       title="Rename file"
       description="Move the file by including a directory in its new workspace-relative path."
       onClose={onClose}
-      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon={<Pencil />} loading={loading} disabled={!nextPath.trim() || nextPath.trim() === path} onClick={() => void rename()}>Rename</Button></>}
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon={<Icon name={icons.edit} />} loading={loading} disabled={!nextPath.trim() || nextPath.trim() === path} onClick={() => void rename()}>Rename</Button></>}
     >
-      <label className="field"><span>New path</span><input value={nextPath} onChange={(event) => setNextPath(event.target.value)} autoFocus /></label>
+      <Field label="New path">
+        <TextField value={nextPath} onChange={setNextPath} autoFocus />
+      </Field>
       {error ? <div className="form-error" role="alert">{error}</div> : null}
     </Dialog>
   );

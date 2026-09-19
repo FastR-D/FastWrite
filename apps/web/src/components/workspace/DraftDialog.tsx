@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, ChevronRight, FileText, LoaderCircle, Plus, X } from "lucide-react";
 import type { ChangeSet, DraftOutlineSection, DraftPlan, PaperProject } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { diffWords } from "../../lib/wordDiff";
-import { Button, IconButton } from "../ui/Button";
-import { Dialog } from "../ui/Dialog";
+import { Button, Dialog, Field, Icon, IconButton, Stepper, TextArea, TextField, icons, type StepStatus } from "../ui";
 import type { CompileStateReport } from "./PdfPane";
 import { EditableChangeReview } from "./EditableChangeReview";
 
@@ -126,17 +124,17 @@ export function DraftDialog({ open, project, onClose, onAccepted, compileState, 
       busy ? <Button variant="secondary" onClick={() => requestRef.current?.abort()}>Cancel task</Button> :
       stage === "input" ? <><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!brief.trim()} onClick={() => void begin()}>Plan outline</Button></> :
       stage === "outline" ? <><Button variant="ghost" onClick={() => void discardPlan()}>Discard outline</Button><Button variant="primary" onClick={() => void generate()}>Confirm & generate</Button></> :
-      stage === "diff" ? <><Button variant="ghost" icon={<X />} onClick={() => void reject()}>Reject all</Button><Button variant="primary" icon={<Check />} onClick={() => void accept()}>Accept all files</Button></> :
-      stage === "accepted" ? <><Button variant="ghost" onClick={() => { reset(); onClose(); }}>Done</Button>{!compiledCurrentVersion ? <Button variant="primary" loading={compiling} disabled={compiling} onClick={onRequestCompile}>{compiling ? "Compiling" : "Compile draft"}</Button> : <span className="compile-confirmed"><Check /> Current version compiled</span>}</> : null
+      stage === "diff" ? <><Button variant="ghost" icon={<Icon name={icons.close} />} onClick={() => void reject()}>Reject all</Button><Button variant="primary" icon={<Icon name={icons.check} />} onClick={() => void accept()}>Accept all files</Button></> :
+      stage === "accepted" ? <><Button variant="ghost" onClick={() => { reset(); onClose(); }}>Done</Button>{!compiledCurrentVersion ? <Button variant="primary" loading={compiling} disabled={compiling} onClick={onRequestCompile}>{compiling ? "Compiling" : "Compile draft"}</Button> : <span className="compile-confirmed"><Icon name={icons.check} /> Current version compiled</span>}</> : null
     }>
       {stage !== "input" || failedStep ? <DraftRunProgress stage={stage} compileState={compileState} failedStep={failedStep} error={error} /> : null}
       {stage === "input" ? <div className="draft-agent-chat">
-        <article className="revise-message revise-message--assistant"><span><FileText /> Draft Agent</span><p>Describe the paper you want to draft. Include the research question, claimed contributions, threat-model constraints, and what evidence actually exists. I will first propose an outline; no files change until you review and accept them.</p></article>
-        <label className="draft-agent-composer"><span>Your research brief</span><textarea value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="We study… Our question is… The paper contributes… Available evidence includes… Do not claim…" autoFocus /></label>
+        <article className="revise-message revise-message--assistant"><span><Icon name={icons.fileText} /> Draft Agent</span><p>Describe the paper you want to draft. Include the research question, claimed contributions, threat-model constraints, and what evidence actually exists. I will first propose an outline; no files change until you review and accept them.</p></article>
+        <Field className="draft-agent-composer" label="Your research brief"><TextArea value={brief} onChange={setBrief} placeholder="We study… Our question is… The paper contributes… Available evidence includes… Do not claim…" autoFocus /></Field>
       </div> : null}
-      {busy ? <div className="agent-progress"><LoaderCircle className="spin" /><strong>{stage === "planning" ? "Planning the paper argument" : stage === "generating" ? "Drafting confirmed sections" : "Applying approved files"}</strong><span>The Agent is following the {project.skill.name} Skill.</span></div> : null}
-      {stage === "outline" ? <div className="draft-outline"><div className="draft-outline__note">Review section responsibilities before any files are generated.</div>{outline.map((section, index) => <div className="outline-editor" key={`${section.path}-${index}`}><span>{index + 1}</span><div><input aria-label={`Section ${index + 1} title`} value={section.title} onChange={(event) => updateOutline(setOutline, index, "title", event.target.value)} /><input aria-label={`Section ${index + 1} path`} value={section.path} onChange={(event) => updateOutline(setOutline, index, "path", event.target.value)} /><textarea aria-label={`Section ${index + 1} purpose`} value={section.purpose} onChange={(event) => updateOutline(setOutline, index, "purpose", event.target.value)} /></div><IconButton label="Remove section" icon={<X />} onClick={() => setOutline((current) => current.filter((_, itemIndex) => itemIndex !== index))} /></div>)}<Button size="small" variant="secondary" icon={<Plus />} onClick={() => setOutline((current) => [...current, { path: "sections/new-section.tex", title: "New section", purpose: "Define this section's role in the paper argument." }])}>Add section</Button></div> : null}
-      {(stage === "diff" || stage === "accepted") && changeSet ? <div className="draft-diff"><nav>{changeSet.changes.map((change, index) => <button className={index === activeFile ? "is-active" : ""} key={change.path} onClick={() => setActiveFile(index)}><FileText /><span>{change.path}</span><small>{change.hunks?.some((hunk) => hunk.status === "pending") ? "pending" : change.hunks?.some((hunk) => hunk.status === "accepted") ? "accepted" : "rejected"}</small><ChevronRight /></button>)}</nav><div className="draft-diff__file"><header>{selectedChange?.path}</header>{selectedChange ? <EditableChangeReview change={selectedChange} busy={deciding} readOnly={stage === "accepted" || changeSet.status !== "proposed"} onSave={editChange} onDecide={(ids, status) => void decideHunks(ids, status)} /> : <div className="revision-diff">{parts.map((part, index) => <span key={index}>{part.value}</span>)}</div>}</div>{stage === "accepted" ? <div className={`draft-success ${compileState.state === "error" ? "draft-success--error" : ""}`}>{compileState.state === "error" ? <AlertTriangle /> : <Check />} {compileState.state === "error" ? "Draft compilation failed. Review PDF diagnostics, then revise or retry." : compiledCurrentVersion ? "Draft applied and compiled successfully." : "Draft files applied. Compile the paper to validate the result."}</div> : null}</div> : null}
+      {busy ? <div className="agent-progress"><Icon name={icons.loading} spin /><strong>{stage === "planning" ? "Planning the paper argument" : stage === "generating" ? "Drafting confirmed sections" : "Applying approved files"}</strong><span>The Agent is following the {project.skill.name} Skill.</span></div> : null}
+      {stage === "outline" ? <div className="draft-outline"><div className="draft-outline__note">Review section responsibilities before any files are generated.</div>{outline.map((section, index) => <div className="outline-editor" key={`${section.path}-${index}`}><span>{index + 1}</span><div><TextField aria-label={`Section ${index + 1} title`} value={section.title} onChange={(next) => updateOutline(setOutline, index, "title", next)} /><TextField aria-label={`Section ${index + 1} path`} value={section.path} onChange={(next) => updateOutline(setOutline, index, "path", next)} /><TextArea aria-label={`Section ${index + 1} purpose`} value={section.purpose} onChange={(next) => updateOutline(setOutline, index, "purpose", next)} /></div><IconButton label="Remove section" icon={<Icon name={icons.close} />} onClick={() => setOutline((current) => current.filter((_, itemIndex) => itemIndex !== index))} /></div>)}<Button size="small" variant="secondary" icon={<Icon name={icons.add} />} onClick={() => setOutline((current) => [...current, { path: "sections/new-section.tex", title: "New section", purpose: "Define this section's role in the paper argument." }])}>Add section</Button></div> : null}
+      {(stage === "diff" || stage === "accepted") && changeSet ? <div className="draft-diff"><nav>{changeSet.changes.map((change, index) => <Button variant="ghost" className={index === activeFile ? "is-active" : ""} key={change.path} onClick={() => setActiveFile(index)}><Icon name={icons.fileText} /><span>{change.path}</span><small>{change.hunks?.some((hunk) => hunk.status === "pending") ? "pending" : change.hunks?.some((hunk) => hunk.status === "accepted") ? "accepted" : "rejected"}</small><Icon name={icons.chevronRight} /></Button>)}</nav><div className="draft-diff__file"><header>{selectedChange?.path}</header>{selectedChange ? <EditableChangeReview change={selectedChange} busy={deciding} readOnly={stage === "accepted" || changeSet.status !== "proposed"} onSave={editChange} onDecide={(ids, status) => void decideHunks(ids, status)} /> : <div className="revision-diff">{parts.map((part, index) => <span key={index}>{part.value}</span>)}</div>}</div>{stage === "accepted" ? <div className={`draft-success ${compileState.state === "error" ? "draft-success--error" : ""}`}>{compileState.state === "error" ? <Icon name={icons.warning} /> : <Icon name={icons.check} />} {compileState.state === "error" ? "Draft compilation failed. Review PDF diagnostics, then revise or retry." : compiledCurrentVersion ? "Draft applied and compiled successfully." : "Draft files applied. Compile the paper to validate the result."}</div> : null}</div> : null}
       {error ? <div className="form-error" role="alert">{error}</div> : null}
     </Dialog>
   );
@@ -158,15 +156,18 @@ function DraftRunProgress({ stage, compileState, failedStep, error }: { stage: S
         : "compiling";
   const currentIndex = order.indexOf(current);
   return <div className="draft-run-progress" aria-label="Draft task progress">
-    <ol>{order.map((step, index) => {
+    <Stepper variant="grid" numbered connectors label="Draft task progress" steps={order.map((step, index) => {
       const failed = failedStep === step || (step === "compiling" && compileState.state === "error");
       const complete = index < currentIndex || (step === "compiling" && compileState.state === "success");
       const active = step === current && !complete && !failed;
-      return <li key={step} className={`${complete ? "is-complete" : ""} ${active ? "is-current" : ""} ${failed ? "is-error" : ""}`} aria-current={active ? "step" : undefined}>
-        <span>{failed ? <AlertTriangle /> : complete ? <Check /> : active && (stage === "planning" || stage === "generating" || stage === "applying" || compileState.state === "loading" || compileState.state === "compiling") ? <LoaderCircle className="spin" /> : index + 1}</span>
-        <strong>{labels[step]}</strong>
-      </li>;
-    })}</ol>
-    {failedStep && error ? <p role="alert"><AlertTriangle /> {labels[failedStep]} failed: {error}</p> : null}
+      const status: StepStatus = failed ? "error" : complete ? "complete" : active ? "current" : "pending";
+      return {
+        id: step,
+        label: labels[step],
+        status,
+        icon: failed ? <Icon name={icons.warning} /> : complete ? <Icon name={icons.check} /> : active && (stage === "planning" || stage === "generating" || stage === "applying" || compileState.state === "loading" || compileState.state === "compiling") ? <Icon name={icons.loading} spin /> : null
+      };
+    })} />
+    {failedStep && error ? <p role="alert"><Icon name={icons.warning} /> {labels[failedStep]} failed: {error}</p> : null}
   </div>;
 }

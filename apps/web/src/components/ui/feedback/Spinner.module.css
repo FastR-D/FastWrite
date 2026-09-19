@@ -1,0 +1,13 @@
+.spinner {
+  display: inline-block;
+  border: 2px solid var(--vscode-list-hoverBackground);
+  border-top-color: var(--vscode-focusBorder);
+  border-radius: 50%;
+  animation: fw-spinner 0.75s linear infinite;
+}
+
+@keyframes fw-spinner { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 0.01ms; animation-iteration-count: 1; }
+}

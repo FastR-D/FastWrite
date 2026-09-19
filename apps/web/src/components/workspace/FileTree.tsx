@@ -1,16 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  BookOpen,
-  ChevronDown,
-  ChevronRight,
-  File,
-  FileCode2,
-  FileImage,
-  FileText,
-  Folder,
-  FolderOpen,
-  LoaderCircle
-} from "lucide-react";
+import { useEffect, useMemo, useState, type HTMLAttributes } from "react";
+import { Icon, icons, Tree, treeRowClasses } from "../ui";
 import type { WorkspaceTreeNode } from "@fastwrite/shared";
 
 interface FileTreeProps {
@@ -28,15 +17,17 @@ interface VisibleNode {
 }
 
 const ROW_HEIGHT = 27;
-const OVERSCAN = 8;
 
+/*
+ * Expansion, the lazy-load bookkeeping and the row markup stay here; the
+ * virtualiser, the treeitem wrapper and the depth padding live in `Tree`. The
+ * label keeps its `<span title={path}>` — sixteen Playwright selectors look for
+ * exactly that, so it travels through `renderRow` unchanged.
+ */
 export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand, onPin }: FileTreeProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState<Set<string>>(() => new Set());
   const [loadFailed, setLoadFailed] = useState<Set<string>>(() => new Set());
-  const [scrollTop, setScrollTop] = useState(0);
-  const [viewportHeight, setViewportHeight] = useState(500);
 
   useEffect(() => {
     if (!selectedPath) return;
@@ -52,37 +43,14 @@ export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand
     });
   }, [selectedPath]);
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const observer = new ResizeObserver(([entry]) => setViewportHeight(entry?.contentRect.height ?? 500));
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, []);
-
   const rows = useMemo(() => flattenVisible(nodes, expanded), [expanded, nodes]);
-
-  useEffect(() => {
-    if (!selectedPath || !containerRef.current) return;
-    const index = rows.findIndex(({ node }) => node.path === selectedPath);
-    if (index < 0) return;
-    const rowTop = index * ROW_HEIGHT;
-    const rowBottom = rowTop + ROW_HEIGHT;
-    const viewBottom = containerRef.current.scrollTop + viewportHeight;
-    if (rowTop < containerRef.current.scrollTop) containerRef.current.scrollTop = rowTop;
-    else if (rowBottom > viewBottom) containerRef.current.scrollTop = Math.max(0, rowBottom - viewportHeight);
-  }, [rows, selectedPath, viewportHeight]);
-
-  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-  const end = Math.min(rows.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
-  const visibleRows = rows.slice(start, end);
 
   const loadDirectory = async (path: string, retry = false) => {
     if (!onExpand || loading.has(path) || (!retry && loadFailed.has(path))) return;
     if (retry) setLoadFailed((current) => { const next = new Set(current); next.delete(path); return next; });
     setLoading((current) => new Set(current).add(path));
     try { await onExpand(path); }
-    catch { setLoadFailed((current) => new Set(current).add(path)); }
+    catch { setLoadFailed((current) => { const next = new Set(current); next.add(path); return next; }); }
     finally { setLoading((current) => { const next = new Set(current); next.delete(path); return next; }); }
   };
 
@@ -104,33 +72,44 @@ export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand
     if (opening && node.loaded === false) void loadDirectory(node.path, true);
   };
 
+  const rowProps = ({ node }: VisibleNode): HTMLAttributes<HTMLButtonElement> => node.type === "directory"
+    ? { "aria-expanded": expanded.has(node.path), "aria-busy": loading.has(node.path), onClick: () => toggle(node) }
+    : { onClick: () => onSelect(node), onDoubleClick: () => onPin?.(node) };
+
   return (
-    <div ref={containerRef} className="file-tree" role="tree" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
-      <div className="file-tree__canvas" style={{ height: rows.length * ROW_HEIGHT + 8 }}>
-        {visibleRows.map(({ node, depth }, offset) => {
-          const index = start + offset;
-          const rowStyle = { top: 4 + index * ROW_HEIGHT, paddingLeft: (node.type === "directory" ? 8 : 26) + depth * 14 };
-          if (node.type === "directory") {
-            const isExpanded = expanded.has(node.path);
-            const isLoading = loading.has(node.path);
-            return (
-              <button key={node.path} className="tree-row file-tree__virtual-row" style={rowStyle} role="treeitem" aria-expanded={isExpanded} aria-busy={isLoading} onClick={() => toggle(node)}>
-                {isLoading ? <LoaderCircle className="tree-row__chevron spin" /> : isExpanded ? <ChevronDown className="tree-row__chevron" /> : <ChevronRight className="tree-row__chevron" />}
-                {isExpanded ? <FolderOpen className="tree-row__folder" /> : <Folder className="tree-row__folder" />}
-                <span title={node.path}>{node.name}</span>
-              </button>
-            );
-          }
-          return (
-            <button key={node.path} className={`tree-row tree-row--file file-tree__virtual-row ${selectedPath === node.path ? "is-selected" : ""}`} style={rowStyle} role="treeitem" aria-selected={selectedPath === node.path} onClick={() => onSelect(node)} onDoubleClick={() => onPin?.(node)}>
-              <FileIcon path={node.path} kind={node.kind} />
-              <span title={node.path}>{node.name}</span>
-              {node.path === mainDocument ? <BookOpen className="tree-row__main" aria-label="Main document" /> : null}
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    <Tree
+      className="file-tree"
+      label="Project files"
+      rows={rows}
+      rowKey={({ node }) => node.path}
+      rowHeight={ROW_HEIGHT}
+      selectedKey={selectedPath}
+      rowIndent={({ node, depth }) => (node.type === "directory" ? 8 : 26) + depth * 14}
+      rowProps={rowProps}
+      renderRow={(row) => <TreeRow row={row} expanded={expanded} loading={loading} mainDocument={mainDocument} />}
+    />
+  );
+}
+
+function TreeRow({ row, expanded, loading, mainDocument }: { row: VisibleNode; expanded: ReadonlySet<string>; loading: ReadonlySet<string>; mainDocument: string }) {
+  const { node } = row;
+  if (node.type === "directory") {
+    const isExpanded = expanded.has(node.path);
+    const isLoading = loading.has(node.path);
+    return (
+      <>
+        {isLoading ? <Icon name={icons.loading} size={12} spin /> : isExpanded ? <Icon name={icons.chevronDown} size={12} /> : <Icon name={icons.chevronRight} size={12} />}
+        {isExpanded ? <Icon name={icons.folderOpened} size={14} className={treeRowClasses.folder} /> : <Icon name={icons.folder} size={14} className={treeRowClasses.folder} />}
+        <span className={treeRowClasses.label} title={node.path}>{node.name}</span>
+      </>
+    );
+  }
+  return (
+    <>
+      <FileIcon path={node.path} kind={node.kind} />
+      <span className={treeRowClasses.label} title={node.path}>{node.name}</span>
+      {node.path === mainDocument ? <Icon name={icons.book} size={14} className={treeRowClasses.main} aria-label="Main document" /> : null}
+    </>
   );
 }
 
@@ -152,9 +131,9 @@ export function flattenVisible(nodes: WorkspaceTreeNode[], expanded: ReadonlySet
 }
 
 function FileIcon({ path, kind }: { path: string; kind: string }) {
-  if (kind === "image") return <FileImage className="tree-row__image" />;
+  if (kind === "image") return <Icon name={icons.fileMedia} size={14} className={treeRowClasses.image} />;
   const extension = path.split(".").at(-1)?.toLowerCase();
-  if (extension === "tex" || extension === "sty" || extension === "cls") return <FileCode2 className="tree-row__tex" />;
-  if (extension === "md" || extension === "bib") return <FileText className="tree-row__text" />;
-  return <File />;
+  if (extension === "tex" || extension === "sty" || extension === "cls") return <Icon name={icons.fileCode} size={14} className={treeRowClasses.tex} />;
+  if (extension === "md" || extension === "bib") return <Icon name={icons.fileText} size={14} className={treeRowClasses.text} />;
+  return <Icon name={icons.file} />;
 }

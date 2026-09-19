@@ -606,6 +606,30 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("POST", "/api/projects/:projectId/history/checkpoint", async (_request, params) => {
       return json(await workspaces.createHistoryCheckpoint(required(params, "projectId")), 201);
     }),
+    route("GET", "/api/projects/:projectId/history/working-status", async (_request, params) => {
+      return json(await workspaces.workingStatus(required(params, "projectId")));
+    }),
+    route("POST", "/api/projects/:projectId/history/stage", async (request, params) => {
+      const body = await readJson<{ paths?: string[] }>(request);
+      await workspaces.stagePaths(required(params, "projectId"), body.paths ?? []);
+      return new Response(null, { status: 204 });
+    }),
+    route("POST", "/api/projects/:projectId/history/unstage", async (request, params) => {
+      const body = await readJson<{ paths?: string[] }>(request);
+      await workspaces.unstagePaths(required(params, "projectId"), body.paths ?? []);
+      return new Response(null, { status: 204 });
+    }),
+    route("POST", "/api/projects/:projectId/history/discard", async (request, params) => {
+      const body = await readJson<{ paths?: string[] }>(request);
+      await workspaces.discardPaths(required(params, "projectId"), body.paths ?? []);
+      return new Response(null, { status: 204 });
+    }),
+    route("POST", "/api/projects/:projectId/history/commit", async (request, params) => {
+      const body = await readJson<{ message?: string }>(request);
+      const message = (body.message ?? "").trim();
+      if (!message) throw new ApiError(400, "history_message_required", "A commit message is required");
+      return json(await workspaces.commitWorking(required(params, "projectId"), message), 201);
+    }),
     route("GET", "/api/projects/:projectId/history", async (request, params) => {
       const limit = Number(new URL(request.url).searchParams.get("limit") ?? "50");
       return json(await workspaces.history(required(params, "projectId"), Number.isFinite(limit) ? limit : 50));

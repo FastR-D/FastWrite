@@ -33,6 +33,10 @@ test("simultaneous saves cannot both accept the same file version", async () => 
 test("restore rejects stale project versions and recreates deleted files with a new checkpoint", async () => {
   const { workspaces, project } = await fixture();
   await workspaces.createFile(project.id, "deleted.tex", "original");
+  // `createFile` no longer commits, so the checkpoint the restore below reads
+  // from has to be asked for explicitly. Without it `history[0]` is the import
+  // snapshot, which does not contain the file being restored.
+  await workspaces.createHistoryCheckpoint(project.id);
   const initial = (await workspaces.history(project.id))[0]!.oid;
   const version = workspaces.getProject(project.id).version;
   await workspaces.deletePath(project.id, "deleted.tex");

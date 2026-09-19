@@ -1,0 +1,19 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--vscode-editor-background) 72%, transparent);
+  z-index: 200;
+}
+
+.message {
+  padding: 10px 16px;
+  border: 1px solid var(--vscode-sideBarSectionHeader-border);
+  border-radius: 3px;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}

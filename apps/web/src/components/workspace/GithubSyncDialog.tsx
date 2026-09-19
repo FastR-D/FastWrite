@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
-import { AlertTriangle, CheckCircle2, GitMerge, LoaderCircle, RefreshCw } from "lucide-react";
 import type { GithubSyncResolution, GithubSyncResolutionChoice, GithubSyncRun, PaperProject } from "@fastwrite/shared";
 import { api } from "../../api/client";
-import { Button } from "../ui/Button";
-import { Dialog } from "../ui/Dialog";
+import { Button, Dialog, Field, Icon, TextArea, icons } from "../ui";
 import type { CompileStateReport } from "./PdfPane";
 import { createPendingResolutions, editTextResolution, keepConflictSide, type PendingGithubSyncResolution } from "./github-sync-resolution";
 import { TextModelComparison } from "../workbench/TextModelComparison";
@@ -126,36 +124,35 @@ export function GithubSyncDialog({ open, project, compileState, onClose, onFlush
 
   const allResolved = Boolean(run?.conflicts.length) && run!.conflicts.every((conflict) => resolutions[conflict.path]?.choice);
   const busy = ["saving", "syncing", "compiling", "finalizing"].includes(stage);
-  const footer = stage === "conflicts" ? <Button variant="primary" icon={<GitMerge />} disabled={!allResolved} onClick={() => void applyResolutions()}>Apply &amp; continue sync</Button>
-    : stage === "compile-error" ? <Button variant="primary" icon={<RefreshCw />} onClick={retryCompile}>Compile again</Button>
-    : stage === "remote-changed" || stage === "error" ? <Button variant="primary" icon={<RefreshCw />} onClick={() => void start()}>Sync again</Button>
+  const footer = stage === "conflicts" ? <Button variant="primary" icon={<Icon name={icons.gitMerge} />} disabled={!allResolved} onClick={() => void applyResolutions()}>Apply &amp; continue sync</Button>
+    : stage === "compile-error" ? <Button variant="primary" icon={<Icon name={icons.refresh} />} onClick={retryCompile}>Compile again</Button>
+    : stage === "remote-changed" || stage === "error" ? <Button variant="primary" icon={<Icon name={icons.refresh} />} onClick={() => void start()}>Sync again</Button>
     : stage === "completed" ? <Button variant="primary" onClick={onClose}>Done</Button>
     : <Button variant="secondary" disabled>Sync in progress</Button>;
 
   return <Dialog open={open} title="Sync with GitHub" {...(project.source.type === "github" ? { description: `${project.source.repository} · ${run?.branch ?? project.source.ref}` } : {})} width={stage === "conflicts" ? "wide" : "medium"} className="github-sync-dialog" onClose={busy ? () => undefined : onClose} footer={footer}>
-    {stage === "saving" ? <SyncProgress icon={<LoaderCircle className="spin" />} title="Saving local changes" detail="Creating a local recovery checkpoint…" /> : null}
-    {stage === "syncing" ? <SyncProgress icon={<LoaderCircle className="spin" />} title={run?.conflicts.length ? "Applying conflict resolutions" : "Syncing changes"} detail="Fetching GitHub and merging from the last synced commit…" /> : null}
-    {stage === "compiling" ? <SyncProgress icon={<LoaderCircle className="spin" />} title="Compiling merged paper" detail="Sync will continue after the current project version compiles successfully." /> : null}
-    {stage === "finalizing" ? <SyncProgress icon={<LoaderCircle className="spin" />} title="Finishing Sync" detail={run?.hasChangesToPush ? "Publishing one FastWrite commit…" : "Recording the synced GitHub version…"} /> : null}
-    {stage === "completed" ? <SyncProgress icon={<CheckCircle2 />} title="GitHub is in sync" detail={run?.pushedCommit ? `Published ${shortCommit(run.pushedCommit)} on ${run.branch}.` : `Updated from ${run?.branch ?? "GitHub"}; no FastWrite commit was needed.`} tone="success" /> : null}
-    {stage === "compile-error" ? <SyncProgress icon={<AlertTriangle />} title="The merged paper did not compile" detail="Fix the compile errors, then compile again to continue this Sync." tone="warning" /> : null}
-    {stage === "remote-changed" ? <SyncProgress icon={<AlertTriangle />} title="GitHub changed during Sync" detail={run?.error ?? "Run Sync again to merge the latest remote commit. No force-push was attempted."} tone="warning" /> : null}
-    {stage === "error" ? <SyncProgress icon={<AlertTriangle />} title="Sync could not finish" detail={error || run?.error || "GitHub Sync failed"} tone="error" /> : null}
+    {stage === "saving" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title="Saving local changes" detail="Creating a local recovery checkpoint…" /> : null}
+    {stage === "syncing" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title={run?.conflicts.length ? "Applying conflict resolutions" : "Syncing changes"} detail="Fetching GitHub and merging from the last synced commit…" /> : null}
+    {stage === "compiling" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title="Compiling merged paper" detail="Sync will continue after the current project version compiles successfully." /> : null}
+    {stage === "finalizing" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title="Finishing Sync" detail={run?.hasChangesToPush ? "Publishing one FastWrite commit…" : "Recording the synced GitHub version…"} /> : null}
+    {stage === "completed" ? <SyncProgress icon={<Icon name={icons.passFilled} />} title="GitHub is in sync" detail={run?.pushedCommit ? `Published ${shortCommit(run.pushedCommit)} on ${run.branch}.` : `Updated from ${run?.branch ?? "GitHub"}; no FastWrite commit was needed.`} tone="success" /> : null}
+    {stage === "compile-error" ? <SyncProgress icon={<Icon name={icons.warning} />} title="The merged paper did not compile" detail="Fix the compile errors, then compile again to continue this Sync." tone="warning" /> : null}
+    {stage === "remote-changed" ? <SyncProgress icon={<Icon name={icons.warning} />} title="GitHub changed during Sync" detail={run?.error ?? "Run Sync again to merge the latest remote commit. No force-push was attempted."} tone="warning" /> : null}
+    {stage === "error" ? <SyncProgress icon={<Icon name={icons.warning} />} title="Sync could not finish" detail={error || run?.error || "GitHub Sync failed"} tone="error" /> : null}
     {stage === "conflicts" && run ? <div className="sync-conflict-list">
-      <div className="sync-conflict-summary"><AlertTriangle /><div><strong>{run.conflicts.length} conflict{run.conflicts.length === 1 ? "" : "s"}</strong><span>Resolve each file, then continue this Sync.</span></div></div>
+      <div className="sync-conflict-summary"><Icon name={icons.warning} /><div><strong>{run.conflicts.length} conflict{run.conflicts.length === 1 ? "" : "s"}</strong><span>Resolve each file, then continue this Sync.</span></div></div>
       {run.conflicts.map((conflict) => {
         const resolution = resolutions[conflict.path] ?? { choice: "", content: "" };
         return <article className="sync-conflict" key={conflict.path}>
           <header><code>{conflict.path}</code><span>{conflict.kind === "text" ? "Text conflict" : conflict.kind === "binary" ? "Binary conflict" : "Delete / modify conflict"}</span></header>
           {conflict.kind === "text" ? <GithubTextConflictComparison path={conflict.path} base={conflict.baseContent} fastwrite={conflict.fastwriteContent} github={conflict.githubContent} /> : null}
           <div className="sync-resolution" role="group" aria-label={`Resolution for ${conflict.path}`}>
-            <button className={resolution.choice === "fastwrite" ? "is-active" : ""} onClick={() => setResolutions((current) => ({ ...current, [conflict.path]: keepConflictSide(conflict, resolution, "fastwrite") }))}>Keep FastWrite</button>
-            <button className={resolution.choice === "github" ? "is-active" : ""} onClick={() => setResolutions((current) => ({ ...current, [conflict.path]: keepConflictSide(conflict, resolution, "github") }))}>Keep GitHub</button>
+            <Button variant="ghost" className={resolution.choice === "fastwrite" ? "is-active" : ""} onClick={() => setResolutions((current) => ({ ...current, [conflict.path]: keepConflictSide(conflict, resolution, "fastwrite") }))}>Keep FastWrite</Button>
+            <Button variant="ghost" className={resolution.choice === "github" ? "is-active" : ""} onClick={() => setResolutions((current) => ({ ...current, [conflict.path]: keepConflictSide(conflict, resolution, "github") }))}>Keep GitHub</Button>
           </div>
-          {conflict.kind === "text" ? <label className="sync-conflict__result">
-            <span>Merged result</span>
-            <textarea aria-label={`Merged result for ${conflict.path}`} value={resolution.content} onChange={(event) => setResolutions((current) => ({ ...current, [conflict.path]: editTextResolution(resolution, event.target.value) }))} spellCheck={false} />
-          </label> : null}
+          {conflict.kind === "text" ? <Field label="Merged result" className="sync-conflict__result">
+            <TextArea aria-label={`Merged result for ${conflict.path}`} value={resolution.content} onChange={(content) => setResolutions((current) => ({ ...current, [conflict.path]: editTextResolution(resolution, content) }))} spellCheck={false} />
+          </Field> : null}
         </article>;
       })}
       {error ? <div className="form-error" role="alert">{error}</div> : null}

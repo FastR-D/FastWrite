@@ -1,0 +1,20 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--slate-700);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  font-weight: 600;
+}
+
+/* The label wraps the field name and the optional marker only; the control is a
+   sibling. See the comment in Field.tsx for why. */
+.label { display: flex; align-items: baseline; gap: 6px; color: inherit; }
+.optional { color: var(--text-muted); font-weight: 400; }
+
+.hint { color: var(--text-muted); font-weight: 400; line-height: 1.45; }
+.error { color: var(--red-600); font-weight: 400; line-height: 1.45; }
+
+/* Tighter variant for template information blocks. */
+.compact { gap: 3px; line-height: 1.45; }

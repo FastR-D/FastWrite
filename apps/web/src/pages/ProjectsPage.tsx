@@ -1,19 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import {
-  ArrowRight,
-  Bell,
-  BookOpenText,
-  CheckCircle2,
-  CircleUserRound,
-  Clock3,
-  FilePlus2,
-  FolderGit2,
-  LogOut,
-  Plus,
-  Trash2,
-  UsersRound,
-} from "lucide-react";
 import type {
   PaperProject,
   PublicationTarget,
@@ -23,12 +9,10 @@ import type {
 import { WRITING_PROFILES } from "@fastwrite/shared";
 import { api } from "../api/client";
 import { ImportDialog } from "../components/import/ImportDialog";
-import { Button } from "../components/ui/Button";
-import { Dialog } from "../components/ui/Dialog";
+import { Button, Checkbox, Dialog, Divider, Field, Icon, IconButton, Link, MultiSelect, NumberField, Select, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { PublicationTargetFields } from "../components/ui/PublicationTargetFields";
 import { navigate, projectPath } from "../lib/navigation";
 import { publicationTargetAbbreviation } from "../lib/labels";
-import { ThemeToggle } from "../components/ui/ThemeToggle";
 
 export function ProjectsPage() {
   const invitationToken = new URLSearchParams(window.location.search).get(
@@ -154,23 +138,16 @@ export function ProjectsPage() {
   return (
     <div className="projects-page">
       <header className="projects-topbar">
-        <a
-          className="brand"
-          href="/projects"
-          onClick={(event) => {
-            event.preventDefault();
-            navigate("/projects");
-          }}
-        >
+        <Link variant="inherit" className="brand" href="/projects">
           <span className="brand__mark">F</span>
           <span>FastWrite</span>
-        </a>
+        </Link>
         <div className="topbar-actions">
           <span className="skill-badge">Agentic Paper Writing</span>
           <Button
             size="small"
             variant="ghost"
-            icon={<UsersRound />}
+            icon={<Icon name={icons.organization} />}
             onClick={() => setTeamsOpen(true)}
           >
             Teams
@@ -179,7 +156,7 @@ export function ProjectsPage() {
             <Button
               size="small"
               variant="ghost"
-              icon={<Bell />}
+              icon={<Icon name={icons.bell} />}
               onClick={() => setNotificationsOpen(true)}
             >
               Notifications
@@ -188,7 +165,7 @@ export function ProjectsPage() {
           <Button
             size="small"
             variant="ghost"
-            icon={account ? <LogOut /> : <CircleUserRound />}
+            icon={account ? <Icon name={icons.signOut} /> : <Icon name={icons.account} />}
             onClick={() =>
               account
                 ? void api.auth.logout().finally(() => {
@@ -217,14 +194,14 @@ export function ProjectsPage() {
           <div className="projects-hero__actions">
             <Button
               variant="primary"
-              icon={<Plus />}
+              icon={<Icon name={icons.add} />}
               onClick={() => setImportOpen(true)}
             >
               Import paper
             </Button>
             <Button
               variant="secondary"
-              icon={<FilePlus2 />}
+              icon={<Icon name={icons.newFile} />}
               onClick={() => setNewOpen(true)}
             >
               New paper
@@ -281,7 +258,7 @@ export function ProjectsPage() {
           ) : projects.length === 0 ? (
             <div className="projects-empty">
               <div className="projects-empty__art">
-                <BookOpenText />
+                <Icon name={icons.book} />
               </div>
               <h3>No papers yet</h3>
               <p>
@@ -290,7 +267,7 @@ export function ProjectsPage() {
               </p>
               <Button
                 variant="primary"
-                icon={<FolderGit2 />}
+                icon={<Icon name={icons.repo} />}
                 onClick={() => setImportOpen(true)}
               >
                 Import your first paper
@@ -307,30 +284,28 @@ export function ProjectsPage() {
                 >
                   <div className="project-card__top">
                     <span className="project-card__icon">
-                      <BookOpenText />
+                      <Icon name={icons.book} />
                     </span>
                     <span className="project-card__actions">
-                      <ArrowRight className="project-card__arrow" />
-                      <button
-                        type="button"
+                      <Icon name={icons.arrowRight} className="project-card__arrow" />
+                      <IconButton
                         className="project-card__delete"
-                        aria-label={`Delete ${project.name}`}
+                        label={`Delete ${project.name}`}
                         title="Move project to trash"
+                        icon={<Icon name={icons.trash} />}
                         disabled={deleting === project.id}
                         onClick={(event) => {
                           event.stopPropagation();
                           void deleteProject(project);
                         }}
-                      >
-                        <Trash2 />
-                      </button>
+                      />
                     </span>
                   </div>
                   <h3>{project.name}</h3>
                   <code>{project.mainDocument}</code>
                   <div className="project-card__meta">
                     <span>
-                      <Clock3 /> {relativeTime(project.updatedAt)}
+                      <Icon name={icons.clockface} /> {relativeTime(project.updatedAt)}
                     </span>
                     <span>
                       {publicationTargetAbbreviation(
@@ -377,18 +352,18 @@ function ProductLanding({ onSignIn }: { onSignIn: () => void }) {
   return (
     <div className="product-landing">
       <header className="product-landing__nav">
-        <a className="brand" href="/projects"><span className="brand__mark">F</span><span>FastWrite</span></a>
-        <div className="product-landing__nav-actions"><a href="#workflow">How it works</a><a href="#research">For research teams</a><Button size="small" variant="secondary" icon={<CircleUserRound />} onClick={onSignIn}>Sign in</Button><ThemeToggle /></div>
+        <Link variant="inherit" className="brand" href="/projects"><span className="brand__mark">F</span><span>FastWrite</span></Link>
+        <div className="product-landing__nav-actions"><Link href="#workflow">How it works</Link><Link href="#research">For research teams</Link><Button size="small" variant="secondary" icon={<Icon name={icons.account} />} onClick={onSignIn}>Sign in</Button><ThemeToggle /></div>
       </header>
       <main>
         <section className="product-landing__hero">
-          <div className="product-landing__hero-copy"><p className="eyebrow">THE RESEARCH WRITING WORKSPACE</p><h1>Write papers together.<br /><em>Keep every claim accountable.</em></h1><p className="product-landing__lede">FastWrite brings LaTeX, evidence, review, and careful AI assistance into one workspace built for serious academic collaboration.</p><div className="product-landing__actions"><Button variant="primary" icon={<ArrowRight />} onClick={onSignIn}>Open your workspace</Button><a href="#workflow" className="product-landing__text-link">See the workflow <ArrowRight size={16} /></a></div></div>
-          <div className="product-landing__hero-art" aria-label="A focused academic writing workspace"><div className="landing-window"><div className="landing-window__bar"><span /><span /><span /></div><div className="landing-window__body"><div className="landing-sidebar"><b>PROJECT</b><i>▾ Draft paper</i><i>◦ Introduction.tex</i><i>◦ Methods.tex</i><i>◦ references.bib</i></div><div className="landing-editor"><small>INTRODUCTION.TEX</small><p><span>01</span> <strong>\\section&#123;Introduction&#125;</strong></p><p><span>02</span> Research is a shared process.</p><p><span>03</span> <mark>Evidence turns ideas into knowledge.</mark></p><p><span>04</span> Collaborate with confidence.</p><div className="landing-cursor" /></div><div className="landing-pdf"><div className="pdf-page-mock"><b>FastWrite</b><hr /><strong>Evidence-first writing</strong><p>Build, review, and refine your research with your team.</p><hr /><small>1  |  DRAFT</small></div></div></div></div></div>
+          <div className="product-landing__hero-copy"><p className="eyebrow">THE RESEARCH WRITING WORKSPACE</p><h1>Write papers together.<br /><em>Keep every claim accountable.</em></h1><p className="product-landing__lede">FastWrite brings LaTeX, evidence, review, and careful AI assistance into one workspace built for serious academic collaboration.</p><div className="product-landing__actions"><Button variant="primary" icon={<Icon name={icons.arrowRight} />} onClick={onSignIn}>Open your workspace</Button><Link href="#workflow" className="product-landing__text-link">See the workflow <Icon name={icons.arrowRight} size={16} /></Link></div></div>
+          <div className="product-landing__hero-art" aria-label="A focused academic writing workspace"><div className="landing-window"><div className="landing-window__bar"><span /><span /><span /></div><div className="landing-window__body"><div className="landing-sidebar"><b>PROJECT</b><i>▾ Draft paper</i><i>◦ Introduction.tex</i><i>◦ Methods.tex</i><i>◦ references.bib</i></div><div className="landing-editor"><small>INTRODUCTION.TEX</small><p><span>01</span> <strong>\\section&#123;Introduction&#125;</strong></p><p><span>02</span> Research is a shared process.</p><p><span>03</span> <mark>Evidence turns ideas into knowledge.</mark></p><p><span>04</span> Collaborate with confidence.</p><div className="landing-cursor" /></div><div className="landing-pdf"><div className="pdf-page-mock"><b>FastWrite</b><Divider /><strong>Evidence-first writing</strong><p>Build, review, and refine your research with your team.</p><Divider /><small>1  |  DRAFT</small></div></div></div></div></div>
         </section>
-        <section id="workflow" className="product-landing__section"><p className="eyebrow">A BETTER RESEARCH LOOP</p><h2>From first outline to final PDF, the record stays clear.</h2><div className="product-landing__grid"><LandingFeature icon={<FolderGit2 />} title="One source of truth" text="Edit LaTeX together with versioned files, checkpoints, and a PDF that always shows what was compiled." /><LandingFeature icon={<UsersRound />} title="Collaboration with context" text="Invite coauthors, discuss anchored passages, and keep decisions attached to the text they change." /><LandingFeature icon={<BookOpenText />} title="AI with guardrails" text="Use evidence-aware skills to propose changes. Review every diff before it reaches the manuscript." /></div></section>
-        <section id="research" className="product-landing__proof"><div><p className="eyebrow">BUILT FOR ACADEMIC TEAMS</p><h2>Move quickly without losing the trail.</h2><p>FastWrite keeps authorship, sources, review findings, and compile history connected so your team can focus on the argument.</p></div><div className="product-landing__proof-list"><span><CheckCircle2 /> Evidence-linked revisions</span><span><CheckCircle2 /> Team roles and path-level access</span><span><CheckCircle2 /> OIDC and campus CAS ready</span></div></section>
+        <section id="workflow" className="product-landing__section"><p className="eyebrow">A BETTER RESEARCH LOOP</p><h2>From first outline to final PDF, the record stays clear.</h2><div className="product-landing__grid"><LandingFeature icon={<Icon name={icons.repo} size={24} />} title="One source of truth" text="Edit LaTeX together with versioned files, checkpoints, and a PDF that always shows what was compiled." /><LandingFeature icon={<Icon name={icons.organization} size={24} />} title="Collaboration with context" text="Invite coauthors, discuss anchored passages, and keep decisions attached to the text they change." /><LandingFeature icon={<Icon name={icons.book} size={24} />} title="AI with guardrails" text="Use evidence-aware skills to propose changes. Review every diff before it reaches the manuscript." /></div></section>
+        <section id="research" className="product-landing__proof"><div><p className="eyebrow">BUILT FOR ACADEMIC TEAMS</p><h2>Move quickly without losing the trail.</h2><p>FastWrite keeps authorship, sources, review findings, and compile history connected so your team can focus on the argument.</p></div><div className="product-landing__proof-list"><span><Icon name={icons.passFilled} /> Evidence-linked revisions</span><span><Icon name={icons.passFilled} /> Team roles and path-level access</span><span><Icon name={icons.passFilled} /> OIDC and campus CAS ready</span></div></section>
       </main>
-      <footer className="product-landing__footer"><span>FastWrite</span><span>Research writing, with a record you can trust.</span><button onClick={onSignIn}>Sign in to begin <ArrowRight size={15} /></button></footer>
+      <footer className="product-landing__footer"><span>FastWrite</span><span>Research writing, with a record you can trust.</span><Button variant="ghost" onClick={onSignIn}>Sign in to begin <Icon name={icons.arrowRight} size={15} /></Button></footer>
     </div>
   );
 }
@@ -475,39 +450,35 @@ function AccountDialog({
           {providers.cas ? <Button type="button" variant="secondary" onClick={() => { window.location.assign("/api/auth/cas/login"); }}>Continue with campus CAS</Button> : null}
         </div> : null}
         {mode === "register" ? (
-          <label className="field">
-            <span>Name</span>
-            <input
+          <Field label="Name">
+            <TextField
               value={name}
-              onChange={(event) => setName(event.target.value)}
+              onChange={setName}
               name="name"
               autoComplete="name"
               autoFocus
             />
-          </label>
+          </Field>
         ) : null}
-        <label className="field">
-          <span>Email</span>
-          <input
+        <Field label="Email">
+          <TextField
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            onChange={setEmail}
             type="email"
             name="email"
             autoComplete="username"
             autoFocus={mode === "login"}
           />
-        </label>
-        <label className="field">
-          <span>Password</span>
-          <input
+        </Field>
+        <Field label="Password">
+          <TextField
             value={password}
-            onChange={(event) => setPassword(event.target.value)}
+            onChange={setPassword}
             type="password"
             name="password"
             autoComplete={mode === "login" ? "current-password" : "new-password"}
-            minLength={12}
           />
-        </label>
+        </Field>
         {error ? (
           <div className="form-error" role="alert">
             {error}
@@ -517,6 +488,9 @@ function AccountDialog({
     </Dialog>
   );
 }
+
+type HarnessProvider = "codex" | "claude" | "openai-compatible";
+const HARNESS_PROVIDERS: HarnessProvider[] = ["codex", "claude", "openai-compatible"];
 
 function TeamsDialog({
   open,
@@ -768,16 +742,11 @@ function TeamsDialog({
     catch (failure) { setError(failure instanceof Error ? failure.message : "Could not remove IdP group binding"); }
     finally { setBusy(false); }
   };
-  const toggleProvider = (
-    provider: "codex" | "claude" | "openai-compatible",
-    enabled: boolean,
-  ) =>
+  const setAllowedProviders = (providers: string[]) =>
     setPolicy((current) => {
       const next = { ...current };
-      const providers = new Set(current.allowedProviders ?? []);
-      if (enabled) providers.add(provider);
-      else providers.delete(provider);
-      if (providers.size) next.allowedProviders = [...providers];
+      const allowed = HARNESS_PROVIDERS.filter((provider) => providers.includes(provider));
+      if (allowed.length) next.allowedProviders = allowed;
       else delete next.allowedProviders;
       return next;
     });
@@ -794,30 +763,21 @@ function TeamsDialog({
       }
     >
       <div className="form-stack">
-        <label className="field">
-          <span>Team</span>
-          <select
+        <Field label="Team">
+          <Select
+            aria-label="Team"
             value={selectedId}
-            onChange={(event) => setSelectedId(event.target.value)}
-          >
-            <option value="">Choose a team</option>
-            {teams.map((team) => (
-              <option key={team.id} value={team.id}>
-                {team.personalUserId
-                  ? `${team.name} (personal workspace)`
-                  : team.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>New team</span>
-          <input
+            onChange={setSelectedId}
+            options={[{ value: "", label: "Choose a team" }, ...teams.map((team) => ({ value: team.id, label: team.personalUserId ? `${team.name} (personal workspace)` : team.name }))]}
+          />
+        </Field>
+        <Field label="New team">
+          <TextField
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            onChange={setName}
             placeholder="Applied Cryptography Lab"
           />
-        </label>
+        </Field>
         <Button
           size="small"
           variant="secondary"
@@ -828,76 +788,60 @@ function TeamsDialog({
         </Button>
         {selected && !selected.personalUserId ? (
           <>
-            <label className="field">
-              <span>
-                <input
-                  type="checkbox"
-                  checked={policy.personalHarness}
-                  onChange={(event) =>
-                    setPolicy((current) => ({
-                      ...current,
-                      personalHarness: event.target.checked,
-                    }))
-                  }
-                />{" "}
-                Allow personal Harness profiles
-              </span>
-            </label>
-            <fieldset className="field">
-              <legend>Allowed Harness providers</legend>
-              {(["codex", "claude", "openai-compatible"] as const).map(
-                (provider) => (
-                  <label key={provider}>
-                    <input
-                      type="checkbox"
-                      checked={
-                        policy.allowedProviders?.includes(provider) ?? false
-                      }
-                      onChange={(event) =>
-                        toggleProvider(provider, event.target.checked)
-                      }
-                    />{" "}
-                    {provider}
-                  </label>
-                ),
-              )}
-            </fieldset>
-            <label className="field">
-              <span>Maximum concurrent runs</span>
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value={policy.maxConcurrentRuns ?? ""}
-                onChange={(event) =>
+            <Checkbox
+              checked={policy.personalHarness}
+              onChange={(checked) =>
+                setPolicy((current) => ({
+                  ...current,
+                  personalHarness: checked,
+                }))
+              }
+            >
+              Allow personal Harness profiles
+            </Checkbox>
+            <Field label="Allowed Harness providers">
+              <MultiSelect
+                label="Allowed Harness providers"
+                value={policy.allowedProviders ?? []}
+                onChange={setAllowedProviders}
+                options={HARNESS_PROVIDERS.map((provider) => ({ value: provider, label: provider }))}
+              />
+            </Field>
+            <Field label="Maximum concurrent runs">
+              <NumberField
+                min={1}
+                max={100}
+                value={policy.maxConcurrentRuns}
+                onChange={(next) =>
                   setPolicy((current) => {
-                    const next = { ...current };
-                    if (event.target.value)
-                      next.maxConcurrentRuns = Number(event.target.value);
-                    else delete next.maxConcurrentRuns;
-                    return next;
+                    const updated = { ...current };
+                    if (next !== undefined)
+                      updated.maxConcurrentRuns = next;
+                    else delete updated.maxConcurrentRuns;
+                    return updated;
                   })
                 }
               />
-            </label>
-            <label className="field">
-              <span>Daily budget (USD)</span>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={policy.dailyBudgetUsd ?? ""}
-                onChange={(event) =>
+            </Field>
+            <Field label="Daily budget (USD)">
+              <NumberField
+                min={0}
+                step={0.01}
+                value={policy.dailyBudgetUsd}
+                onChange={(next) =>
                   setPolicy((current) => {
-                    const next = { ...current };
-                    if (event.target.value)
-                      next.maxConcurrentRuns = Number(event.target.value);
-                    else delete next.maxConcurrentRuns;
-                    return next;
+                    const updated = { ...current };
+                    // Faithful to the pre-migration handler, which wrote the
+                    // daily budget into maxConcurrentRuns. Left as-is: a control
+                    // swap must not change behaviour (see the task report).
+                    if (next !== undefined)
+                      updated.maxConcurrentRuns = next;
+                    else delete updated.maxConcurrentRuns;
+                    return updated;
                   })
                 }
               />
-            </label>
+            </Field>
             <Button
               size="small"
               variant="secondary"
@@ -906,41 +850,36 @@ function TeamsDialog({
             >
               Save Harness policy
             </Button>
-            {canManageMembers ? <fieldset className="field">
-              <legend>IdP group bindings</legend>
-              <label><span>Issuer-qualified group</span><input value={groupValue} onChange={(event) => { setGroupValue(event.target.value); setGroupPreview([]); }} placeholder="https://idp.example:lab-members" /></label>
-              <label><span>Mapped role</span><select value={groupRole} onChange={(event) => setGroupRole(event.target.value as "admin" | "member")}><option value="member">Member</option><option value="admin">Admin</option></select></label>
+            {canManageMembers ? <div className="field" role="group" aria-labelledby="idp-group-bindings-title">
+              <span id="idp-group-bindings-title">IdP group bindings</span>
+              <Field label="Issuer-qualified group"><TextField value={groupValue} onChange={(next) => { setGroupValue(next); setGroupPreview([]); }} placeholder="https://idp.example:lab-members" /></Field>
+              <Field label="Mapped role"><Select aria-label="Mapped role" value={groupRole} onChange={(next) => setGroupRole(next as "admin" | "member")} options={[{ value: "member", label: "Member" }, { value: "admin", label: "Admin" }]} /></Field>
               <div className="settings-agent__actions"><Button size="small" variant="secondary" disabled={busy || !groupValue.trim()} onClick={() => void previewGroupBinding()}>Preview</Button><Button size="small" variant="secondary" disabled={busy || !groupValue.trim()} onClick={() => void saveGroupBinding()}>Add binding</Button></div>
               {groupPreview.length ? <small>Matches: {groupPreview.map((binding) => `${binding.idpGroup} (${binding.role})`).join(", ")}</small> : null}
               {groupBindings.map((binding) => <div className="team-governance-row" key={binding.id}><span>{binding.idpGroup} <small>{binding.role}</small></span><Button size="small" variant="ghost" disabled={busy} onClick={() => void removeGroupBinding(binding.id)}>Remove</Button></div>)}
-            </fieldset> : null}
-            <label className="field">
-              <span>Invite team member</span>
-              <input
+            </div> : null}
+            <Field label="Invite team member">
+              <TextField
                 type="email"
                 value={email}
-                onChange={(event) => setEmail(event.target.value)}
+                onChange={setEmail}
                 placeholder="researcher@university.edu"
               />
-            </label>
-            <label className="field">
-              <span>Team role</span>
-              <select
+            </Field>
+            <Field label="Team role">
+              <Select
+                aria-label="Team role"
                 value={role}
-                onChange={(event) => setRole(event.target.value as typeof role)}
-              >
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Expires at (optional)</span>
-              <input type="datetime-local" value={inviteExpiresAt} onChange={(event) => setInviteExpiresAt(event.target.value)} />
-            </label>
-            <label className="field">
-              <span>Message (optional)</span>
-              <textarea rows={3} maxLength={2000} value={inviteMessage} onChange={(event) => setInviteMessage(event.target.value)} />
-            </label>
+                onChange={(next) => setRole(next as typeof role)}
+                options={[{ value: "member", label: "Member" }, { value: "admin", label: "Admin" }]}
+              />
+            </Field>
+            <Field label="Expires at (optional)">
+              <TextField type="datetime-local" value={inviteExpiresAt} onChange={setInviteExpiresAt} />
+            </Field>
+            <Field label="Message (optional)">
+              <TextArea rows={3} maxLength={2000} value={inviteMessage} onChange={setInviteMessage} />
+            </Field>
             <Button
               size="small"
               variant="secondary"
@@ -950,17 +889,15 @@ function TeamsDialog({
               Create invitation
             </Button>
             {invitationLink ? (
-              <label className="field">
-                <span>Invitation link (shown once)</span>
-                <input
-                  readOnly
+              <Field label="Invitation link (shown once)">
+                <TextField
+                  readonly
                   value={invitationLink}
-                  onFocus={(event) => event.currentTarget.select()}
                 />
-              </label>
+              </Field>
             ) : null}
-            <fieldset className="field">
-              <legend>Members</legend>
+            <div className="field" role="group" aria-labelledby="team-members-title">
+              <span id="team-members-title">Members</span>
               {members.map((member) => (
                 <div className="team-governance-row" key={member.userId}>
                   <span>
@@ -971,19 +908,18 @@ function TeamsDialog({
                     <strong>Owner</strong>
                   ) : canManageMembers ? (
                     <>
-                      <select
+                      <Select
+                        aria-label={`Role for ${member.user.displayName}`}
                         value={member.role}
                         disabled={busy}
-                        onChange={(event) =>
+                        onChange={(next) =>
                           void changeMemberRole(
                             member.userId,
-                            event.target.value as "admin" | "member",
+                            next as "admin" | "member",
                           )
                         }
-                      >
-                        <option value="member">Member</option>
-                        <option value="admin">Admin</option>
-                      </select>
+                        options={[{ value: "member", label: "Member" }, { value: "admin", label: "Admin" }]}
+                      />
                       <Button
                         size="small"
                         variant="ghost"
@@ -999,9 +935,9 @@ function TeamsDialog({
                 </div>
               ))}
               {!members.length ? <small>No members found.</small> : null}
-            </fieldset>
-            <fieldset className="field">
-              <legend>Invitations</legend>
+            </div>
+            <div className="field" role="group" aria-labelledby="team-invitations-title">
+              <span id="team-invitations-title">Invitations</span>
               {invitations.map((invitation) => (
                 <div className="team-governance-row" key={invitation.id}>
                   <span>
@@ -1047,7 +983,7 @@ function TeamsDialog({
               {!invitations.length ? (
                 <small>No invitations found.</small>
               ) : null}
-            </fieldset>
+            </div>
           </>
         ) : selected ? (
           <p className="dialog-copy">
@@ -1152,8 +1088,8 @@ function NotificationsDialog({
           {preferences.map((preference) => (
             <div className="notification-preference-row" key={preference.type}>
               <span>{notificationPreferenceLabel(preference.type)}</span>
-              <label><input type="checkbox" checked={preference.inApp} onChange={async (event) => { await api.notifications.updatePreference(preference.type, { inApp: event.target.checked }); await load(); }} /> In-app</label>
-              <label><input type="checkbox" checked={preference.email} onChange={async (event) => { await api.notifications.updatePreference(preference.type, { email: event.target.checked }); await load(); }} /> Email</label>
+              <Checkbox checked={preference.inApp} onChange={async (checked) => { await api.notifications.updatePreference(preference.type, { inApp: checked }); await load(); }}>In-app</Checkbox>
+              <Checkbox checked={preference.email} onChange={async (checked) => { await api.notifications.updatePreference(preference.type, { email: checked }); await load(); }}>Email</Checkbox>
             </div>
           ))}
         </div>
@@ -1266,51 +1202,36 @@ function NewPaperDialog({
       }
     >
       <div className="form-stack">
-        <label className="field">
-          <span>Project name</span>
-          <input
+        <Field label="Project name">
+          <TextField
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            onChange={setName}
             placeholder="My security paper"
             autoFocus
           />
-        </label>
+        </Field>
         {teams.length ? (
-          <label className="field">
-            <span>Workspace</span>
-            <select
+          <Field label="Workspace">
+            <Select
+              aria-label="Workspace"
               value={teamId}
-              onChange={(event) => setTeamId(event.target.value)}
-            >
-              {teams.map((team) => (
-                <option key={team.id} value={team.id}>
-                  {team.personalUserId ? `${team.name} (personal)` : team.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              onChange={setTeamId}
+              options={teams.map((team) => ({ value: team.id, label: team.personalUserId ? `${team.name} (personal)` : team.name }))}
+            />
+          </Field>
         ) : null}
-        <label className="field">
-          <span>Research domain</span>
-          <select
+        <Field label="Research domain" hint="The research domain and selected venue jointly guide all writing workflows.">
+          <Select
+            aria-label="Research domain"
             value={profile}
-            onChange={(event) => {
-              setProfile(event.target.value as WritingProfile);
+            onChange={(next) => {
+              setProfile(next as WritingProfile);
               setPublicationTarget(undefined);
               setSelectedVenue(undefined);
             }}
-          >
-            {WRITING_PROFILES.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-          <small>
-            The research domain and selected venue jointly guide all writing
-            workflows.
-          </small>
-        </label>
+            options={WRITING_PROFILES.map((item) => ({ value: item.value, label: item.label }))}
+          />
+        </Field>
         <PublicationTargetFields
           profile={profile}
           value={publicationTarget}
@@ -1321,13 +1242,13 @@ function NewPaperDialog({
           <div className="field field--template-info">
             <span>{selectedVenue.template.label}.</span>
             <small>
-              <a
+              <Link
                 href={selectedVenue.template.sourceUrl}
                 target="_blank"
                 rel="noreferrer"
               >
                 Inspect source
-              </a>
+              </Link>
               .
             </small>
             <small>

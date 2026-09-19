@@ -1,0 +1,39 @@
+.handle {
+  position: relative;
+  z-index: 5;
+  flex: 0 0 1px;
+  background: var(--border-strong);
+  touch-action: none;
+}
+
+/*
+ * Two separate things live here, and conflating them loses the visible one:
+ *
+ *   ::before   widens the HIT AREA. Invisible — a 1px target is unhittable.
+ *   span       is the VISIBLE accent line, faded in on hover, focus or drag.
+ *
+ * An earlier draft put the accent on ::before and left the span unstyled, which
+ * silently dropped the hover feedback the original rule provided.
+ */
+.handle::before { content: ""; position: absolute; inset: 0 -4px; }
+
+.handle span {
+  position: absolute;
+  inset: 0;
+  background: var(--blue-500);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.handle:hover span, .active span { opacity: 1; }
+.handle:focus-visible span { opacity: 1; }
+
+.vertical { width: 1px; cursor: col-resize; }
+.horizontal { width: 100%; height: 1px; cursor: row-resize; }
+.horizontal::before { inset: -4px 0; }
+
+.handle:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .handle span { transition: none; }
+}

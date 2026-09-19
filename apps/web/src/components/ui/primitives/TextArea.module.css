@@ -1,0 +1,25 @@
+.textarea {
+  width: 100%;
+  min-height: 70px;
+  padding: 9px 10px;
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 4px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  line-height: 1.5;
+}
+
+.vertical { resize: vertical; }
+.none { resize: none; }
+.both { resize: both; }
+.horizontal { resize: horizontal; }
+
+.textarea:hover:not(:disabled):not(.invalid) { border-color: var(--slate-400); }
+.textarea:focus { border-color: var(--vscode-focusBorder); box-shadow: var(--focus); outline: none; }
+.textarea:disabled { opacity: 0.55; cursor: not-allowed; }
+.invalid { border-color: var(--red-600); }
+
+/* Editor-style surfaces that must fill their pane rather than scroll internally. */
+.fill { min-height: 0; height: 100%; }

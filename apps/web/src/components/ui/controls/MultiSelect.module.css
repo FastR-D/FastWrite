@@ -1,0 +1,16 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 4px;
+  background: var(--vscode-input-background);
+}
+
+.empty { padding: 6px; color: var(--text-muted); font-family: var(--vscode-font-family); font-size: 11px; }
+
+/* The wrapper is the group's surface, so it is what carries an error. */
+.invalid { border-color: var(--red-600); }

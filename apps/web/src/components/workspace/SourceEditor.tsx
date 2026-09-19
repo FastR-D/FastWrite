@@ -2,7 +2,7 @@ import type { NavigationRequest } from "../../lib/editor/navigationController";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type MutableRefObject } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import { configureMonaco } from "../../lib/editor/monaco";
-import { AlertCircle, Check, CloudOff, LoaderCircle, Sparkles, Undo2 } from "lucide-react";
+import { Button, Checkbox, Icon, icons } from "../ui";
 import type { CompletionKind, CompletionResponse, FileContentResponse, SourceLocation, TextSelection } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
 import { type DocumentRegistry } from "../../lib/editor/documentRegistry";
@@ -392,25 +392,23 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       <div className="editor-toolbar">
         <div className="editor-toolbar__file"><span>{document.file.name}</span><code>{document.file.path}</code></div>
         <div className="editor-toolbar__actions">
-          <label className={`completion-switch${completionEnabled ? " is-on" : ""}`} title={completionError || "Skill-guided writing completion"}>
-            <input id="completion-enabled" name="completion-enabled" type="checkbox" checked={completionEnabled} onChange={(event) => changeCompletionEnabled(event.target.checked)} />
-            {completionLoading ? <LoaderCircle className="spin" /> : <Sparkles />}
-            <span>Complete</span>
-          </label>
-        <label className={`completion-switch${collaborationEnabled ? " is-on" : ""}`} title="Synchronize this file through Yjs collaboration"><input id="collaboration-enabled" name="collaboration-enabled" type="checkbox" checked={collaborationEnabled} onChange={(event) => {
-          const enabled = event.target.checked, entry = registry.get(document.file.path);
+          <Checkbox id="completion-enabled" name="completion-enabled" variant="pill" icon={completionLoading ? <Icon name={icons.loading} spin /> : <Icon name={icons.sparkle} />} checked={completionEnabled} onChange={changeCompletionEnabled} title={completionError || "Skill-guided writing completion"}>
+            Complete
+          </Checkbox>
+        <Checkbox id="collaboration-enabled" name="collaboration-enabled" variant="pill" checked={collaborationEnabled} onChange={(enabled) => {
+          const entry = registry.get(document.file.path);
           if (entry) void registry.setCollaboration(entry, enabled).then(() => { setCollaborationEnabled(enabled); localStorage.setItem("fastwrite.collaboration.enabled", String(enabled)); }).catch(error => { setStatus("error"); setMessage(error instanceof Error ? error.message : "Could not switch synchronization mode"); });
-        }} /><span>Collaborate{collaborators.length ? ` · ${collaborators.length}` : ""}</span></label>
-          {acceptedCompletion ? <button className="editor-undo-completion" type="button" onClick={undoCompletion}><Undo2 /> Undo completion</button> : null}
+        }} title="Synchronize this file through Yjs collaboration">Collaborate{collaborators.length ? ` · ${collaborators.length}` : ""}</Checkbox>
+          {acceptedCompletion ? <Button variant="ghost" className="editor-undo-completion" type="button" onClick={undoCompletion} icon={<Icon name={icons.discard} />}>Undo completion</Button> : null}
           {collaborationEnabled ? <span className="collaboration-status" role="status">{collaborationStatus}</span> : null}
-          <button type="button" onClick={() => { cancelCompletion(); setCompletion(null); setRecoveryOpen(true); }}>Compare / recover{recoveryCount ? ` (${recoveryCount})` : ""}</button>
+          <Button variant="secondary" type="button" onClick={() => { cancelCompletion(); setCompletion(null); setRecoveryOpen(true); }}>Compare / recover{recoveryCount ? ` (${recoveryCount})` : ""}</Button>
           <SaveIndicator status={status} />
         </div>
       </div>
       <div ref={hostRef} className="monaco-editor-host" />
       {recoveryOpen && registry.get(document.file.path) ? <DocumentRecoveryDialog registry={registry} entry={registry.get(document.file.path)!} onClose={() => setRecoveryOpen(false)} /> : null}
       {completion ? <span className="sr-only" role="status">Writing suggestion available. Press Tab to accept or Escape to ignore.</span> : null}
-      {message ? <div className={`editor-message editor-message--${status}`} role="alert"><AlertCircle /> {message}</div> : null}
+      {message ? <div className={`editor-message editor-message--${status}`} role="alert"><Icon name={icons.info} /> {message}</div> : null}
     </div>
   );
 });
@@ -461,7 +459,7 @@ function rangeFromOffsets(model: monaco.editor.ITextModel, from: number, to: num
 
 function SaveIndicator({ status }: { status: SaveStatus }) {
   const content = {
-    saved: [<Check key="icon" />, "Saved"], dirty: [<CloudOff key="icon" />, "Unsaved"], saving: [<LoaderCircle key="icon" className="spin" />, "Saving"], error: [<AlertCircle key="icon" />, "Save failed"], conflict: [<AlertCircle key="icon" />, "Conflict"], offline: [<CloudOff key="icon" />, "Offline - queued"]
+    saved: [<Icon key="icon" name={icons.check} />, "Saved"], dirty: [<Icon key="icon" name={icons.circleFilled} />, "Unsaved"], saving: [<Icon key="icon" name={icons.loading} spin />, "Saving"], error: [<Icon key="icon" name={icons.info} />, "Save failed"], conflict: [<Icon key="icon" name={icons.info} />, "Conflict"], offline: [<Icon key="icon" name={icons.circleFilled} />, "Offline - queued"]
   }[status];
   return <span className={`save-indicator save-indicator--${status}`}>{content}</span>;
 }

@@ -24,6 +24,7 @@ import type {
   SaveFileRequest,
   SaveFileResponse,
   TargetVenue,
+  WorkingStatus,
   WorkspaceTreeNode
 } from "@fastwrite/shared";
 import { isIgnoredWorkspacePath, isImageFile, isTextFile, normalizePublicationTarget, normalizeWorkspacePath, paperSkillForProfile, sortWorkspaceNames } from "@fastwrite/shared";
@@ -47,7 +48,6 @@ export class WorkspaceService {
   private readonly projectsDirectory: string;
   private readonly gitHistory = new GitHistory();
   private readonly projectQueue = new ProjectQueue();
-  private readonly historyTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly dataDirectory: string, private readonly database: JsonDatabase) {
     this.projectsDirectory = join(dataDirectory, "projects");
@@ -220,7 +220,6 @@ export class WorkspaceService {
           storedProject.updatedAt = timestamp;
         }
       });
-      this.scheduleHistorySnapshot(id, `Autosave ${relativePath}`);
       return {
         file: this.paperFile(relativePath, Buffer.byteLength(request.content), nextFileVersion, timestamp),
         projectVersion: nextProjectVersion
@@ -228,7 +227,7 @@ export class WorkspaceService {
     });
   }
 
-  async createFile(id: string, requestedPath: string, content = "", checkpoint = true): Promise<PaperFile> {
+  async createFile(id: string, requestedPath: string, content = ""): Promise<PaperFile> {
     return this.projectQueue.run(id, async () => {
       const root = this.workspaceRoot(id);
       const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
@@ -244,7 +243,6 @@ export class WorkspaceService {
       await writeFile(absolutePath, content, "utf8");
       const timestamp = now();
       await this.touchProject(id, relativePath, 1, timestamp);
-      if (checkpoint) await this.snapshotHistory(id, `Create ${relativePath}`);
       return this.paperFile(relativePath, Buffer.byteLength(content), 1, timestamp);
     });
   }
@@ -265,7 +263,6 @@ export class WorkspaceService {
       await writeFile(absolutePath, new Uint8Array(content));
       const timestamp = now();
       await this.touchProject(id, relativePath, 1, timestamp);
-      await this.snapshotHistory(id, `Add ${relativePath}`);
       return this.paperFile(relativePath, content.byteLength, 1, timestamp);
     });
   }
@@ -307,7 +304,6 @@ export class WorkspaceService {
           claim.updatedAt = timestamp;
         }
       });
-      await this.snapshotHistory(id, `Rename ${from.relativePath} to ${to.relativePath}`);
     });
   }
 
@@ -338,7 +334,6 @@ export class WorkspaceService {
           claim.updatedAt = now();
         }
       });
-      await this.snapshotHistory(id, `Delete ${target.relativePath}`);
     });
   }
 
@@ -369,16 +364,61 @@ export class WorkspaceService {
   async createHistoryCheckpoint(id: string): Promise<{ createdAt: string }> {
     return this.projectQueue.run(id, async () => {
       this.getProject(id);
-      this.clearHistoryTimer(id);
       await this.snapshotHistory(id, "Manual checkpoint");
       return { createdAt: now() };
+    });
+  }
+
+  async workingStatus(id: string): Promise<WorkingStatus> {
+    this.getProject(id);
+    const projectDirectory = join(this.projectsDirectory, id);
+    return this.gitHistory.workingStatus(projectDirectory, join(projectDirectory, "workspace"));
+  }
+
+  async stagePaths(id: string, paths: string[]): Promise<void> {
+    return this.projectQueue.run(id, async () => {
+      this.getProject(id);
+      const projectDirectory = join(this.projectsDirectory, id);
+      await this.gitHistory.stage(projectDirectory, join(projectDirectory, "workspace"), paths);
+    });
+  }
+
+  async unstagePaths(id: string, paths: string[]): Promise<void> {
+    return this.projectQueue.run(id, async () => {
+      this.getProject(id);
+      const projectDirectory = join(this.projectsDirectory, id);
+      await this.gitHistory.unstage(projectDirectory, join(projectDirectory, "workspace"), paths);
+    });
+  }
+
+  async discardPaths(id: string, paths: string[]): Promise<void> {
+    return this.projectQueue.run(id, async () => {
+      this.getProject(id);
+      const projectDirectory = join(this.projectsDirectory, id);
+      await this.gitHistory.discard(projectDirectory, join(projectDirectory, "workspace"), paths);
+    });
+  }
+
+  /**
+   * Commits what the user staged.
+   *
+   * Flushes open buffers first: a staged file whose editor buffer has unsaved
+   * edits would otherwise commit the previous save, which reads as the commit
+   * having lost the change. The sidebar's stage action has the same problem
+   * from the other direction, so both go through flush.
+   */
+  async commitWorking(id: string, message: string): Promise<{ oid: string }> {
+    return this.projectQueue.run(id, async () => {
+      this.getProject(id);
+      const projectDirectory = join(this.projectsDirectory, id);
+      const oid = await this.gitHistory.commit(projectDirectory, join(projectDirectory, "workspace"), message);
+      return { oid };
     });
   }
 
   async createSyncCheckpoint(id: string): Promise<void> {
     return this.projectQueue.run(id, async () => {
       this.getProject(id);
-      this.clearHistoryTimer(id);
       await this.snapshotHistory(id, "Before GitHub sync");
     });
   }
@@ -676,7 +716,6 @@ export class WorkspaceService {
   async commitHistory(id: string, message: string, allowEmpty = false): Promise<string | undefined> {
     return this.projectQueue.run(id, async () => {
       this.getProject(id);
-      this.clearHistoryTimer(id);
       const projectDirectory = join(this.projectsDirectory, id);
       return this.gitHistory.snapshot(projectDirectory, this.workspaceRoot(id), message, allowEmpty);
     });
@@ -754,7 +793,7 @@ export class WorkspaceService {
       }));
       for (const file of files) {
         if (file.opened) await this.saveTextFile(id, file.path, { content: file.content, baseVersion: file.opened.file.version });
-        else await this.createFile(id, file.path, file.content, false);
+        else await this.createFile(id, file.path, file.content);
       }
       const restored = files.map((file) => file.path);
       const checkpoint = await this.commitHistory(id, `Restore history checkpoint ${oid}`, true);
@@ -769,24 +808,6 @@ export class WorkspaceService {
       await cp(this.workspaceRoot(id), destination, { recursive: true, dereference: false });
       return { projectVersion: project.version, mainDocument: project.mainDocument };
     });
-  }
-
-  private scheduleHistorySnapshot(id: string, message: string): void {
-    const current = this.historyTimers.get(id);
-    if (current) clearTimeout(current);
-    const timer = setTimeout(() => {
-      this.historyTimers.delete(id);
-      // A timer is a new operation even when it inherits an active async scope.
-      void this.projectQueue.run(id, () => this.snapshotHistory(id, message), false);
-    }, 2 * 60 * 1000);
-    timer.unref?.();
-    this.historyTimers.set(id, timer);
-  }
-
-  private clearHistoryTimer(id: string): void {
-    const timer = this.historyTimers.get(id);
-    if (timer) clearTimeout(timer);
-    this.historyTimers.delete(id);
   }
 }
 

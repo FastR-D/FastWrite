@@ -1,0 +1,144 @@
+/*
+ * Semantic layer consumed by vscrui and by every component in components/ui.
+ *
+ * Values reference the --blue-* / --slate-* brand scales defined in styles.css.
+ * Because :root[data-theme="dark"] redefines those scales, a single declaration
+ * block below automatically resolves to dark values. Only mappings that differ
+ * for reasons OTHER than a palette value need an explicit dark override at the
+ * bottom of this file.
+ *
+ * Rule: components read --vscode-* only. Brand colours are defined once, in the
+ * scales in styles.css.
+ */
+
+:root {
+  /* Typography */
+  --vscode-font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif;
+  --vscode-font-size: 12px;
+
+  /* Foreground / surfaces */
+  --vscode-foreground: var(--text);
+  --vscode-icon-foreground: var(--slate-600);
+  --vscode-editor-background: var(--surface);
+  --vscode-contrastActiveBorder: var(--blue-500);
+  --vscode-focusBorder: var(--blue-500);
+
+  /* Buttons */
+  --vscode-button-background: var(--blue-600);
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: var(--blue-700);
+  --vscode-button-border: transparent;
+  /*
+   * Secondary reads its fill from --slate-*, not --surface: with the surface
+   * value the button is a white rectangle on a white page, and its only
+   * boundary is --vscode-button-border, which is transparent because primary
+   * shares it. 1.13:1 against --surface is a subtle ratio but a large filled
+   * area, and it reads as a distinct panel (slate-200 on hover, 1.29:1).
+   */
+  --vscode-button-secondaryBackground: var(--slate-100);
+  --vscode-button-secondaryForeground: var(--slate-700);
+  --vscode-button-secondaryHoverBackground: var(--slate-200);
+
+  /*
+   * Danger is our own variant — vscrui has no appearance for it. Values are
+   * white-on-background ratios against the WCAG 2.1 formula.
+   *
+   * It cannot reference --red-600 the way the light theme can: the dark --red-*
+   * ramp is built for accent TEXT on dark surfaces, so --red-600 is a light
+   * pink (#ff848c) there and white on it measures 2.35:1. A filled button needs
+   * its own pair, hence the --fw- prefix: these are app-owned, not part of the
+   * vscrui contract, and must not masquerade as --vscode-*.
+   */
+  --fw-danger-background: var(--red-600);   /* #c93636 light: 5.17:1 */
+  --fw-danger-foreground: #ffffff;
+
+  /* Inputs */
+  --vscode-input-background: var(--surface);
+  --vscode-input-foreground: var(--text);
+  --vscode-dropdown-background: var(--surface);
+  --vscode-dropdown-border: var(--slate-300);
+  --vscode-settings-dropdownListBorder: var(--slate-300);
+  --vscode-checkbox-background: var(--surface);
+  --vscode-checkbox-border: var(--slate-300);
+  /*
+   * vscrui draws the tick as `fill: currentColor` on the box, and the box uses
+   * one background for both states — there is no filled accent square to put a
+   * white tick on. So this colour is read against --vscode-checkbox-background
+   * (--surface), not against a blue fill: #ffffff would be a white tick on a
+   * white box. --blue-600 is 6.25:1 against the light surface and 4.84:1
+   * against the dark one, clearing 4.5:1 for a non-text graphic as well as the
+   * 3:1 that WCAG 1.4.11 asks for. Our own Checkbox does not use this token,
+   * but a wrong value here is a trap for anyone who uses vscrui's directly.
+   */
+  --vscode-checkbox-foreground: var(--blue-600);
+
+  /* Lists and selection */
+  --vscode-list-activeSelectionBackground: var(--blue-600);
+  --vscode-list-activeSelectionForeground: #ffffff;
+  --vscode-list-hoverBackground: var(--slate-100);
+  --vscode-list-focusOutline: var(--blue-500);
+
+  /* Badges */
+  --vscode-badge-background: var(--blue-600);
+  --vscode-badge-foreground: #ffffff;
+  --vscode-activityBarBadge-background: var(--blue-600);
+
+  /* Panel and sidebar headers */
+  --vscode-sideBarSectionHeader-background: var(--slate-100);
+  --vscode-sideBarSectionHeader-border: var(--border);
+  --vscode-sideBarSectionHeader-foreground: var(--slate-700);
+  --vscode-panelTitle-activeBorder: var(--blue-500);
+  --vscode-panelTitle-activeForeground: var(--slate-900);
+  --vscode-panelTitle-inactiveForeground: var(--text-muted);
+  --vscode-toolbar-hoverBackground: var(--slate-100);
+  --vscode-keybindingTable-rowsBackground: var(--slate-50);
+
+  /*
+   * Workbench chrome. These are not upstream VSCode variable names; they are
+   * consumed by existing rules in styles.css and by the workbench shell.
+   */
+  --accent: var(--blue-500);
+  --vscode-chrome: var(--slate-50);
+  --vscode-panel: var(--slate-50);
+  --vscode-hover: var(--slate-100);
+  --vscode-active: var(--blue-100);
+  --vscode-border: var(--border);
+}
+
+/*
+ * Dark overrides. Needed only where the mapping itself differs from light —
+ * most palette-derived values are already handled by the dark --slate-* /
+ * --blue-* scale redefinition in styles.css.
+ */
+:root[data-theme="dark"] {
+  /*
+   * The dark --blue-* ramp is INVERTED: it is built for accent text sitting on
+   * dark surfaces, so --blue-600 is a LIGHT blue (#3d8ed8). Any variable that
+   * puts WHITE TEXT on a blue background therefore cannot reference the ramp in
+   * dark mode: white on #3d8ed8 measures 3.47:1 and fails WCAG AA (needs 4.5:1
+   * for text this size). These five need explicit mid-dark values instead.
+   *
+   * Contrast figures below are white-on-background ratios, verified against
+   * the WCAG 2.1 relative-luminance formula.
+   */
+  --vscode-button-background: #0e639c;                /* 6.40:1 */
+  --vscode-button-hoverBackground: #1177bb;           /* 4.79:1 */
+  --vscode-badge-background: #0e639c;                 /* 6.40:1 */
+  --vscode-activityBarBadge-background: #0e639c;      /* 6.40:1 */
+  --vscode-list-activeSelectionBackground: #094771;   /* 9.76:1 */
+
+  /*
+   * Secondary buttons sit on a dark surface and need a lifted, not sunken,
+   * surface — and a bigger lift than the light theme needs. The palette inverts
+   * here, but the same stops are too close to the dark --surface (#171e27):
+   * --slate-100 is only 1.08:1 against it and is visibly the same colour, where
+   * the identical stop is 1.13:1 against white and reads as a panel. So dark
+   * starts one stop higher (1.35:1) and hovers a further stop up (1.80:1).
+   */
+  --vscode-button-secondaryBackground: var(--slate-200);
+  --vscode-button-secondaryHoverBackground: var(--slate-300);
+
+  /* Mirror of the light danger pair, with a red dark enough for white text. */
+  --fw-danger-background: #b03030;          /* 6.34:1 */
+  --fw-danger-foreground: #ffffff;
+}

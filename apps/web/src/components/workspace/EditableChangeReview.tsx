@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
-import { Check, Pencil, X } from "lucide-react";
 import type { TextChange } from "@fastwrite/shared";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
-import { Button } from "../ui/Button";
+import { Button, Icon, TextArea, icons } from "../ui";
 import { ChangeHunkReview } from "./ChangeHunkReview";
 import { TextModelComparison } from "../workbench/TextModelComparison";
 import { configureMonaco, languageForPath } from "../../lib/editor/monaco";
@@ -45,16 +44,16 @@ export function EditableChangeReview({ change, busy, readOnly = false, editingDi
   };
 
   if (!editing) return <div className="editable-change-review">
-    {!readOnly && onSave ? <div className="editable-change-review__bar"><span>{editingDisabled ? "This file has decided hunks; continue reviewing them below." : "Review the generated Diff, or edit the proposed text before accepting."}</span>{!editingDisabled ? <Button size="small" variant="secondary" icon={<Pencil />} disabled={busy} onClick={() => setEditing(true)}>Edit proposal</Button> : null}</div> : null}
+    {!readOnly && onSave ? <div className="editable-change-review__bar"><span>{editingDisabled ? "This file has decided hunks; continue reviewing them below." : "Review the generated Diff, or edit the proposed text before accepting."}</span>{!editingDisabled ? <Button size="small" variant="secondary" icon={<Icon name={icons.edit} />} disabled={busy} onClick={() => setEditing(true)}>Edit proposal</Button> : null}</div> : null}
     <ProposalMonacoDiff change={change} readOnly={readOnly} />
     <ChangeHunkReview change={change} busy={busy} readOnly={readOnly} showToolbar={showHunkToolbar} onDecide={onDecide} {...(onEditHunk ? { onEditHunk } : {})} {...(onNavigate ? { onNavigate } : {})} />
   </div>;
 
   return <div className="proposal-editor">
     <header><div><strong>Editing proposed content</strong><span>{change.path}</span></div><small>The workspace file is unchanged until you accept.</small></header>
-    <textarea aria-label={`Editable proposal for ${change.path}`} value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} autoFocus />
+    <TextArea aria-label={`Editable proposal for ${change.path}`} value={draft} onChange={setDraft} spellCheck={false} autoFocus />
     {error ? <div className="form-error" role="alert">{error}</div> : null}
-    <footer><Button size="small" variant="ghost" icon={<X />} disabled={saving} onClick={() => { setDraft(change.after); setEditing(false); setError(""); }}>Cancel edit</Button><Button size="small" variant="primary" icon={<Check />} loading={saving} disabled={saving || draft === change.after || draft === change.before} onClick={() => void save()}>Save proposal</Button></footer>
+    <footer><Button size="small" variant="ghost" icon={<Icon name={icons.close} />} disabled={saving} onClick={() => { setDraft(change.after); setEditing(false); setError(""); }}>Cancel edit</Button><Button size="small" variant="primary" icon={<Icon name={icons.check} />} loading={saving} disabled={saving || draft === change.after || draft === change.before} onClick={() => void save()}>Save proposal</Button></footer>
   </div>;
 }
 

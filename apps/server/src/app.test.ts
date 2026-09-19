@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, ClaimEvidenceLink, CompletionResponse, ComplianceReport, FastReadBundleReceipt, FileContentResponse, PaperClaim, PaperMemory, PaperProject, ProjectResearchWorkDetails, ResearchWork, ReviseResponse, SaveFileResponse, SourceEvidence, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, ClaimEvidenceLink, CompletionResponse, ComplianceReport, FastReadBundleReceipt, FileContentResponse, PaperClaim, PaperMemory, PaperProject, ProjectResearchWorkDetails, ResearchWork, ReviseResponse, SaveFileResponse, SourceEvidence, UploadSession, WorkingStatus, WorkspaceTreeNode } from "@fastwrite/shared";
 import type { AgentProvider, AgentTaskPlanOutput, CompletionAgentInput, DraftGeneratedFile, ReviseAgentInput } from "./agent/provider";
 import { createApplication, mimeType } from "./app";
 import type { IdentityProvider } from "./auth/identity-provider";
@@ -2130,5 +2130,66 @@ describe("workspace API", () => {
     expect(receipts[0]).toMatchObject({ bundleId, status: "failed" });
     expect(receipts[0]!.error).toContain("SHA-256");
     expect(await (await request(`/api/projects/${project.id}/research-works`)).json()).toHaveLength(0);
+  });
+
+  test("working status, stage, unstage and commit move a file through the index", async () => {
+    const request = await testApplication();
+    const registered = await request("/api/auth/register", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "git-owner@example.test", password: "correct-horse-battery-staple", displayName: "Owner" })
+    });
+    const owner = await registered.json() as { token: string };
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", {
+      method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Index integration" })
+    })).json() as PaperProject;
+    const base = `/api/projects/${project.id}`;
+
+    // Commit a baseline, then change the file again so there is something unstaged.
+    const opened = await (await request(`${base}/file?path=main.tex`, { headers: ownerHeaders })).json() as FileContentResponse;
+    await request(`${base}/file?path=main.tex`, {
+      method: "PUT", headers: ownerHeaders,
+      body: JSON.stringify({ content: "% first\n", baseVersion: opened.file.version })
+    });
+    await request(`${base}/history/checkpoint`, { method: "POST", headers: ownerHeaders });
+
+    const after = await (await request(`${base}/file?path=main.tex`, { headers: ownerHeaders })).json() as FileContentResponse;
+    await request(`${base}/file?path=main.tex`, {
+      method: "PUT", headers: ownerHeaders,
+      body: JSON.stringify({ content: "% second\n", baseVersion: after.file.version })
+    });
+
+    const before = await (await request(`${base}/history/working-status`, { headers: ownerHeaders })).json() as WorkingStatus;
+    expect(before.files.find((file) => file.path === "main.tex")).toMatchObject({ unstaged: "M", staged: null });
+
+    expect((await request(`${base}/history/stage`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ paths: ["main.tex"] }) })).status).toBe(204);
+    const staged = await (await request(`${base}/history/working-status`, { headers: ownerHeaders })).json() as WorkingStatus;
+    expect(staged.files.find((file) => file.path === "main.tex")).toMatchObject({ staged: "M", unstaged: null });
+
+    expect((await request(`${base}/history/unstage`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ paths: ["main.tex"] }) })).status).toBe(204);
+    expect((await request(`${base}/history/stage`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ paths: ["main.tex"] }) })).status).toBe(204);
+    expect((await request(`${base}/history/commit`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ message: "Edit main" }) })).status).toBe(201);
+
+    const cleared = await (await request(`${base}/history/working-status`, { headers: ownerHeaders })).json() as WorkingStatus;
+    expect(cleared.files.find((file) => file.path === "main.tex")).toBeUndefined();
+  });
+
+  test("stage refuses an empty path list and commit refuses an empty message", async () => {
+    const request = await testApplication();
+    const registered = await request("/api/auth/register", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "empty-guard@example.test", password: "correct-horse-battery-staple", displayName: "Owner" })
+    });
+    const owner = await registered.json() as { token: string };
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", {
+      method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Guards" })
+    })).json() as PaperProject;
+    const base = `/api/projects/${project.id}`;
+
+    expect((await request(`${base}/history/stage`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ paths: [] }) })).status).toBe(400);
+    expect((await request(`${base}/history/commit`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ message: "  " }) })).status).toBe(400);
+    // A body without the JSON content-type must be rejected before it reaches git.
+    expect((await request(`${base}/history/stage`, { method: "POST", headers: { authorization: ownerHeaders.authorization }, body: "{}" })).status).toBe(415);
   });
 });

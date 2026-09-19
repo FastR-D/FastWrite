@@ -34,7 +34,8 @@ try {
   await dialog().waitFor({ state: 'detached' });
   assert.equal((await read()).content, merged);
   await page.getByRole('button', { name: /Compare \/ recover/ }).click(); await result().waitFor();
-  await dialog().getByLabel('Local version', { exact: true }).selectOption('working');
+  await dialog().getByRole('combobox', { name: 'Local version', exact: true }).click();
+  await dialog().getByRole('option', { name: 'Working buffer at comparison start', exact: true }).click();
   await until(async () => await dialog().getByRole('button', { name: 'Use server text', exact: true }).isEnabled(), 'server baseline loaded');
   const next = await read(), newer = `% NEWER_REMOTE\n${next.content}`;
   assert.ok((await context.request.put(`${root}/file?path=main.tex`, { data: { content: newer, baseVersion: next.file.version } })).ok());

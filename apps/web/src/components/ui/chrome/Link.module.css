@@ -1,0 +1,31 @@
+/*
+ * The app has no global `a` rule — every existing anchor carries its own class
+ * (`.brand`, `.admin-page__back`, `.product-landing__nav-actions a`). Without a
+ * base class the text variant would fall back to browser-default blue/purple
+ * with an underline, making it the only unstyled link in the app.
+ *
+ * The conventions here are lifted from `.admin-page__back`: accent colour, no
+ * underline at rest, underline on hover.
+ */
+.link {
+  color: var(--blue-600);
+  text-decoration: none;
+  font-family: var(--vscode-font-family);
+  cursor: pointer;
+}
+
+.link:hover { text-decoration: underline; }
+
+.link:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/*
+ * Fully inert: for links whose container already owns the styling (a brand
+ * wordmark, a nav bar). No colour and no underline — the container decides both.
+ * `text-decoration: none` has to be stated here because this stylesheet loads
+ * after styles.css, so nothing downstream can undo it.
+ */
+.inherit { color: inherit; text-decoration: none; }

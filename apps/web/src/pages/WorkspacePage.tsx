@@ -14,32 +14,6 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  ArrowLeft,
-  AlertTriangle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
-  FilePlus2,
-  FileOutput,
-  FolderTree,
-  GitCommitHorizontal,
-  History,
-  MoreHorizontal,
-  MessageSquare,
-  PanelRightClose,
-  PanelRightOpen,
-  Pencil,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  Share2,
-  Trash2,
-  Upload,
-  UserPlus,
-} from "lucide-react";
 import type {
   FileContentResponse,
   OutlineItem,
@@ -51,13 +25,12 @@ import type {
   WorkspaceTreeNode,
 } from "@fastwrite/shared";
 import { api } from "../api/client";
-import { Button, IconButton } from "../components/ui/Button";
-import { Dialog } from "../components/ui/Dialog";
+import { Button, Dialog, Field, Icon, IconButton, Link, SegmentedControl, Select, TabBar, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { FileTree } from "../components/workspace/FileTree";
 import { AddFileDialog } from "../components/workspace/AddFileDialog";
 import { OutlineTree } from "../components/workspace/OutlineTree";
 import type { CompileStateReport } from "../components/workspace/PdfPane";
-import { ProjectSettingsDialog } from "../components/workspace/ProjectSettingsDialog";
+import { ProjectSettingsEditor } from "../components/workspace/ProjectSettingsEditor";
 import { RenameFileDialog } from "../components/workspace/RenameFileDialog";
 import type { SourceEditorHandle } from "../components/workspace/SourceEditor";
 import { AiWorkspace } from "../components/workspace/AiWorkspace";
@@ -74,7 +47,6 @@ import {
 } from "../lib/sectionSelection";
 import { FASTWRITE_SAVE_EVENT } from "../lib/keyboard";
 import { publicationTargetAbbreviation } from "../lib/labels";
-import { ThemeToggle } from "../components/ui/ThemeToggle";
 import { ProjectSearchDialog } from "../components/workspace/ProjectSearchDialog";
 import { loadWorkspaceFile, loadWorkspaceSnapshot, saveWorkspaceFile, saveWorkspaceSnapshot } from "../lib/offlineWorkspace";
 
@@ -110,7 +82,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const comparisonTabsRef = useRef(comparisonTabs); comparisonTabsRef.current = comparisonTabs;
   const historyDiffRef = useRef(historyDiff); historyDiffRef.current = historyDiff;
   const diffPdfWidth = useRef<number | null>(null);
-  const viewWidths = useRef<Record<SidebarView, number>>({ files: 260, git: 300, evidence: 300, outline: 260 });
   const [buffersDirty, setBuffersDirty] = useState(false);
   const prepareCompile = useCallback(async () => { await editorRef.current?.flush(); await registry.flush(); }, [registry]);
   const [project, setProject] = useState<PaperProject | null>(null);
@@ -158,6 +129,9 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     false,
   );
   const [sidebarBeforeCollapse, setSidebarBeforeCollapse] = useState(254);
+  useEffect(() => {
+    if (sidebarWidth > 0) setSidebarBeforeCollapse(sidebarWidth);
+  }, [sidebarWidth]);
   const [pdfBeforeCollapse, setPdfBeforeCollapse] = useState(440);
   const [resizing, setResizing] = useState<
     "sidebar" | "pdf" | "ai" | "outline" | null
@@ -176,6 +150,9 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsActive, setSettingsActive] = useState(false);
+  const settingsPanelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { setSettingsOpen(false); setSettingsActive(false); }, [projectId]);
   const [syncOpen, setSyncOpen] = useState(false);
   const [complianceOpen, setComplianceOpen] = useState(false);
   const [settingsTree, setSettingsTree] = useState<WorkspaceTreeNode[]>([]);
@@ -228,11 +205,15 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
 
   useEffect(() => {
     const save = () => {
+      if (settingsActive) {
+        settingsPanelRef.current?.querySelector<HTMLButtonElement>('button[data-save-command]:not(:disabled)')?.click();
+        return;
+      }
       void prepareCompile().catch(failure => setTabError(failure instanceof Error ? failure.message : "Save failed; local text retained"));
     };
     window.addEventListener(FASTWRITE_SAVE_EVENT, save);
     return () => window.removeEventListener(FASTWRITE_SAVE_EVENT, save);
-  }, [prepareCompile]);
+  }, [prepareCompile, settingsActive]);
 
   const commitTree = useCallback((nextTree: WorkspaceTreeNode[]) => {
     treeRef.current = nextTree;
@@ -421,6 +402,12 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     updateOutlineHeight,
   ]);
 
+  const closeHistoryDiff = useCallback(() => {
+    setSettingsActive(false);
+    setHistoryDiff(null);
+    if (diffPdfWidth.current !== null) { setPdfWidth(diffPdfWidth.current); diffPdfWidth.current = null; }
+  }, [setPdfWidth]);
+
   const selectNode = (node: WorkspaceTreeNode) => {
     if (node.type === "directory") return;
     closeHistoryDiff();
@@ -442,6 +429,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
 
   const navigateToPath = useCallback(
     async (path: string, line?: number) => {
+      closeHistoryDiff();
       const request = navigationRef.current.begin(projectId, path, line);
       try {
         const nextTree = await hydrateTreePath(
@@ -463,7 +451,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         );
       }
     },
-    [commitTree, projectId],
+    [closeHistoryDiff, commitTree, projectId],
   );
 
   const selectOutline = (item: OutlineItem) => { void navigateToPath(item.path, item.line); };
@@ -481,7 +469,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       const nextTree = await hydrateTreePath(projectId, treeRef.current, resolved.anchor.path);
       commitTree(nextTree);
       const nextSelection = makeSelection(resolved.anchor.path, opened, resolved.anchor.startOffset, resolved.anchor.endOffset);
-      navigationRef.current.cancel(); setSelectedPath(resolved.anchor.path); setFileDocument(opened); setTargetLine(null); setSelection(nextSelection); setTargetSelection(nextSelection); setCursorLocation({ path: resolved.anchor.path, line: nextSelection.startLine, column: 1 });
+      closeHistoryDiff(); navigationRef.current.cancel(); setSelectedPath(resolved.anchor.path); setFileDocument(opened); setTargetLine(null); setSelection(nextSelection); setTargetSelection(nextSelection); setCursorLocation({ path: resolved.anchor.path, line: nextSelection.startLine, column: 1 });
     } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not verify the claim location"); }
   };
   const claimPaths = useMemo(() => [...new Set(claims.map(claim => claim.anchor.path))].sort((a, b) => a.localeCompare(b)), [claims]);
@@ -497,15 +485,14 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   }), [claimPathFilter, claimStatusFilter, claims]);
 
   const openSettings = async () => {
+    setSettingsActive(true);
+    if (settingsOpen) return;
+    setSettingsTree(tree);
+    setSettingsOpen(true);
     try {
       setSettingsTree(await api.projects.tree(projectId));
-      setSettingsOpen(true);
     } catch (settingsError) {
-      setError(
-        settingsError instanceof Error
-          ? settingsError.message
-          : "Could not load project settings",
-      );
+      setTabError(settingsError instanceof Error ? settingsError.message : "Could not load all project files for settings");
     }
   };
 
@@ -555,6 +542,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       }
       if (to <= from) return null;
       const nextSelection = makeSelection(evidence.path, opened, from, to);
+      closeHistoryDiff();
       setSelectedPath(evidence.path);
       setFileDocument(opened);
       setSelection(nextSelection);
@@ -562,15 +550,15 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       setCursorLocation({ path: evidence.path, line: nextSelection.startLine });
       return nextSelection;
     },
-    [commitTree, projectId],
+    [closeHistoryDiff, commitTree, projectId],
   );
 
-  const collapseSidebar = () => {
+  const collapseSidebar = useCallback(() => {
     if (sidebarWidth > 0) {
       setSidebarBeforeCollapse(sidebarWidth);
       setSidebarWidth(0);
     } else setSidebarWidth(sidebarBeforeCollapse);
-  };
+  }, [sidebarWidth, sidebarBeforeCollapse, setSidebarWidth]);
   const collapsePdf = () => {
     if (pdfWidth > 0) {
       setPdfBeforeCollapse(pdfWidth);
@@ -601,19 +589,15 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   }, [projectId, refreshWorkspace, selectedPath]);
 
   const chooseSidebar = (view: SidebarView) => {
-    if (sidebarWidth > 0) viewWidths.current[sidebarView] = sidebarWidth;
-    setSidebarWidth(view === sidebarView && sidebarWidth > 0 ? 0 : viewWidths.current[view]);
+    if (view === sidebarView || sidebarWidth === 0) collapseSidebar();
     setSidebarView(view);
   };
   const openHistoryDiff = (request: DiffRequest) => {
+    setSettingsActive(false);
     const key = diffRequestKey(request);
     setComparisonTabs(tabs => tabs.some(tab => tab.key === key) ? tabs : [...tabs, { key, request }]);
     setHistoryDiff(request);
     if (window.innerWidth < 1600 && diffPdfWidth.current === null) { diffPdfWidth.current = pdfWidth; setPdfWidth(0); }
-  };
-  const closeHistoryDiff = () => {
-    setHistoryDiff(null);
-    if (diffPdfWidth.current !== null) { setPdfWidth(diffPdfWidth.current); diffPdfWidth.current = null; }
   };
   const closeComparisonTab = async (key: string, returnToSource = false) => {
     const tab = comparisonTabsRef.current.find(item => item.key === key); if (!tab) return;
@@ -633,12 +617,12 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       if (event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey) return;
       const key = event.key.toLowerCase();
       if (key === "p" && !event.shiftKey) { event.preventDefault(); setQuickOpen(true); }
-      if (key === "b" && !event.shiftKey) { event.preventDefault(); setSidebarWidth(sidebarWidth > 0 ? 0 : viewWidths.current[sidebarView]); }
-      if (event.shiftKey && (key === "e" || key === "g")) { event.preventDefault(); const view = key === "e" ? "files" : "git"; setSidebarView(view); setSidebarWidth(viewWidths.current[view]); }
+      if (key === "b" && !event.shiftKey) { event.preventDefault(); collapseSidebar(); }
+      if (event.shiftKey && (key === "e" || key === "g")) { event.preventDefault(); const view = key === "e" ? "files" : "git"; setSidebarView(view); if (sidebarWidth === 0) collapseSidebar(); }
     };
     window.addEventListener("keydown", shortcut);
     return () => window.removeEventListener("keydown", shortcut);
-  }, [sidebarView, sidebarWidth, setSidebarWidth]);
+  }, [sidebarWidth, setSidebarView, collapseSidebar]);
 
   if (loading) return <WorkspaceLoading />;
   if (error || !project)
@@ -659,20 +643,17 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         <div className="workspace-topbar__left">
           <IconButton
             label="Back to projects"
-            icon={<ArrowLeft />}
+            icon={<Icon name={icons.arrowLeft} />}
             onClick={() => navigate("/projects")}
           />
-          <a
+          <Link
+            variant="inherit"
             className="brand brand--workspace"
             href="/projects"
-            onClick={(event) => {
-              event.preventDefault();
-              navigate("/projects");
-            }}
           >
             <span className="brand__mark">F</span>
             <span>FastWrite</span>
-          </a>
+          </Link>
           <span className="topbar-divider" />
           <div className="project-identity">
             <strong>{project.name}</strong>
@@ -692,7 +673,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <Button
             size="small"
             variant="secondary"
-            icon={<Search />}
+            icon={<Icon name={icons.search} />}
             onClick={() => setSearchOpen(true)}
           >
             Find
@@ -700,7 +681,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <Button
             size="small"
             variant="secondary"
-            icon={<ShieldCheck />}
+            icon={<Icon name={icons.verified} />}
             onClick={() => setComplianceOpen(true)}
           >
             Compliance
@@ -708,7 +689,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <Button
             size="small"
             variant="secondary"
-            icon={<MessageSquare />}
+            icon={<Icon name={icons.comment} />}
             onClick={() => setCommentsOpen(true)}
           >
             Comments
@@ -716,7 +697,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <Button
             size="small"
             variant="secondary"
-            icon={<UserPlus />}
+            icon={<Icon name={icons.personAdd} />}
             onClick={() => setInviteOpen(true)}
           >
             Invite
@@ -724,7 +705,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <Button
             size="small"
             variant="secondary"
-            icon={<Share2 />}
+            icon={<Icon name={icons.share} />}
             onClick={() => setShareOpen(true)}
           >
             Share
@@ -734,7 +715,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               className="workspace-sync-button"
               size="small"
               variant="secondary"
-              icon={<RefreshCw />}
+              icon={<Icon name={icons.refresh} />}
               onClick={() => setSyncOpen(true)}
             >
               Sync
@@ -743,7 +724,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <ThemeToggle />
           <IconButton
             label="Project settings"
-            icon={<MoreHorizontal />}
+            icon={<Icon name={icons.ellipsis} />}
             onClick={() => void openSettings()}
           />
         </div>
@@ -756,7 +737,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             <section id="sidebar-files" hidden={sidebarView !== "files"} className="sidebar-section sidebar-section--files">
               <header className="panel-heading">
                 <div>
-                  <FolderTree />
+                  <Icon name={icons.listTree} />
                   <span>Files</span>
                 </div>
                 <div>
@@ -770,7 +751,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                             ? "Retry local history checkpoint"
                             : "Save local history checkpoint"
                     }
-                    icon={<GitCommitHorizontal />}
+                    icon={<Icon name={icons.gitCommit} />}
                     disabled={checkpointState === "saving"}
                     onClick={async () => {
                       setCheckpointState("saving");
@@ -789,23 +770,23 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                   />
                   <IconButton
                     label="New file"
-                    icon={<FilePlus2 />}
+                    icon={<Icon name={icons.newFile} />}
                     onClick={() => setNewFileOpen(true)}
                   />
                   <IconButton
                     label="Add external file"
-                    icon={<Upload />}
+                    icon={<Icon name={icons.cloudUpload} />}
                     onClick={() => setAddFileOpen(true)}
                   />
                   <IconButton
                     label="Rename selected file"
-                    icon={<Pencil />}
+                    icon={<Icon name={icons.edit} />}
                     disabled={selectedNode?.type !== "file"}
                     onClick={() => setRenameOpen(true)}
                   />
                   <IconButton
                     label="Move selected file to trash"
-                    icon={<Trash2 />}
+                    icon={<Icon name={icons.trash} />}
                     variant="danger"
                     disabled={
                       selectedNode?.type !== "file" ||
@@ -818,7 +799,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                   />
                   <IconButton
                     label="Collapse files panel"
-                    icon={<ChevronLeft />}
+                    icon={<Icon name={icons.chevronLeft} />}
                     onClick={collapseSidebar}
                   />
                 </div>
@@ -841,12 +822,21 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                       ? "Expand document outline"
                       : "Collapse document outline"
                   }
-                  icon={outlineCollapsed ? <ChevronUp /> : <ChevronDown />}
+                  icon={outlineCollapsed ? <Icon name={icons.chevronUp} /> : <Icon name={icons.chevronDown} />}
                   onClick={() => setOutlineCollapsed(!outlineCollapsed)}
                 />
               </header>
               {!outlineCollapsed ? <>
-                <div className="outline-mode" role="group" aria-label="Outline source"><button aria-pressed={outlineMode === "current"} onClick={() => setOutlineMode("current")}>Current document</button><button aria-pressed={outlineMode === "project"} onClick={() => setOutlineMode("project")}>Project structure</button></div>
+                <SegmentedControl
+                  className="outline-mode"
+                  label="Outline source"
+                  value={outlineMode}
+                  onChange={setOutlineMode}
+                  options={[
+                    { value: "current", label: "Current document" },
+                    { value: "project", label: "Project structure" }
+                  ]}
+                />
                 <p className="outline-version-note">{outlineMode === "current" ? "Current buffer · local parse" : "Saved workspace version"}</p>
                 <OutlineTree items={visibleOutline} activeId={activeOutlineId} onSelect={selectOutline} />
               </> : null}
@@ -856,7 +846,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 <span>Claims & evidence</span>
                 <IconButton
                   label="Rescan claims"
-                  icon={<RefreshCw />}
+                  icon={<Icon name={icons.refresh} />}
                   onClick={async () => {
                     try {
                       setClaims(await api.claims.scan(projectId));
@@ -867,8 +857,12 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 />
               </header>
               <div className="claim-filters" role="group" aria-label="Evidence filters">
-                <label><span>Status</span><select aria-label="Evidence status" value={claimStatusFilter} onChange={event => setClaimStatusFilter(event.target.value as typeof claimStatusFilter)}><option value="all">All</option><option value="needs-review">Needs review</option><option value="supported">Supported</option><option value="partial">Partial</option><option value="unsupported">Unsupported</option><option value="stale">Stale anchors</option><option value="orphaned">Missing source</option></select></label>
-                <label><span>Source</span><select aria-label="Evidence source" value={claimPathFilter} onChange={event => setClaimPathFilter(event.target.value)}><option value="all">All files</option>{claimPaths.map(path => <option key={path} value={path}>{path}</option>)}</select></label>
+                <Field label="Status">
+                  <Select aria-label="Evidence status" value={claimStatusFilter} onChange={(next) => setClaimStatusFilter(next as typeof claimStatusFilter)} options={[{ value: "all", label: "All" }, { value: "needs-review", label: "Needs review" }, { value: "supported", label: "Supported" }, { value: "partial", label: "Partial" }, { value: "unsupported", label: "Unsupported" }, { value: "stale", label: "Stale anchors" }, { value: "orphaned", label: "Missing source" }]} />
+                </Field>
+                <Field label="Source">
+                  <Select aria-label="Evidence source" value={claimPathFilter} onChange={setClaimPathFilter} options={[{ value: "all", label: "All files" }, ...claimPaths.map(path => ({ value: path, label: path }))]} />
+                </Field>
               </div>
               {claims.length ? (
                 <div className="claim-ledger-list">
@@ -898,7 +892,8 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                           {status} · {items.length}
                         </small>
                         {items.map((claim) => (
-                          <button
+                          <Button
+                            variant="ghost"
                             className={`claim-ledger-item is-${status}`}
                             key={claim.id}
                             onClick={() => { void selectClaim(claim); }}
@@ -911,7 +906,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                               {claim.anchor.exactText.slice(0, 72)}
                               {claim.anchorStatus === "current" ? ` · ${claim.anchor.path} · saved v${claim.anchor.fileVersion}` : claim.anchorStatus === "orphaned" ? " · source missing" : " · verify location"}
                             </em>
-                          </button>
+                          </Button>
                         ))}
                       </div>
                     ) : null;
@@ -924,7 +919,30 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 </p>
               )}
             </section>
-            <div id="sidebar-git" hidden={sidebarView !== "git"} className="workbench-git"><SourceControlView registry={registry} projectId={projectId} version={project.version} selectedPath={selectedPath} onCompare={openHistoryDiff} onCheckpoint={async () => { await editorRef.current?.flush(); await registry.flush(); await api.projects.checkpoint(projectId); }} {...(project.source.type === "github" ? { onSync: () => setSyncOpen(true) } : {})} /></div>
+            <div id="sidebar-git" hidden={sidebarView !== "git"} className="workbench-git"><SourceControlView registry={registry} projectId={projectId} version={project.version} selectedPath={selectedPath} onCompare={openHistoryDiff} onFlush={async () => {
+              /*
+               * Flush before every Git mutation, not just commit. `stage` copies
+               * the on-disk content, and a `discard` is undone by a save that
+               * lands after it, so the sidebar calls this at the start of each
+               * operation — see `act` in WorkingChangesView.
+               */
+              await editorRef.current?.flush();
+              await registry.flush();
+            }} onCommit={async (message) => {
+              /*
+               * No flush here: the sidebar's `act` has already run `onFlush`
+               * before calling this, and a second one would just be the same
+               * wait twice.
+               */
+              await api.projects.commitWorking(projectId, message);
+              /*
+               * A commit moves HEAD and empties the index. The sidebar re-reads
+               * its own status after every mutation, but the rest of the page
+               * keys off project.version, so the project is re-read too rather
+               * than left describing a state HEAD has already left.
+               */
+              setProject(await api.projects.get(projectId));
+            }} {...(project.source.type === "github" ? { onSync: () => setSyncOpen(true) } : {})} /></div>
           </aside>
         )}
         {!sidebarForcedCollapsed ? <PanelDivider
@@ -938,7 +956,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         /> : null}
 
         <main className="workspace-center">
-          <EditorTabs comparisons={comparisonTabs} activeComparison={historyDiff ? diffRequestKey(historyDiff) : null} onSelectComparison={openHistoryDiff} onCloseComparison={key => { void closeComparisonTab(key); }} tabs={sourceTabs} activePath={historyDiff ? null : selectedPath} dirty={dirtyFiles} onSelect={path => { closeHistoryDiff(); navigationRef.current.cancel(); setTargetLine(null); setTargetSelection(null); setSelectedPath(path); }} onPin={path => setSourceTabs(tabs => pinSourceTab(tabs, path))} onClose={async path => {
+          <EditorTabs settings={settingsOpen ? { active: settingsActive, select: () => setSettingsActive(true), close: () => { setSettingsOpen(false); setSettingsActive(false); } } : undefined} comparisons={comparisonTabs} activeComparison={!settingsActive && historyDiff ? diffRequestKey(historyDiff) : null} onSelectComparison={openHistoryDiff} onCloseComparison={key => { void closeComparisonTab(key); }} tabs={sourceTabs} activePath={settingsActive || historyDiff ? null : selectedPath} dirty={dirtyFiles} onSelect={path => { closeHistoryDiff(); navigationRef.current.cancel(); setTargetLine(null); setTargetSelection(null); setSelectedPath(path); }} onPin={path => setSourceTabs(tabs => pinSourceTab(tabs, path))} onClose={async path => {
             setTabError("");
             try {
               await editorRef.current?.flush(); await registry.flush();
@@ -950,8 +968,14 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           }} />
           {tabError ? <p role="alert">{tabError}</p> : null}
           <section className="editor-region" id="source-editor-area">
-            {comparisonTabs.map(tab => <div className="diff-tab-panel" id={`comparison-${tab.key}`} key={tab.key} hidden={!historyDiff || diffRequestKey(historyDiff) !== tab.key}><Suspense fallback={<p>Loading comparison…</p>}><WorkspaceDiffEditor registry={registry} projectId={projectId} projectVersion={project.version} dirty={buffersDirty} request={tab.request} onClose={() => { void closeComparisonTab(tab.key); }} onSaveCheckpoint={async () => { await editorRef.current?.flush(); await registry.flush(); await api.projects.checkpoint(projectId); return (await api.projects.get(projectId)).version; }} onRestored={async path => { await refreshWorkspace(undefined, path); setSelectedPath(path); setFileDocument(await api.projects.readFile(projectId, path)); await closeComparisonTab(tab.key, true); }} /></Suspense></div>)}
-            <div className="source-editor-container" hidden={historyDiff !== null}>
+            {settingsOpen ? <div ref={settingsPanelRef} id="settings-editor-panel" className="settings-tab-panel" role="tabpanel" aria-label="Settings" hidden={!settingsActive}>
+              <ProjectSettingsEditor key={projectId} project={project} tree={settingsTree} onSaved={async (updated) => {
+                setProject(updated);
+                await refreshWorkspace(undefined, selectedPath ?? updated.mainDocument);
+              }} />
+            </div> : null}
+            {comparisonTabs.map(tab => <div className="diff-tab-panel" id={`comparison-${tab.key}`} key={tab.key} hidden={settingsActive || !historyDiff || diffRequestKey(historyDiff) !== tab.key}><Suspense fallback={<p>Loading comparison…</p>}><WorkspaceDiffEditor registry={registry} projectId={projectId} projectVersion={project.version} dirty={buffersDirty} request={tab.request} onClose={() => { void closeComparisonTab(tab.key); }} onSaveCheckpoint={async () => { await editorRef.current?.flush(); await registry.flush(); await api.projects.checkpoint(projectId); return (await api.projects.get(projectId)).version; }} onRestored={async path => { await refreshWorkspace(undefined, path); setSelectedPath(path); setFileDocument(await api.projects.readFile(projectId, path)); await closeComparisonTab(tab.key, true); }} /></Suspense></div>)}
+            <div className="source-editor-container" hidden={settingsActive || historyDiff !== null}>
             {fileDocument ? (
               <Suspense
                 fallback={
@@ -987,7 +1011,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               />
             ) : (
               <div className="editor-empty">
-                <FolderTree />
+                <Icon name={icons.listTree} />
                 <h3>Select a source file</h3>
                 <p>
                   Choose a LaTeX, Markdown or BibTeX file from the project tree.
@@ -997,12 +1021,18 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             </div>
           </section>
           <div className="bottom-panel-heading">
-            <div className="bottom-panel-tabs" role="tablist" aria-label="Bottom panel">
-              <button role="tab" aria-selected={bottomPanelTab === "ai"} onClick={() => { setBottomPanelTab("ai"); setPanelCollapsed(false); }}>AI</button>
-              <button role="tab" aria-selected={bottomPanelTab === "problems"} onClick={() => { setBottomPanelTab("problems"); setPanelCollapsed(false); }}>Problems{compileState.diagnostics.length ? ` (${compileState.diagnostics.length})` : ""}</button>
-              <button role="tab" aria-selected={bottomPanelTab === "output"} onClick={() => { setBottomPanelTab("output"); setPanelCollapsed(false); }}>Output</button>
-            </div>
-            <button aria-expanded={!bottomPanelHidden} aria-controls="bottom-workbench-panel" onClick={() => setPanelCollapsed(!panelCollapsed)}>{bottomPanelHidden ? "Show panel" : "Hide panel"}</button>
+            <TabBar
+              className="bottom-panel-tabs"
+              label="Bottom panel"
+              activeId={bottomPanelTab}
+              onSelect={(id) => { setBottomPanelTab(id as typeof bottomPanelTab); setPanelCollapsed(false); }}
+              tabs={[
+                { id: "ai", label: "AI" },
+                { id: "problems", label: `Problems${compileState.diagnostics.length ? ` (${compileState.diagnostics.length})` : ""}` },
+                { id: "output", label: "Output" }
+              ]}
+            />
+            <Button variant="ghost" aria-expanded={!bottomPanelHidden} aria-controls="bottom-workbench-panel" onClick={() => setPanelCollapsed(!panelCollapsed)}>{bottomPanelHidden ? "Show panel" : "Hide panel"}</Button>
           </div>
           <div id="bottom-workbench-panel" className="workbench-bottom-panel" hidden={bottomPanelHidden}>
           <PanelDivider
@@ -1099,10 +1129,10 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           </div>
           <div className="bottom-panel-content bottom-panel-problems" role="tabpanel" hidden={bottomPanelTab !== "problems"}>
             <header><span>{compileState.state === "error" ? "Compilation failed" : compileState.diagnostics.length ? "Compiler diagnostics" : "No compiler problems"}</span><small>{compileState.progress}</small></header>
-            {compileState.diagnostics.length ? <div className="diagnostic-list">{compileState.diagnostics.map(diagnostic => <button key={diagnostic.id} className={`diagnostic-row diagnostic-row--${diagnostic.severity}`} disabled={!diagnostic.path || !diagnostic.line} onClick={() => diagnostic.path && diagnostic.line && void navigateToPath(diagnostic.path, diagnostic.line)}><AlertTriangle /><span><strong>{diagnostic.message}</strong>{diagnostic.path ? <code>{diagnostic.path}{diagnostic.line ? `:${diagnostic.line}` : ""}</code> : null}</span></button>)}</div> : <div className="bottom-panel-empty"><CheckCircle2 />{compileState.state === "error" ? "The compiler did not provide a source location." : "Compile the project to populate diagnostics."}</div>}
+            {compileState.diagnostics.length ? <div className="diagnostic-list">{compileState.diagnostics.map(diagnostic => <Button variant="ghost" key={diagnostic.id} className={`diagnostic-row diagnostic-row--${diagnostic.severity}`} disabled={!diagnostic.path || !diagnostic.line} onClick={() => { if (diagnostic.path && diagnostic.line) void navigateToPath(diagnostic.path, diagnostic.line); }}><Icon name={icons.warning} /><span><strong>{diagnostic.message}</strong>{diagnostic.path ? <code>{diagnostic.path}{diagnostic.line ? `:${diagnostic.line}` : ""}</code> : null}</span></Button>)}</div> : <div className="bottom-panel-empty"><Icon name={icons.passFilled} />{compileState.state === "error" ? "The compiler did not provide a source location." : "Compile the project to populate diagnostics."}</div>}
           </div>
           <div className="bottom-panel-content bottom-panel-output" role="tabpanel" hidden={bottomPanelTab !== "output"}>
-            <header><FileOutput /><span>Compiler output</span><small>{compileState.compiledVersion === null ? "No compiled version" : `Workspace version ${compileState.compiledVersion}`}</small></header>
+            <header><Icon name={icons.filePdf} /><span>Compiler output</span><small>{compileState.compiledVersion === null ? "No compiled version" : `Workspace version ${compileState.compiledVersion}`}</small></header>
             <pre>{compileState.log ? compileState.log.slice(-24_000) : compileState.progress}</pre>
           </div>
           </div>
@@ -1146,20 +1176,21 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             <IconButton
               className="pdf-collapse"
               label="Collapse PDF preview"
-              icon={<PanelRightClose />}
+              icon={<Icon name={icons.layoutPanelRight} />}
               onClick={collapsePdf}
             />
           </div>
         ) : !pdfForcedCollapsed ? (
-          <button
+          <Button
+            variant="ghost"
             className="collapsed-rail collapsed-rail--right"
             onClick={collapsePdf}
             aria-label="Expand PDF preview"
             title="Expand PDF preview"
           >
-            <PanelRightOpen />
+            <Icon name={icons.layoutPanelRight} />
             <span>PDF</span>
-          </button>
+          </Button>
         ) : null}
       </div>
       <footer className="workbench-status" aria-label="Workspace status"><span>Managed history</span><span>{project.source.type === "github" ? "GitHub configured" : "Local project"}</span><span>{buffersDirty ? "Unsaved buffers" : "Buffers acknowledged"}</span><span>Ln {cursorLocation.line}, Col {cursorLocation.column ?? 1}</span><span>UTF-8</span><span>Project v{project.version} · PDF {compileState.compiledVersion === null ? "not compiled" : `v${compileState.compiledVersion}`}</span></footer>
@@ -1194,18 +1225,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           setRenameOpen(false);
           await refreshWorkspace(undefined, path);
           setSelectedPath(path);
-        }}
-      />
-      <ProjectSettingsDialog
-        open={settingsOpen}
-        project={project}
-        tree={settingsTree}
-        onClose={() => setSettingsOpen(false)}
-        onSaved={async (updated) => {
-          setProject(updated);
-          setSettingsOpen(false);
-          await refreshWorkspace(undefined, updated.mainDocument);
-          setSelectedPath(updated.mainDocument);
         }}
       />
       {project.source.type === "github" ? (
@@ -1263,7 +1282,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             </Button>
             <Button
               variant="danger"
-              icon={<Trash2 />}
+              icon={<Icon name={icons.trash} />}
               onClick={async () => {
                 if (!selectedPath) return;
                 setDeleteError("");
@@ -1366,14 +1385,9 @@ function ShareDialog({
           </Button>
         </div>
         {createdUrl ? (
-          <label className="field">
-            <span>New link (shown once)</span>
-            <input
-              readOnly
-              value={createdUrl}
-              onFocus={(event) => event.currentTarget.select()}
-            />
-          </label>
+          <Field label="New link (shown once)">
+            <TextField readonly value={createdUrl} />
+          </Field>
         ) : null}
         {error ? (
           <div className="form-error" role="alert">
@@ -1386,14 +1400,15 @@ function ShareDialog({
             {link.revokedAt ? (
               "revoked"
             ) : (
-              <button
+              <Button
+                variant="ghost"
                 onClick={async () => {
                   await api.projects.revokeShare(projectId, link.id);
                   await load();
                 }}
               >
                 Revoke
-              </button>
+              </Button>
             )}
           </p>
         ))}
@@ -1611,7 +1626,7 @@ function InviteDialog({
           </Button>
           <Button
             variant="primary"
-            icon={<UserPlus />}
+            icon={<Icon name={icons.personAdd} />}
             loading={busy}
             disabled={!email.trim()}
             onClick={() => void invite()}
@@ -1622,58 +1637,51 @@ function InviteDialog({
       }
     >
       <div className="form-stack">
-        <label className="field">
-          <span>Email</span>
-          <input
+        <Field label="Email">
+          <TextField
             type="email"
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            onChange={setEmail}
             autoFocus
           />
-        </label>
-        <label className="field">
-          <span>Role</span>
-          <select
+        </Field>
+        <Field label="Role">
+          <Select
+            aria-label="Role"
             value={role}
-            onChange={(event) => setRole(event.target.value as typeof role)}
-          >
-            <option value="maintainer">Maintainer</option>
-            <option value="editor">Editor</option>
-            <option value="commenter">Commenter</option>
-            <option value="viewer">Viewer</option>
-          </select>
-        </label>
-        <label className="field">
-          <span>Expires at (optional)</span>
-          <input
+            onChange={(next) => setRole(next as typeof role)}
+            options={[
+              { value: "maintainer", label: "Maintainer" },
+              { value: "editor", label: "Editor" },
+              { value: "commenter", label: "Commenter" },
+              { value: "viewer", label: "Viewer" }
+            ]}
+          />
+        </Field>
+        <Field label="Expires at (optional)">
+          <TextField
             type="datetime-local"
             value={expiresAt}
-            onChange={(event) => setExpiresAt(event.target.value)}
+            onChange={setExpiresAt}
           />
-        </label>
-        <label className="field">
-          <span>Message (optional)</span>
-          <textarea
+        </Field>
+        <Field label="Message (optional)">
+          <TextArea
             rows={3}
             maxLength={2000}
             value={message}
-            onChange={(event) => setMessage(event.target.value)}
+            onChange={setMessage}
           />
-        </label>
+        </Field>
         {sent ? (
           <div className="form-notice" role="status">
             {sent}
           </div>
         ) : null}
         {token ? (
-          <label className="field">
-            <span>Invitation link (shown once)</span>
-            <input
-              readOnly
-              value={token}
-              onFocus={(event) => event.currentTarget.select()}
-            />
-          </label>
+          <Field label="Invitation link (shown once)">
+            <TextField readonly value={token} />
+          </Field>
         ) : null}
         {error ? (
           <div className="form-error" role="alert">
@@ -1689,27 +1697,28 @@ function InviteDialog({
                 member.role
               ) : (
                 <>
-                  <select
+                  <Select
                     aria-label={`Role for ${member.user.displayName}`}
                     value={member.role}
                     disabled={busy}
-                    onChange={(event) =>
+                    onChange={(next) =>
                       void updateMember(
                         member.userId,
-                        event.target.value as
+                        next as
                           "maintainer" | "editor" | "commenter" | "viewer",
                       )
                     }
-                  >
-                    <option value="maintainer">Maintainer</option>
-                    <option value="editor">Editor</option>
-                    <option value="commenter">Commenter</option>
-                    <option value="viewer">Viewer</option>
-                  </select>{" "}
+                    options={[
+                      { value: "maintainer", label: "Maintainer" },
+                      { value: "editor", label: "Editor" },
+                      { value: "commenter", label: "Commenter" },
+                      { value: "viewer", label: "Viewer" }
+                    ]}
+                  />{" "}
                   <Button
                     size="small"
                     variant="ghost"
-                    icon={<Trash2 />}
+                    icon={<Icon name={icons.trash} />}
                     disabled={busy}
                     onClick={() => void removeMember(member.userId)}
                   >
@@ -1774,7 +1783,7 @@ function InviteDialog({
                   <Button
                     size="small"
                     variant="ghost"
-                    icon={<RefreshCw />}
+                    icon={<Icon name={icons.refresh} />}
                     disabled={busy}
                     onClick={() => void resend(invitation.id)}
                   >
@@ -1783,7 +1792,7 @@ function InviteDialog({
                   <Button
                     size="small"
                     variant="ghost"
-                    icon={<Trash2 />}
+                    icon={<Icon name={icons.trash} />}
                     disabled={busy}
                     onClick={() => void revoke(invitation.id)}
                   >
@@ -1914,7 +1923,7 @@ function CommentsDialog({
           </Button>
           <Button
             variant="primary"
-            icon={<MessageSquare />}
+            icon={<Icon name={icons.comment} />}
             loading={busy}
             disabled={!selection || !body.trim()}
             onClick={() => void create()}
@@ -1927,22 +1936,22 @@ function CommentsDialog({
       <div className="history-dialog">
         {selection ? (
           <>
-            <label className="field">
-              <span>Comment</span>
-              <textarea
+            <Field label="Comment">
+              <TextArea
                 value={body}
-                onChange={(event) => setBody(event.target.value)}
+                onChange={setBody}
                 placeholder="Add a review comment"
                 rows={3}
               />
-            </label>
-            <label className="field">
-              <span>Mention collaborator</span>
-              <select
+            </Field>
+            <Field label="Mention collaborator">
+              <Select
+                aria-label="Mention collaborator"
                 value=""
-                onChange={(event) => {
+                placeholder="Choose a collaborator"
+                onChange={(next) => {
                   const member = members.find(
-                    (item) => item.userId === event.target.value,
+                    (item) => item.userId === next,
                   );
                   if (member)
                     setBody(
@@ -1950,15 +1959,15 @@ function CommentsDialog({
                         `${current}${current && !/\s$/.test(current) ? " " : ""}@[${member.user.displayName}](${member.userId}) `,
                     );
                 }}
-              >
-                <option value="">Choose a collaborator</option>
-                {members.map((member) => (
-                  <option key={member.userId} value={member.userId}>
-                    {member.user.displayName} ({member.user.emailNormalized})
-                  </option>
-                ))}
-              </select>
-            </label>
+                options={[
+                  { value: "", label: "Choose a collaborator" },
+                  ...members.map((member) => ({
+                    value: member.userId,
+                    label: `${member.user.displayName} (${member.user.emailNormalized})`
+                  }))
+                ]}
+              />
+            </Field>
           </>
         ) : null}
         {error ? (
@@ -1971,14 +1980,15 @@ function CommentsDialog({
           .map((thread) => (
             <article className="comment-thread" key={thread.id}>
               <header>
-                <button
+                <Button
+                  variant="ghost"
                   onClick={() =>
                     thread.from !== undefined &&
                     onNavigate(thread.path, thread.from)
                   }
                 >
                   {thread.path}
-                </button>
+                </Button>
                 <span>{thread.status}</span>
               </header>
               <blockquote>
@@ -2039,13 +2049,13 @@ function CommentsDialog({
               </div>
               {thread.status !== "orphaned" ? (
                 <div className="comment-reply">
-                  <textarea
+                  <TextArea
                     aria-label="Reply to comment"
                     value={replies[thread.id] ?? ""}
-                    onChange={(event) =>
+                    onChange={(next) =>
                       setReplies((current) => ({
                         ...current,
-                        [thread.id]: event.target.value,
+                        [thread.id]: next,
                       }))
                     }
                     placeholder="Reply"
@@ -2214,15 +2224,14 @@ function NewFileDialog({
         </>
       }
     >
-      <label className="field">
-        <span>File path</span>
-        <input
+      <Field label="File path">
+        <TextField
           value={path}
-          onChange={(event) => setPath(event.target.value)}
+          onChange={setPath}
           placeholder="sections/new-section.tex"
           autoFocus
         />
-      </label>
+      </Field>
       {error ? (
         <div className="form-error" role="alert">
           {error}

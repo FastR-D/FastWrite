@@ -1,9 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Check, Database, FileText, LoaderCircle, Pencil, RefreshCw, Save, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { PaperMemory, PaperProject } from "@fastwrite/shared";
 import { api } from "../../api/client";
-import { Button, IconButton } from "../ui/Button";
-import { Dialog } from "../ui/Dialog";
+import { Button, Dialog, Icon, IconButton, TextArea, icons } from "../ui";
 
 type Candidate = { title: string; current?: string; proposed: string };
 type MemoryPart = { key: string; title: string; content: string; candidate?: string | undefined } & (
@@ -77,28 +75,21 @@ export function MemoryDialog({ open, project, onClose, onNavigate, onChanged }: 
 
   return <Dialog open={open} width="large" title="Paper Memory" description={memory ? "Edit each memory part here; every save updates the root memory.md file." : "Create a durable project memory and instructions file."} onClose={() => { if (!loading) onClose(); }} footer={<>
     <Button variant="ghost" onClick={onClose}>Close</Button>
-    {memory ? <Button variant="secondary" icon={<FileText />} onClick={() => { onNavigate("memory.md"); onClose(); }}>Open memory.md</Button> : null}
-    {memory && candidates.length ? <Button variant="primary" icon={<Check />} loading={loading} disabled={Boolean(editing)} onClick={() => void apply()}>Apply reviewed memory</Button> : null}
-    <Button variant={memory ? "secondary" : "primary"} icon={loading ? <LoaderCircle className="spin" /> : <RefreshCw />} loading={loading} onClick={() => void regenerate()}>{memory ? "Regenerate candidate" : "Generate Memory"}</Button>
+    {memory ? <Button variant="secondary" icon={<Icon name={icons.fileText} />} onClick={() => { onNavigate("memory.md"); onClose(); }}>Open memory.md</Button> : null}
+    {memory && candidates.length ? <Button variant="primary" icon={<Icon name={icons.check} />} loading={loading} disabled={Boolean(editing)} onClick={() => void apply()}>Apply reviewed memory</Button> : null}
+    <Button variant={memory ? "secondary" : "primary"} icon={loading ? <Icon name={icons.loading} spin /> : <Icon name={icons.refresh} />} loading={loading} onClick={() => void regenerate()}>{memory ? "Regenerate candidate" : "Generate Memory"}</Button>
   </>}>
-    {loading ? <div className="agent-progress"><LoaderCircle className="spin" /><strong>{operation === "saving" ? "Polishing edited Memory" : operation === "accepting" ? "Accepting Memory candidate" : operation === "applying" ? "Applying reviewed Memory" : "Building Paper Memory"}</strong><span>Existing user instructions remain unchanged.</span></div> : memory ? <div className="memory-panel memory-panel--review">
-      <section className="memory-file-callout"><FileText /><div><strong>memory.md is in the paper root</strong><span>User Instructions are edited directly in the file. Save any overview, section, or fact below to persist it immediately.</span></div></section>
+    {loading ? <div className="agent-progress"><Icon name={icons.loading} spin /><strong>{operation === "saving" ? "Polishing edited Memory" : operation === "accepting" ? "Accepting Memory candidate" : operation === "applying" ? "Applying reviewed Memory" : "Building Paper Memory"}</strong><span>Existing user instructions remain unchanged.</span></div> : memory ? <div className="memory-panel memory-panel--review">
+      <section className="memory-file-callout"><Icon name={icons.fileText} /><div><strong>memory.md is in the paper root</strong><span>User Instructions are edited directly in the file. Save any overview, section, or fact below to persist it immediately.</span></div></section>
       <div className="memory-review-summary"><strong>{candidates.length ? `${candidates.length} candidate entries to review` : "Reviewed memory is current"}</strong><span>{parts.length} editable parts</span></div>
-      {parts.length ? <div className="memory-review">{parts.map((part) => <article className="memory-review-card" key={part.key}><header><span>{part.title}</span>{editing?.key === part.key ? <div><IconButton label="Polish and save memory part" icon={<Save />} variant="secondary" disabled={!draft.trim()} onClick={() => void savePart()} /><IconButton label="Cancel editing memory part" icon={<X />} onClick={() => setEditing(null)} /></div> : <IconButton label={`Edit ${part.title}`} icon={<Pencil />} onClick={() => beginEdit(part)} />}</header>{editing?.key === part.key ? <AutoSizeTextarea label={`Edit ${part.title}`} value={draft} onChange={setDraft} /> : <p className="memory-review-card__candidate">{part.content}</p>}{part.candidate && part.candidate !== part.content ? <div className="memory-candidate"><Button size="small" variant="primary" icon={<Check />} onClick={() => void acceptCandidate(part)}>Accept candidate</Button><p>{part.candidate}</p></div> : null}</article>)}</div> : <div className="memory-empty"><Database /><span>Regenerate after changing the manuscript to create editable memory parts.</span></div>}
-    </div> : <div className="review-empty"><Database /><h3>Build a paper memory</h3><p>Generate evidence-backed context, inspect the complete candidate, and save it as an editable root-level memory.md file.</p></div>}
+      {parts.length ? <div className="memory-review">{parts.map((part) => <article className="memory-review-card" key={part.key}><header><span>{part.title}</span>{editing?.key === part.key ? <div><IconButton label="Polish and save memory part" icon={<Icon name={icons.save} />} variant="secondary" disabled={!draft.trim()} onClick={() => void savePart()} /><IconButton label="Cancel editing memory part" icon={<Icon name={icons.close} />} onClick={() => setEditing(null)} /></div> : <IconButton label={`Edit ${part.title}`} icon={<Icon name={icons.edit} />} onClick={() => beginEdit(part)} />}</header>{editing?.key === part.key ? <AutoSizeTextarea label={`Edit ${part.title}`} value={draft} onChange={setDraft} /> : <p className="memory-review-card__candidate">{part.content}</p>}{part.candidate && part.candidate !== part.content ? <div className="memory-candidate"><Button size="small" variant="primary" icon={<Icon name={icons.check} />} onClick={() => void acceptCandidate(part)}>Accept candidate</Button><p>{part.candidate}</p></div> : null}</article>)}</div> : <div className="memory-empty"><Icon name={icons.database} /><span>Regenerate after changing the manuscript to create editable memory parts.</span></div>}
+    </div> : <div className="review-empty"><Icon name={icons.database} /><h3>Build a paper memory</h3><p>Generate evidence-backed context, inspect the complete candidate, and save it as an editable root-level memory.md file.</p></div>}
     {error ? <div className="form-error" role="alert">{error}</div> : null}
   </Dialog>;
 }
 
 function AutoSizeTextarea({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useLayoutEffect(() => {
-    const textarea = ref.current;
-    if (!textarea) return;
-    textarea.style.height = "0px";
-    textarea.style.height = `${textarea.scrollHeight + 2}px`;
-  }, [value]);
-  return <textarea ref={ref} rows={1} aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} autoFocus />;
+  return <TextArea aria-label={label} rows={1} value={value} onChange={onChange} growWithContent autoFocus />;
 }
 
 function memoryParts(memory: PaperMemory | null): MemoryPart[] {

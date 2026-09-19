@@ -151,3 +151,208 @@ test("working-tree comparison is isolated, includes uncheckpointed add delete re
   const deleted = await history.workingComparison(root, workspace, base, "removed.tex");
   expect(deleted).toMatchObject({ original: { exists: true }, modified: { exists: false } });
 });
+
+test("working status reads both groups from one call and bootstraps the index", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "main.tex"), "one\n");
+  await writeFile(join(workspace, "sections.tex"), "two\n");
+  await history.snapshot(root, workspace, "Manual checkpoint");
+  const head = (await history.list(root, 1))[0]!.oid;
+
+  // Change one tracked file, add an untracked one, and stage a third.
+  await writeFile(join(workspace, "main.tex"), "one changed\n");
+  await writeFile(join(workspace, "refs.bib"), "new\n");
+  await writeFile(join(workspace, "sections.tex"), "two changed\n");
+  await history.stage(root, workspace, ["sections.tex"]);
+
+  const status = await history.workingStatus(root, workspace);
+  expect(status.head).toBe(head);
+  const byPath = Object.fromEntries(status.files.map((file) => [file.path, file]));
+  expect(byPath["main.tex"]).toMatchObject({ unstaged: "M", staged: null, untracked: false });
+  expect(byPath["refs.bib"]).toMatchObject({ untracked: true, staged: null, unstaged: null });
+  // Staged and then unmodified: staged only.
+  expect(byPath["sections.tex"]).toMatchObject({ staged: "M", unstaged: null });
+});
+
+test("a file staged and then edited again appears in both groups", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "main.tex"), "one\n");
+  await history.snapshot(root, workspace, "Manual checkpoint");
+  await writeFile(join(workspace, "main.tex"), "two\n");
+  await history.stage(root, workspace, ["main.tex"]);
+  await writeFile(join(workspace, "main.tex"), "three\n");
+
+  const file = (await history.workingStatus(root, workspace)).files[0]!;
+  expect(file.staged).toBe("M");
+  expect(file.unstaged).toBe("M");
+});
+
+test("stage and unstage move a file between the two groups", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "main.tex"), "one\n");
+  await history.snapshot(root, workspace, "Manual checkpoint");
+  await writeFile(join(workspace, "main.tex"), "two\n");
+
+  await history.stage(root, workspace, ["main.tex"]);
+  let file = (await history.workingStatus(root, workspace)).files[0]!;
+  expect(file.staged).toBe("M");
+  expect(file.unstaged).toBeNull();
+
+  await history.unstage(root, workspace, ["main.tex"]);
+  file = (await history.workingStatus(root, workspace)).files[0]!;
+  expect(file.staged).toBeNull();
+  expect(file.unstaged).toBe("M");
+});
+
+test("unstage on the repository's first commit leaves the file untracked again", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "new.tex"), "content\n");
+  await history.stage(root, workspace, ["new.tex"]);
+  expect((await history.workingStatus(root, workspace)).files[0]!.staged).toBe("A");
+
+  // `git restore --staged` fails against an unborn HEAD, so this path must be
+  // handled rather than left to throw.
+  await history.unstage(root, workspace, ["new.tex"]);
+  const file = (await history.workingStatus(root, workspace)).files[0]!;
+  expect(file.untracked).toBe(true);
+  expect(file.staged).toBeNull();
+});
+
+test("discard reverts a tracked file to its staged content", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "main.tex"), "committed\n");
+  await history.snapshot(root, workspace, "Manual checkpoint");
+  await writeFile(join(workspace, "main.tex"), "staged\n");
+  await history.stage(root, workspace, ["main.tex"]);
+  await writeFile(join(workspace, "main.tex"), "unstaged edit\n");
+
+  await history.discard(root, workspace, ["main.tex"]);
+  expect(await readFile(join(workspace, "main.tex"), "utf8")).toBe("staged\n");
+});
+
+test("discard deletes an untracked file", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "scratch.tex"), "draft\n");
+  await history.discard(root, workspace, ["scratch.tex"]);
+  expect((await history.workingStatus(root, workspace)).files).toEqual([]);
+});
+
+test("operations refuse an empty path list", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "main.tex"), "one\n");
+  await history.snapshot(root, workspace, "Manual checkpoint");
+
+  // A empty list reaching `git add` with no pathspec would stage everything;
+  // in discard it would delete the entire working tree. Rejected at the edge.
+  for (const call of [
+    () => history.stage(root, workspace, []),
+    () => history.unstage(root, workspace, []),
+    () => history.discard(root, workspace, [])
+  ]) {
+    await expect(call()).rejects.toThrow();
+  }
+});
+
+test("operations refuse a path that escapes the workspace", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "main.tex"), "one\n");
+  await history.snapshot(root, workspace, "Manual checkpoint");
+  await expect(history.discard(root, workspace, ["../../etc/passwd"])).rejects.toThrow();
+});
+
+test("discard restores a staged deletion from HEAD", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "gone.tex"), "committed content\n");
+  await history.snapshot(root, workspace, "Manual checkpoint");
+
+  // `git rm` stages the deletion, which empties the index entry. Restoring from
+  // the index then matches nothing — measured to exit 0 while doing nothing —
+  // so this path must source from HEAD.
+  await history.stageRemoval(root, workspace, ["gone.tex"]);
+  expect((await history.workingStatus(root, workspace)).files[0]).toMatchObject({ staged: "D" });
+
+  await history.discard(root, workspace, ["gone.tex"]);
+  expect(await readFile(join(workspace, "gone.tex"), "utf8")).toBe("committed content\n");
+});
+
+test("discard refuses a conflicted file", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "main.tex"), "one\n");
+  await history.snapshot(root, workspace, "Manual checkpoint");
+
+  /*
+   * Build a real conflict rather than asserting on a hand-made status.
+   *
+   * The helper returns the exit code instead of throwing, because `git merge`
+   * exits **1** when it conflicts — the expected outcome here. A helper that
+   * rejected on non-zero would kill the test before it asserted anything.
+   */
+  const runGit = async (args: string[]) => {
+    const child = Bun.spawn(["git", `--git-dir=${join(root, "history.git")}`, `--work-tree=${workspace}`, ...args], { stdout: "pipe", stderr: "pipe" });
+    const stdout = await new Response(child.stdout).text();
+    await new Response(child.stderr).text();
+    return { code: await child.exited, stdout };
+  };
+
+  /*
+   * The base branch is read, not assumed, and returned to by name rather than
+   * with `checkout -`. `-` resolves `@{-1}` from the reflog, so it goes back to
+   * whatever was previous rather than to what this test meant — and if
+   * `checkout -b` were to fail, the merge would find nothing to merge, exit 0,
+   * and report "already up to date" with no conflict at all.
+   */
+  const base = (await runGit(["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+  await runGit(["checkout", "-q", "-b", "other"]);
+  await writeFile(join(workspace, "main.tex"), "other\n");
+  await runGit(["commit", "-qam", "other"]);
+  await runGit(["checkout", "-q", base]);
+  await writeFile(join(workspace, "main.tex"), "main\n");
+  await runGit(["commit", "-qam", "main"]);
+  // `--no-edit` so a clean merge cannot block on an editor in a non-TTY runner.
+  await runGit(["merge", "--no-edit", "other"]);
+
+  const status = await history.workingStatus(root, workspace);
+  expect(status.files.some((file) => file.conflicted)).toBe(true);
+  await expect(history.discard(root, workspace, ["main.tex"])).rejects.toThrow(/conflict/i);
+});
+
+test("commit records the index and leaves unstaged work alone", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "main.tex"), "one\n");
+  await writeFile(join(workspace, "other.tex"), "one\n");
+  await history.snapshot(root, workspace, "Manual checkpoint");
+
+  await writeFile(join(workspace, "main.tex"), "two\n");
+  await writeFile(join(workspace, "other.tex"), "two\n");
+  await history.stage(root, workspace, ["main.tex"]);
+  const oid = await history.commit(root, workspace, "Stage one file");
+  expect(oid).toBeTruthy();
+
+  // The commit contains main.tex only; other.tex is still unstaged.
+  const summary = await history.summary(root, oid!);
+  expect(summary.files.map((file) => file.path)).toEqual(["main.tex"]);
+
+  const file = (await history.workingStatus(root, workspace)).files.find((entry) => entry.path === "other.tex")!;
+  expect(file.unstaged).toBe("M");
+  expect(file.staged).toBeNull();
+});
+
+test("commit with nothing staged is refused", async () => {
+  const { root, workspace, history } = await fixture();
+  await writeFile(join(workspace, "main.tex"), "one\n");
+  await history.snapshot(root, workspace, "Manual checkpoint");
+  await expect(history.commit(root, workspace, "Nothing to commit")).rejects.toThrow(/nothing/i);
+});
+
+test("a project with no repository yet gets one, with its exclusions", async () => {
+  const { root, workspace, history } = await fixture();
+  // No snapshot first — this is a freshly created project.
+  await writeFile(join(workspace, "main.tex"), "content\n");
+
+  const status = await history.workingStatus(root, workspace);
+  expect(status.head).toBeNull();
+  expect(status.files.map((file) => file.path)).toEqual(["main.tex"]);
+
+  // The exclude file is what keeps engine artifacts out of the status.
+  expect(await readFile(join(root, "history.git", "info", "exclude"), "utf8")).toContain(".fastwrite");
+});

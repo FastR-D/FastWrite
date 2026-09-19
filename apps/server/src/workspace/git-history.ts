@@ -1,9 +1,10 @@
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { HistoryCommit, HistorySummary, HistoryPage, HistoryTreeEntry, HistoryFileSide, HistoryComparison, HistoryChangedFile, HistoryChanges } from "@fastwrite/shared";
+import type { HistoryCommit, HistorySummary, HistoryPage, HistoryTreeEntry, HistoryFileSide, HistoryComparison, HistoryChangedFile, HistoryChanges, WorkingStatus } from "@fastwrite/shared";
 import { ApiError } from "../http";
 import { resolveWorkspacePath } from "./path";
+import { parseWorkingStatus } from "./working-status";
 
 const EXCLUDES = [
   ".git/",
@@ -126,6 +127,169 @@ export class GitHistory {
     } finally { await rm(directory, { recursive: true, force: true }); }
   }
 
+  /**
+   * The persistent index, created from HEAD the first time it is needed.
+   *
+   * `read-tree` OVERWRITES the index, so this must run only when the file is
+   * absent — running it against a populated index would silently discard
+   * everything the user had staged. The index's own existence is the flag; no
+   * separate marker is stored, because a marker could drift out of step with the
+   * file it describes.
+   *
+   * A repository with no commits yet has no HEAD to read, so an unborn HEAD
+   * falls back to an empty tree.
+   */
+  private async ensureIndex(projectDirectory: string, workspaceRoot: string): Promise<void> {
+    await this.ensureRepository(projectDirectory);
+    const context = [`--git-dir=${join(projectDirectory, "history.git")}`, `--work-tree=${workspaceRoot}`];
+    if (await exists(join(projectDirectory, "history.git", "index"))) return;
+    if ((await runGit([...context, "rev-parse", "--verify", "--quiet", "HEAD"], [0, 1])) === 0) {
+      await runGit([...context, "read-tree", "HEAD"]);
+    } else {
+      await runGit([...context, "read-tree", "--empty"]);
+    }
+  }
+
+  /**
+   * Everything the sidebar shows, from one `git status`.
+   *
+   * Porcelain v2's XY is exactly the split the UI needs — X is index-vs-HEAD,
+   * Y is worktree-vs-index — so the two groups cost one invocation rather than
+   * two diffs. `--branch` adds HEAD to the same output.
+   */
+  async workingStatus(projectDirectory: string, workspaceRoot: string): Promise<WorkingStatus> {
+    await this.ensureIndex(projectDirectory, workspaceRoot);
+    const context = [`--git-dir=${join(projectDirectory, "history.git")}`, `--work-tree=${workspaceRoot}`];
+    const output = await runGitOutput([...context, "status", "--porcelain=v2", "--branch", "-z"]);
+    return parseWorkingStatus(output);
+  }
+
+  /**
+   * Rejects a path list that is empty or escapes the workspace.
+   *
+   * Empty is not a trivial case: `git add` with no pathspec stages the whole
+   * tree, and the equivalent discard would delete it. A frontend bug passing
+   * `[]` instead of `[path]` must fail loudly here rather than quietly
+   * destroying work.
+   */
+  private safePaths(workspaceRoot: string, paths: string[]): string[] {
+    if (!Array.isArray(paths) || paths.length === 0) {
+      throw new ApiError(400, "history_paths_required", "At least one path is required");
+    }
+    return paths.map((path) => resolveWorkspacePath(workspaceRoot, path).relativePath);
+  }
+
+  /** Records worktree content in the index, so the next commit includes it. */
+  async stage(projectDirectory: string, workspaceRoot: string, paths: string[]): Promise<void> {
+    const safe = this.safePaths(workspaceRoot, paths);
+    await this.ensureIndex(projectDirectory, workspaceRoot);
+    const context = [`--git-dir=${join(projectDirectory, "history.git")}`, `--work-tree=${workspaceRoot}`, "--literal-pathspecs"];
+    await runGit([...context, "add", "--", ...safe]);
+  }
+
+  /**
+   * Stages a file's removal — the `git rm` that a discard of a staged deletion
+   * has to undo. Kept separate from `stage` because `git add` on a deleted path
+   * stages the deletion only with `-A`, and relying on that flag would make
+   * `stage` do something surprising for a path the caller expects to exist.
+   */
+  async stageRemoval(projectDirectory: string, workspaceRoot: string, paths: string[]): Promise<void> {
+    const safe = this.safePaths(workspaceRoot, paths);
+    await this.ensureIndex(projectDirectory, workspaceRoot);
+    const context = [`--git-dir=${join(projectDirectory, "history.git")}`, `--work-tree=${workspaceRoot}`, "--literal-pathspecs"];
+    await runGit([...context, "rm", "--quiet", "--", ...safe]);
+  }
+
+  /**
+   * Removes files from the index without touching the working tree.
+   *
+   * `git restore --staged` needs a HEAD to restore from, and a repository whose
+   * first commit has not happened yet has none. There `rm --cached` is the
+   * equivalent — the file returns to being untracked, which is what unstaging
+   * means before any commit exists.
+   */
+  async unstage(projectDirectory: string, workspaceRoot: string, paths: string[]): Promise<void> {
+    const safe = this.safePaths(workspaceRoot, paths);
+    await this.ensureIndex(projectDirectory, workspaceRoot);
+    const context = [`--git-dir=${join(projectDirectory, "history.git")}`, `--work-tree=${workspaceRoot}`, "--literal-pathspecs"];
+    const hasHead = (await runGit([...context, "rev-parse", "--verify", "--quiet", "HEAD"], [0, 1])) === 0;
+    if (hasHead) await runGit([...context, "restore", "--staged", "--", ...safe]);
+    else await runGit([...context, "rm", "--cached", "-r", "--quiet", "--", ...safe]);
+  }
+
+  /**
+   * Discards worktree changes. THE ONLY DESTRUCTIVE OPERATION HERE.
+   *
+   * Tracked files are restored from the index, so a mistake is recoverable by
+   * re-running the edit. Untracked files are DELETED and cannot be recovered —
+   * callers must confirm before reaching this for one.
+   *
+   * A conflicted file is refused: `restore` has no meaningful answer for an
+   * unmerged path, and silently picking a side is worse than saying no.
+   */
+  async discard(projectDirectory: string, workspaceRoot: string, paths: string[]): Promise<void> {
+    const safe = this.safePaths(workspaceRoot, paths);
+    await this.ensureIndex(projectDirectory, workspaceRoot);
+    const status = await this.workingStatus(projectDirectory, workspaceRoot);
+    const byPath = new Map(status.files.map((file) => [file.path, file]));
+
+    const conflicted = safe.filter((path) => byPath.get(path)?.conflicted);
+    if (conflicted.length) {
+      throw new ApiError(409, "history_file_conflicted", `Resolve the conflict before discarding: ${conflicted.join(", ")}`);
+    }
+
+    const context = [`--git-dir=${join(projectDirectory, "history.git")}`, `--work-tree=${workspaceRoot}`, "--literal-pathspecs"];
+    const untracked = safe.filter((path) => byPath.get(path)?.untracked);
+    const tracked = safe.filter((path) => !byPath.get(path)?.untracked);
+
+    /*
+     * A staged deletion has to be restored from HEAD, not from the index: the
+     * index no longer holds the entry, so `restore --worktree` matches no
+     * pathspec and fails with "pathspec did not match any file(s) known to git".
+     * The file is not recovered. Every other tracked file restores from the
+     * index, which is what makes a discard undo the worktree edit while keeping
+     * what the user staged.
+     *
+     * The two groups go in SEPARATE invocations. Measured: one non-matching path
+     * aborts the whole `restore`, so a mixed call restores none of them — the
+     * ordinary files would silently keep their modifications while the caller
+     * reported the discard as done.
+     */
+    const stagedDeletions = tracked.filter((path) => byPath.get(path)?.staged === "D");
+    const rest = tracked.filter((path) => byPath.get(path)?.staged !== "D");
+    if (rest.length) await runGit([...context, "restore", "--worktree", "--", ...rest]);
+    if (stagedDeletions.length) await runGit([...context, "restore", "--source=HEAD", "--worktree", "--", ...stagedDeletions]);
+    /*
+     * `clean -f` without `-x`, so an ignored file is left alone — that is the
+     * safe default. Measured: it also exits 0 with no output when the path is
+     * ignored, tracked, or an untracked nested repository, so a clean exit is
+     * never proof the file went. Callers re-read status rather than trust it.
+     */
+    if (untracked.length) await runGit([...context, "clean", "-f", "--", ...untracked]);
+  }
+
+  /**
+   * Commits the index as it stands.
+   *
+   * Deliberately does NOT `add -A` first. The whole point of the index is that
+   * the user chose what goes in; a commit that stages everything would make
+   * their choice meaningless. Callers that want the old snapshot-everything
+   * behaviour call `snapshot`, which stages the whole tree first.
+   *
+   * Refuses an empty commit rather than creating one, because the sidebar's
+   * enabled/disabled state is derived from the same status the user sees — a
+   * commit that succeeds with nothing staged means those two disagree.
+   */
+  async commit(projectDirectory: string, workspaceRoot: string, message: string): Promise<string> {
+    await this.ensureIndex(projectDirectory, workspaceRoot);
+    const context = [`--git-dir=${join(projectDirectory, "history.git")}`, `--work-tree=${workspaceRoot}`];
+    if ((await runGit([...context, "diff", "--cached", "--quiet"], [0, 1])) === 0) {
+      throw new ApiError(409, "history_nothing_staged", "Nothing is staged to commit");
+    }
+    await runGit([...context, "commit", "--quiet", "-m", message]);
+    return (await runGitOutput([...context, "rev-parse", "HEAD"])).trim();
+  }
+
   private async changedFiles(context: string[], refs: string[]): Promise<HistoryChangedFile[]> {
     const args = [...context, "diff-tree", "--root", "--no-commit-id", "-r", "-M", "--no-ext-diff", "--no-textconv"];
     const [names, stats] = await Promise.all([
@@ -187,19 +351,36 @@ export class GitHistory {
     return side.content!;
   }
 
-  private async snapshotNow(projectDirectory: string, workspaceRoot: string, message: string, allowEmpty: boolean): Promise<string | undefined> {
+  /**
+   * Creates the managed repository if it is not there yet.
+   *
+   * Every entry point needs this, not just `snapshot`: a project created since
+   * the server started has no `history.git` until something writes one, and
+   * `git status` against a missing directory fails with a locale-dependent
+   * "not a git repository" that the route cannot turn into anything useful.
+   *
+   * The `info/exclude` file matters as much as the init: it is what keeps
+   * engine artifacts out of the status. Without it the sidebar shows build
+   * output as untracked, which is not a failure anything would notice.
+   */
+  private async ensureRepository(projectDirectory: string): Promise<string> {
     const gitDirectory = join(projectDirectory, "history.git");
-    if (!await exists(gitDirectory)) {
-      await mkdir(projectDirectory, { recursive: true });
-      await runGit(["init", "--bare", "--quiet", gitDirectory]);
-      await runGit([`--git-dir=${gitDirectory}`, "config", "core.bare", "false"]);
-      await runGit([`--git-dir=${gitDirectory}`, "config", "user.name", "FastWrite"]);
-      await runGit([`--git-dir=${gitDirectory}`, "config", "user.email", "history@fastwrite.local"]);
-      await mkdir(join(gitDirectory, "info"), { recursive: true });
-      await writeFile(join(gitDirectory, "info", "exclude"), `${EXCLUDES.join("\n")}\n`, "utf8");
-    }
+    if (await exists(gitDirectory)) return gitDirectory;
+    await mkdir(projectDirectory, { recursive: true });
+    await runGit(["init", "--bare", "--quiet", gitDirectory]);
+    await runGit([`--git-dir=${gitDirectory}`, "config", "core.bare", "false"]);
+    await runGit([`--git-dir=${gitDirectory}`, "config", "user.name", "FastWrite"]);
+    await runGit([`--git-dir=${gitDirectory}`, "config", "user.email", "history@fastwrite.local"]);
+    await mkdir(join(gitDirectory, "info"), { recursive: true });
+    await writeFile(join(gitDirectory, "info", "exclude"), `${EXCLUDES.join("\n")}\n`, "utf8");
+    return gitDirectory;
+  }
+
+  private async snapshotNow(projectDirectory: string, workspaceRoot: string, message: string, allowEmpty: boolean): Promise<string | undefined> {
+    const gitDirectory = await this.ensureRepository(projectDirectory);
 
     const context = [`--git-dir=${gitDirectory}`, `--work-tree=${workspaceRoot}`];
+    await this.ensureIndex(projectDirectory, workspaceRoot);
     await runGit([...context, "add", "-A", "--", "."]);
     const changed = await runGit([...context, "diff", "--cached", "--quiet"], [0, 1]);
     if (changed === 0 && !allowEmpty) return undefined;

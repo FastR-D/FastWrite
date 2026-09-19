@@ -1158,3 +1158,30 @@ export interface HistoryWorkingComparison extends HistoryComparison {
   projectVersion: number;
   snapshotId: string;
 }
+
+/**
+ * How a file changed, in one direction. `U` is deliberately absent: an unmerged
+ * file is a merge state (`UU`, `AA`, `DD`…), not a kind of change, and mapping
+ * it onto this vocabulary would report a conflict as a plain modification.
+ */
+export type ChangeStatus = "A" | "M" | "D" | "R" | "T";
+
+export interface WorkingFile {
+  path: string;
+  /** Present only for a rename or copy. */
+  oldPath?: string;
+  /** index vs HEAD — what the next commit would record. Null when conflicted or untracked. */
+  staged: ChangeStatus | null;
+  /** worktree vs index — what changed since it was staged. Null when conflicted or untracked. */
+  unstaged: ChangeStatus | null;
+  /** In neither HEAD nor the index. Rendered as `U`. */
+  untracked: boolean;
+  /** Unmerged. Must be resolved before it can be staged or committed. */
+  conflicted: boolean;
+}
+
+export interface WorkingStatus {
+  /** The commit HEAD points at, or null in a repository with no commits. */
+  head: string | null;
+  files: WorkingFile[];
+}
