@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeSet, ClaimEvidenceLink, FastReadBundleReceipt, PaperClaim, PaperProject, ProjectResearchWorkDetails, ResearchRun, SourceEvidence, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { ChangeSet, ClaimEvidenceLink, CitationReviewer, FastReadBundleReceipt, PaperClaim, PaperProject, ProjectResearchWorkDetails, ResearchRun, SourceEvidence, WorkspaceTreeNode } from "@fastwrite/shared";
 import { api } from "../../api/client";
-import { Button, Dialog, Field, Icon, IconButton, Select, Stepper, TextField, icons } from "../ui";
+import { Button, Dialog, Field, Icon, IconButton, Select, Stepper, TextArea, TextField, icons } from "../ui";
 
 type ResearchWorkView = ProjectResearchWorkDetails;
 type ResearchTab = "sources" | "evidence" | "claims";
@@ -17,15 +17,24 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
   const [evidence, setEvidence] = useState<SourceEvidence[]>([]);
   const [claims, setClaims] = useState<PaperClaim[]>([]);
   const [links, setLinks] = useState<ClaimEvidenceLink[]>([]);
+  const [citationReviewer, setCitationReviewer] = useState<CitationReviewer | null>(null);
   const [bibPath, setBibPath] = useState("references.bib");
   const [bibPaths, setBibPaths] = useState<string[]>([]);
   const [pendingBibtex, setPendingBibtex] = useState<ChangeSet | null>(null);
   const [evidenceChoice, setEvidenceChoice] = useState<Record<string, string>>({});
   const [waiverReasons, setWaiverReasons] = useState<Record<string, string>>({});
   const [providerResults, setProviderResults] = useState<ResearchRun["providers"]>([]);
+  const [latestRun, setLatestRun] = useState<ResearchRun | null>(null);
+  const [screening, setScreening] = useState<Record<string, { decision: "included" | "excluded" | "uncertain"; reason: string }>>({});
+  const [protocolOpen, setProtocolOpen] = useState(false);
+  const [protocol, setProtocol] = useState({ steps: "", rationale: "", inclusionCriteria: "", exclusionCriteria: "", extractionFields: "" });
   const [citationContexts, setCitationContexts] = useState<Record<string, CitationContext>>({});
   const [manualOpen, setManualOpen] = useState(false);
   const [manualSource, setManualSource] = useState<ManualSource>(EMPTY_MANUAL_SOURCE);
+  const [evidenceStance, setEvidenceStance] = useState<Record<string, SourceEvidence["stance"]>>({});
+  const [evidenceRepresentation, setEvidenceRepresentation] = useState<Record<string, SourceEvidence["representation"]>>({});
+  const [pdfWorkId, setPdfWorkId] = useState("");
+  const [pdfAuthorized, setPdfAuthorized] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -35,12 +44,13 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
   const approvedEvidence = evidence.filter((item) => item.status === "approved");
 
   const load = async () => {
-    const [nextWorks, nextBundles, nextEvidence, nextClaims, nextLinks, tree] = await Promise.all([
+    const [nextWorks, nextBundles, nextEvidence, nextClaims, nextLinks, nextReviewer, tree] = await Promise.all([
       api.research.works(project.id),
       api.research.fastReadBundles(project.id),
       api.claims.evidence(project.id),
       api.claims.list(project.id),
       api.claims.links(project.id),
+      api.claims.citationReviewer(project.id),
       api.projects.tree(project.id)
     ]);
     setWorks(nextWorks);
@@ -48,10 +58,21 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
     setEvidence(nextEvidence);
     setClaims(nextClaims);
     setLinks(nextLinks);
+    setCitationReviewer(nextReviewer);
+    if (latestRun) {
+      const records = await api.research.screening(project.id, latestRun.id);
+      setScreening(Object.fromEntries(records.map((record) => [record.workId, { decision: record.decision, reason: record.reason ?? "" }])));
+    }
     const discovered = bibliographyPaths(tree);
     setBibPaths(discovered);
     if (discovered.length && !discovered.includes(bibPath)) setBibPath(discovered[0]!);
   };
+
+  const saveScreening = (work: ResearchWorkView, decision: "included" | "excluded" | "uncertain", reason: string) => perform(`screen:${work.id}`, async () => {
+    if (!latestRun) throw new Error("Run a research query before screening results.");
+    await api.research.updateScreening(project.id, latestRun.id, work.id, { decision, ...(reason.trim() ? { reason: reason.trim() } : {}) });
+    setScreening((current) => ({ ...current, [work.id]: { decision, reason } }));
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -78,6 +99,7 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
     try {
       const result = await api.research.search(project.id, query, controller.signal);
       setProviderResults(result.run.providers ?? []);
+      setLatestRun(result.run);
       await load();
       const failed = result.run.providers?.filter((item) => item.status === "failed").length ?? 0;
       setMessage(result.run.status === "failed" ? result.run.error || "All research providers failed." : `Research completed with ${result.works.length} result${result.works.length === 1 ? "" : "s"}${failed ? `; ${failed} provider${failed === 1 ? "" : "s"} unavailable` : ""}.`);
@@ -89,6 +111,13 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
       setBusy(null);
     }
   };
+
+  const saveProtocol = () => perform("protocol:save", async () => {
+    if (!latestRun) throw new Error("Run a research query before editing its protocol.");
+    const split = (value: string) => value.split(/\n|;/).map((item) => item.trim()).filter(Boolean);
+    const updated = await api.research.updatePlan(project.id, latestRun.id, { steps: split(protocol.steps), rationale: protocol.rationale, inclusionCriteria: split(protocol.inclusionCriteria), exclusionCriteria: split(protocol.exclusionCriteria), extractionFields: split(protocol.extractionFields) });
+    setLatestRun(updated); setProtocolOpen(false); setMessage("Research protocol saved with the query run.");
+  });
 
   const importBundles = (manifestPath?: string) => perform(`bundle:${manifestPath ?? "all"}`, async () => {
     const results = await api.research.importFastReadBundles(project.id, manifestPath);
@@ -148,8 +177,32 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
   });
 
   const updateEvidence = (item: SourceEvidence, status: SourceEvidence["status"]) => perform(`evidence:${item.id}`, async () => {
-    await api.claims.updateEvidence(project.id, item.id, status);
+    await api.claims.updateEvidence(project.id, item.id, { status });
     await load();
+  });
+
+  const saveStance = (item: SourceEvidence, stance: NonNullable<SourceEvidence["stance"]>) => perform(`stance:${item.id}`, async () => {
+    await api.claims.updateEvidence(project.id, item.id, { stance });
+    await load();
+  });
+
+  const saveRepresentation = (item: SourceEvidence, representation: SourceEvidence["representation"]) => perform(`representation:${item.id}`, async () => {
+    await api.claims.updateEvidence(project.id, item.id, { representation });
+    await load();
+  });
+
+  const importPdf = (file: File | undefined) => perform("pdf:import", async () => {
+    if (!pdfAuthorized) throw new Error("Confirm that you are authorized to process this PDF first.");
+    if (!pdfWorkId) throw new Error("Choose an approved source before importing a PDF.");
+    if (!file) throw new Error("Choose a PDF file.");
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) throw new Error("Choose a PDF file.");
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    const chunk = 0x8000;
+    for (let index = 0; index < bytes.length; index += chunk) binary += String.fromCharCode(...bytes.subarray(index, Math.min(index + chunk, bytes.length)));
+    await api.research.pdfEvidence(project.id, pdfWorkId, btoa(binary));
+    await load();
+    setMessage("PDF pages imported as candidate evidence. Review each page before approval.");
   });
 
   const scanClaims = () => perform("claims:scan", async () => {
@@ -213,7 +266,8 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
         </section>
 
         <section className="research-section">
-          <header><div><h3>Academic sources</h3><p>Provider results keep their provenance and partial failures stay visible. Manual import remains available offline.</p></div><Button size="small" variant="ghost" icon={<Icon name={icons.newFile} />} onClick={() => setManualOpen((value) => !value)}>Add manually</Button></header>
+          <header><div><h3>Academic sources</h3><p>Provider results keep their provenance and partial failures stay visible. Manual import remains available offline.</p></div><div><Button size="small" variant="ghost" icon={<Icon name={icons.listTree} />} onClick={() => { const plan = latestRun?.queryPlan; setProtocol({ steps: plan?.steps.join("\n") ?? "Identify relevant literature", rationale: plan?.rationale ?? "", inclusionCriteria: plan?.inclusionCriteria?.join("\n") ?? "", exclusionCriteria: plan?.exclusionCriteria?.join("\n") ?? "", extractionFields: plan?.extractionFields?.join("\n") ?? "" }); setProtocolOpen((value) => !value); }}>Research protocol</Button><Button size="small" variant="ghost" icon={<Icon name={icons.newFile} />} onClick={() => setManualOpen((value) => !value)}>Add manually</Button></div></header>
+          {protocolOpen ? <div className="research-protocol"><Field label="Query steps"><TextArea value={protocol.steps} onChange={(value) => setProtocol((current) => ({ ...current, steps: value }))} placeholder="One step per line" /></Field><Field label="Rationale"><TextArea value={protocol.rationale} onChange={(value) => setProtocol((current) => ({ ...current, rationale: value }))} /></Field><div className="form-grid"><Field label="Inclusion criteria"><TextArea value={protocol.inclusionCriteria} onChange={(value) => setProtocol((current) => ({ ...current, inclusionCriteria: value }))} placeholder="Peer-reviewed; 2020 onward" /></Field><Field label="Exclusion criteria"><TextArea value={protocol.exclusionCriteria} onChange={(value) => setProtocol((current) => ({ ...current, exclusionCriteria: value }))} placeholder="Retracted; outside scope" /></Field></div><Field label="Extraction fields"><TextArea value={protocol.extractionFields} onChange={(value) => setProtocol((current) => ({ ...current, extractionFields: value }))} placeholder="Population; method; outcome" /></Field><div><Button size="small" variant="ghost" onClick={() => setProtocolOpen(false)}>Cancel</Button><Button size="small" loading={busy === "protocol:save"} onClick={() => void saveProtocol()}>Save protocol</Button></div></div> : null}
           {manualOpen ? <div className="research-manual-source" aria-label="Manual source import">
             <Field label="Title *"><TextField value={manualSource.title} onChange={(next) => setManualSource((current) => ({ ...current, title: next }))} /></Field>
             <Field label="Authors"><TextField value={manualSource.authors} onChange={(next) => setManualSource((current) => ({ ...current, authors: next }))} placeholder="Ada Lovelace, Alan Turing" /></Field>
@@ -235,6 +289,7 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
               <div className="research-source-provenance">{work.metadataStatus === "conflicting" ? <span className="is-conflict"><Icon name={icons.warning} />metadata conflict</span> : null}{providers.map((provider) => <span key={provider}>{providerLabel(provider)}</span>)}{work.identifiers.slice(0, 3).map((identifier) => <code key={`${identifier.scheme}:${identifier.value}`}>{identifier.scheme}: {identifier.value}</code>)}</div>
               {work.publicationStatus === "retracted" ? <strong className="text-danger">Retracted — do not cite without explicit justification.</strong> : work.publicationStatus === "corrected" ? <strong className="text-warning">Correction or erratum available.</strong> : null}
               <div className="research-work-actions">
+                {latestRun ? <div className="research-screening"><Select aria-label={`Screening decision for ${work.title}`} value={screening[work.id]?.decision ?? "uncertain"} onChange={(next) => { const decision = next as "included" | "excluded" | "uncertain"; const reason = screening[work.id]?.reason ?? ""; setScreening((current) => ({ ...current, [work.id]: { decision, reason } })); void saveScreening(work, decision, reason); }} options={[{ value: "uncertain", label: "Screen: uncertain" }, { value: "included", label: "Screen: include" }, { value: "excluded", label: "Screen: exclude" }]} /><TextField aria-label={`Screening reason for ${work.title}`} value={screening[work.id]?.reason ?? ""} onChange={(reason) => setScreening((current) => ({ ...current, [work.id]: { decision: current[work.id]?.decision ?? "uncertain", reason } }))} onBlur={() => { const record = screening[work.id]; if (record) void saveScreening(work, record.decision, record.reason); }} placeholder="Reason / extracted note" /></div> : null}
                 <Button size="small" variant="ghost" loading={busy === `verify:${work.id}`} onClick={() => void verifyMetadata(work)}>Verify DOI</Button>
                 {work.project.status === "saved" ? <em>Approved · {work.project.citationKey || "key pending"}</em> : <Button size="small" loading={busy === `work:${work.id}`} onClick={() => void approveWork(work)}>Approve metadata</Button>}
                 {work.project.status === "saved" ? <><Button size="small" variant="ghost" loading={busy === `context:${work.id}`} onClick={() => void inspectCitations(work)}>Find citations</Button><Button size="small" variant="ghost" loading={busy === `bibtex:${work.id}`} onClick={() => void proposeBibtex(work)}>Propose BibTeX</Button></> : null}
@@ -248,20 +303,23 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
         {pendingBibtex ? <section className="research-bibtex-review"><header><div><h3>Review BibTeX ChangeSet</h3><p>{pendingBibtex.summary}</p></div><span>Explicit approval</span></header><pre>{pendingBibtex.changes[0]?.after}</pre><div><Button variant="ghost" onClick={() => setPendingBibtex(null)}>Cancel</Button><Button loading={busy === "bibtex:apply"} onClick={() => void applyBibtex()}>Apply to paper</Button></div></section> : null}
       </div> : null}
 
-      {tab === "evidence" ? <div className="research-view"><section className="research-section"><header><div><h3>Evidence inbox</h3><p>FastRead exact quotes arrive approved with page and source hash. Other evidence requires an explicit decision.</p></div></header><div className="research-evidence-list">
+      {tab === "evidence" ? <div className="research-view"><section className="research-section"><header><div><h3>Evidence reader</h3><p>Only process papers you are authorized to use. PDF pages become candidate evidence with a source hash; approval remains explicit.</p></div></header><div className="research-reader-controls"><Field label="Approved source"><Select value={pdfWorkId} onChange={setPdfWorkId} options={[{ value: "", label: "Choose a saved source…" }, ...works.filter((work) => work.project.status === "saved").map((work) => ({ value: work.id, label: work.title }))]} /></Field><label className="checkbox-field"><input type="checkbox" checked={pdfAuthorized} onChange={(event) => setPdfAuthorized(event.target.checked)} /> I am authorized to process this PDF and its excerpts.</label><input aria-label="Import authorized PDF" type="file" accept="application/pdf,.pdf" disabled={!pdfAuthorized || !pdfWorkId || busy === "pdf:import"} onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; void importPdf(file); }} /></div><div className="research-evidence-list">
         {evidence.length ? evidence.map((item) => <article key={item.id}>
-          <header><span className={`research-status is-${item.status}`}>{item.status}</span><strong>{workById.get(item.workId)?.title || "Unknown source"}</strong><small>{item.locatorType} {item.locator}</small></header>
+          <header><span className={`research-status is-${item.status}`}>{item.status}</span><strong>{workById.get(item.workId)?.title || "Unknown source"}</strong><small>{item.locatorType} {item.locator}</small>{item.stance ? <span className={`research-status is-${item.stance}`}>stance: {item.stance}</span> : null}</header>
           <blockquote>{item.content}</blockquote>
-          <footer><span>{item.fastReadBundleId ? `FastRead ${item.fastReadBundleId}` : item.origin}{item.sourceHash ? ` · hash ${item.sourceHash.slice(0, 12)}…` : ""}</span><div>{item.status !== "rejected" ? <Button size="small" variant="ghost" loading={busy === `evidence:${item.id}`} onClick={() => void updateEvidence(item, "rejected")}>Reject</Button> : null}{item.status !== "approved" ? <Button size="small" loading={busy === `evidence:${item.id}`} onClick={() => void updateEvidence(item, "approved")}>Approve</Button> : null}</div></footer>
+          <footer><span>{item.fastReadBundleId ? `FastRead ${item.fastReadBundleId}` : item.origin}{item.sourceHash ? ` · hash ${item.sourceHash.slice(0, 12)}…` : ""}</span><div><Select aria-label={`Evidence representation for ${item.content.slice(0, 40)}`} value={evidenceRepresentation[item.id] ?? item.representation} onChange={(next) => { const representation = next as SourceEvidence["representation"]; setEvidenceRepresentation((current) => ({ ...current, [item.id]: representation })); void saveRepresentation(item, representation); }} options={[{ value: "verbatim", label: "Verbatim" }, { value: "paraphrase", label: "Paraphrase" }]} /><Select aria-label={`Citation stance for ${item.content.slice(0, 40)}`} value={evidenceStance[item.id] ?? item.stance ?? "unknown"} onChange={(next) => { const stance = next as NonNullable<SourceEvidence["stance"]>; setEvidenceStance((current) => ({ ...current, [item.id]: stance })); void saveStance(item, stance); }} options={[{ value: "unknown", label: "Stance unknown" }, { value: "supports", label: "Supports" }, { value: "contradicts", label: "Contradicts" }, { value: "mentions", label: "Mentions" }]} />{item.status !== "rejected" ? <Button size="small" variant="ghost" loading={busy === `evidence:${item.id}`} onClick={() => void updateEvidence(item, "rejected")}>Reject</Button> : null}{item.status !== "approved" ? <Button size="small" loading={busy === `evidence:${item.id}`} onClick={() => void updateEvidence(item, "approved")}>Approve</Button> : null}</div></footer>
         </article>) : <div className="research-empty"><Icon name={icons.passFilled} /><strong>No evidence yet</strong><span>Import FastRead exact quotes or add evidence from an approved source.</span></div>}
       </div></section></div> : null}
 
       {tab === "claims" ? <div className="research-view"><section className="research-section"><header><div><h3>Claim–evidence map</h3><p>Scan manuscript claims, bind approved evidence, then mark the claim supported.</p></div><Button size="small" icon={<Icon name={icons.searchFuzzy} />} loading={busy === "claims:scan"} onClick={() => void scanClaims()}>Scan manuscript</Button></header><div className="research-claims-list">
+        {citationReviewer ? <div className="research-notice" role="status"><Icon name={icons.verified} /><span>Citation review: {citationReviewer.counts.cited}/{citationReviewer.counts.total} cited · {citationReviewer.counts.supported} supported · {citationReviewer.counts.missing} missing citations · {citationReviewer.counts.unresolved} unresolved anchors</span></div> : null}
         {claims.length ? claims.map((claim) => {
           const claimLinks = links.filter((link) => link.claimId === claim.id);
+          const reviewItem = citationReviewer?.items.find((item) => item.claim.id === claim.id);
           return <article key={claim.id}>
             <header><span className={`research-status is-${claim.reviewStatus}`}>{claim.reviewStatus}</span><strong>{claim.type}</strong><small>{claim.anchor.path} · {claim.anchorStatus}</small></header>
             <blockquote>{claim.anchor.exactText}</blockquote>
+            {reviewItem ? <div className="research-claim-review-status"><span className={`research-status is-${reviewItem.citationStatus}`}>Citation: {reviewItem.citationStatus}</span><span className={`research-status is-${reviewItem.evidenceStatus}`}>Evidence: {reviewItem.evidenceStatus}</span><span>metadata {reviewItem.metadataVerifiedCount} verified · {reviewItem.metadataConflictCount} conflicts</span></div> : null}
             {claimLinks.length ? <div className="research-linked-evidence">{claimLinks.map((link) => {
               const item = link.kind === "literature" ? evidence.find((candidate) => candidate.id === link.evidenceId) : undefined;
               const label = link.kind === "literature" ? (item ? `${item.locatorType} ${item.locator}: ${item.content.slice(0, 90)}` : link.evidenceId) : link.kind === "review-waiver" ? `User waiver: ${link.reason}` : `Workspace ${link.path}: ${link.anchor.exactText.slice(0, 90)}`;

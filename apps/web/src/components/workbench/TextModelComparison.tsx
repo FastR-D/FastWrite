@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
+import * as monaco from "monaco-editor";
 import { configureMonaco } from "../../lib/editor/monaco";
 import { Button, Checkbox } from "../ui";
 

@@ -57,4 +57,9 @@ describe("published Skill manifests", () => {
   test("rejects a manifest with an unbounded or mismatched release identity", () => {
     expect(() => parseSkillManifest(JSON.stringify({ id: "review", version: "1.0.0", scope: "system", owner: "FastWrite", license: "Apache-2.0", workflows: ["review"], requiredEvidence: [], capabilities: [], maxContextChars: 0, riskLevel: "low", requiresReview: true, references: [] }), "different")).toThrow();
   });
+  test("validates bounded fixtures, eval metadata and revocation", () => {
+    const manifest = parseSkillManifest(JSON.stringify({ id: "review", version: "1.0.0", scope: "system", owner: "FastWrite", license: "Apache-2.0", workflows: ["review"], requiredEvidence: [], capabilities: ["workspace.read"], maxContextChars: 1000, riskLevel: "medium", requiresReview: true, fixtures: [{ id: "basic", input: "input", expected: "output" }], eval: { status: "passed", score: 0.9, checkedAt: "2026-09-21" }, revoked: true, revokedReason: "Superseded", references: [] }), "review");
+    expect(manifest).toMatchObject({ fixtures: [{ id: "basic" }], eval: { status: "passed", score: 0.9 }, revoked: true, revokedReason: "Superseded" });
+    expect(() => parseSkillManifest(JSON.stringify({ id: "review", version: "1.0.0", scope: "system", owner: "FastWrite", license: "Apache-2.0", workflows: [], requiredEvidence: [], capabilities: [], maxContextChars: 1000, riskLevel: "medium", requiresReview: true, eval: { status: "passed", score: 2 }, references: [] }), "review")).toThrow();
+  });
 });

@@ -71,6 +71,15 @@ export class TeamService {
       if (index < 0) throw new ApiError(404, "team_member_not_found", "Team member not found");
       if (state.teamMembers[index]!.role === "owner") throw new ApiError(409, "team_owner_remove_protected", "Transfer ownership before removing an owner");
       state.teamMembers.splice(index, 1);
+      const now = new Date().toISOString();
+      for (const job of state.jobs) {
+        const projectId = job.policy?.projectId;
+        if (job.policy?.actorUserId !== userId || !projectId || !["queued", "running"].includes(job.status)) continue;
+        if (state.projects.some((project) => project.id === projectId && project.teamId === teamId)) {
+          job.status = "cancelled";
+          job.updatedAt = now;
+        }
+      }
       state.auditEvents.push(audit(principal.user.id, "team.member.remove", "team", teamId));
     });
   }

@@ -119,7 +119,18 @@ export class ReviewService {
       const synthesizedIssues = dedupeIssues([...evidenceIssues, ...guardIssues, ...adversarialIssues, ...issues]);
       const boundary = `${documents.length} files/${contextBytes} bytes${boundedPageText.length ? "+pdf-preview" : ""}`;
       const passCoverageIncomplete = Object.values(providerPasses).some((pass) => pass.status !== "completed");
-      const report: ReviewReport = { id: reportId, projectId, agentRunId: run.id, snapshotId: snapshot.id, overallAssessment: passCoverageIncomplete ? `${String(result.overallAssessment ?? "Review completed.").trim()} Review coverage is incomplete; inspect failed passes before treating this report as clean.` : String(result.overallAssessment ?? "Review completed."), recommendation: passCoverageIncomplete ? "borderline" : result.recommendation, strengths: Array.isArray(result.strengths) ? result.strengths.filter(Boolean).map(String) : [], weaknesses: Array.isArray(result.weaknesses) ? result.weaknesses.filter(Boolean).map(String) : [], nextSteps: Array.isArray(result.nextSteps) ? result.nextSteps.filter(Boolean).map(String) : [], issues: synthesizedIssues, passes: [
+      const passList: Array<{ id: string; status: "completed" | "failed" | "skipped" }> = [
+        { id: "mechanical", status: "completed" as const },
+        { id: "evidence", status: "completed" as const },
+        { id: "argument", status: "completed" as const },
+        { id: "domain", status: providerPasses.domain?.status ?? "failed" as const },
+        { id: "venue", status: providerPasses.venue?.status ?? "failed" as const },
+        { id: "adversarial", status: "completed" as const }
+      ];
+      const failedPasses = passList.filter((pass) => pass.status === "failed").length;
+      const skippedPasses = passList.filter((pass) => pass.status === "skipped").length;
+      const coverage = { required: passList.length, completed: passList.filter((pass) => pass.status === "completed").length, failed: failedPasses, skipped: skippedPasses, unavailable: failedPasses, eligibleForClean: !passCoverageIncomplete && failedPasses === 0 && skippedPasses === 0, blockingIssues: synthesizedIssues.filter((issue) => issue.severity === "blocking" && issue.status !== "resolved" && issue.status !== "dismissed").length, unresolvedIssues: synthesizedIssues.filter((issue) => issue.status !== "resolved" && issue.status !== "dismissed").length, inputBoundary: boundary };
+      const report: ReviewReport = { id: reportId, projectId, agentRunId: run.id, snapshotId: snapshot.id, overallAssessment: passCoverageIncomplete ? `${String(result.overallAssessment ?? "Review completed.").trim()} Review coverage is incomplete; inspect failed passes before treating this report as clean.` : String(result.overallAssessment ?? "Review completed."), recommendation: passCoverageIncomplete ? "borderline" : result.recommendation, strengths: Array.isArray(result.strengths) ? result.strengths.filter(Boolean).map(String) : [], weaknesses: Array.isArray(result.weaknesses) ? result.weaknesses.filter(Boolean).map(String) : [], nextSteps: Array.isArray(result.nextSteps) ? result.nextSteps.filter(Boolean).map(String) : [], issues: synthesizedIssues, coverage, passes: [
         { id: "mechanical", status: "completed", issues: guardIssues.map((issue) => issue.id), provider: "writing-guard", inputBoundary: boundary },
         { id: "evidence", status: "completed", issues: evidenceIssues.map((issue) => issue.id), provider: "evidence-check", inputBoundary: boundary },
         { id: "argument", status: "completed", issues: [], provider: "argument-check", inputBoundary: boundary },
@@ -148,6 +159,12 @@ export class ReviewService {
   }
 
   list(projectId: string): ReviewReport[] { const project = this.workspaces.getProject(projectId); return this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((report) => ({ ...report, stale: report.createdFromProjectVersion !== undefined ? report.createdFromProjectVersion !== project.version : false })); }
+
+  coverage(projectId: string): { reportId?: string; eligibleForClean: boolean; required: number; completed: number; failed: number; skipped: number; unavailable: number; blockingIssues: number; unresolvedIssues: number } {
+    const latest = this.list(projectId)[0];
+    const passes = latest?.passes ?? [];
+    return { ...(latest ? { reportId: latest.id } : {}), eligibleForClean: latest?.coverage?.eligibleForClean ?? false, required: latest?.coverage?.required ?? passes.length, completed: latest?.coverage?.completed ?? passes.filter((pass) => pass.status === "completed").length, failed: latest?.coverage?.failed ?? passes.filter((pass) => pass.status === "failed").length, skipped: latest?.coverage?.skipped ?? passes.filter((pass) => pass.status === "skipped").length, unavailable: latest?.coverage?.unavailable ?? passes.filter((pass) => pass.unavailableReason || pass.status === "failed").length, blockingIssues: latest?.coverage?.blockingIssues ?? latest?.issues.filter((issue) => issue.severity === "blocking" && issue.status !== "resolved" && issue.status !== "dismissed").length ?? 0, unresolvedIssues: latest?.coverage?.unresolvedIssues ?? latest?.issues.filter((issue) => issue.status !== "resolved" && issue.status !== "dismissed").length ?? 0 };
+  }
 
   updateIssue(projectId: string, issueId: string, updates: { status?: ReviewIssueStatus; priority?: number; reason?: string }): Promise<ReviewIssue> {
     if (updates.priority !== undefined && (!Number.isInteger(updates.priority) || updates.priority < 0 || updates.priority > 10_000)) throw new ApiError(400, "invalid_priority", "Issue priority must be an integer between 0 and 10,000");

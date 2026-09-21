@@ -179,6 +179,9 @@ export interface NotificationPreference { userId: string; type: UserNotification
 export interface NotificationDelivery { id: string; notificationId: string; userId: string; channel: "email"; status: "pending" | "sent" | "failed" | "suppressed"; attempts: number; recipientEmail: string; subject: string; text: string; nextAttemptAt?: string; lastError?: string; sentAt?: string; createdAt: string; updatedAt: string; }
 export interface AuditEvent { id: string; actorUserId?: string; action: string; resourceType: string; resourceId: string; requestId?: string; metadata?: Record<string, string>; createdAt: string; }
 
+export type SupportAccessStatus = "pending" | "approved" | "denied" | "expired" | "revoked";
+export interface SupportAccessRequest { id: string; requesterUserId: string; approverUserId?: string; projectId: string; pathPrefix: string; ticketId: string; reason: string; expiresAt: string; status: SupportAccessStatus; tokenHash?: string; createdAt: string; updatedAt: string; }
+
 export type HarnessProfileScope = "system" | "team" | "user";
 export interface HarnessProfile {
   id: string;
@@ -656,6 +659,7 @@ export interface ReviewReport {
   inputType?: "source" | "pdf-preview";
   createdFromProjectVersion?: number;
   stale?: boolean;
+  coverage?: { required: number; completed: number; failed: number; skipped: number; unavailable: number; eligibleForClean: boolean; blockingIssues: number; unresolvedIssues: number; inputBoundary?: string };
   passes?: Array<{ id: "mechanical" | "evidence" | "argument" | "domain" | "venue" | "adversarial" | "synthesis"; status: "completed" | "failed" | "skipped"; issues: string[]; error?: string; provider?: string; model?: string; inputBoundary?: string; unavailableReason?: string }>;
   createdAt: string;
 }
@@ -778,6 +782,21 @@ export interface AgentTaskSkillDescriptor {
   requiresReview: boolean;
 }
 
+export interface PublishedSkillDescriptor {
+  id: string;
+  version: string;
+  scope: "system" | "team" | "project";
+  owner: string;
+  license: string;
+  workflows: string[];
+  requiredEvidence: string[];
+  capabilities: string[];
+  maxContextChars: number;
+  riskLevel: "low" | "medium" | "high";
+  requiresReview: boolean;
+  references: Array<{ url: string; license: string; verifiedAt: string }>;
+}
+
 export type AgentTaskStatus = "proposed" | "generating" | "waiting-approval" | "accepted" | "cancelled" | "failed";
 
 export interface AgentTaskPlan {
@@ -864,12 +883,36 @@ export interface ResearchRun {
   query: string;
   status: ResearchRunStatus;
   provider?: string;
-  queryPlan?: { steps: string[]; rationale?: string };
+  queryPlan?: { steps: string[]; rationale?: string; inclusionCriteria?: string[]; exclusionCriteria?: string[]; extractionFields?: string[] };
   providers?: ResearchProviderResult[];
   workIds: string[];
   error?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type ResearchScreeningDecision = "included" | "excluded" | "uncertain";
+export interface ResearchScreeningRecord {
+  id: string;
+  projectId: string;
+  runId: string;
+  workId: string;
+  decision: ResearchScreeningDecision;
+  reason?: string;
+  extracted?: Record<string, string>;
+  decidedAt: string;
+  updatedAt: string;
+}
+
+export interface TableEquationCandidate {
+  kind: "table" | "equation";
+  projectId: string;
+  targetPath: string;
+  sourceFormat: "csv" | "natural-language" | "latex";
+  schema: { columns?: string[]; rows?: number; variables?: string[]; units?: Record<string, string> };
+  preview: string;
+  changeSet: ChangeSet;
+  compileCheck: { status: "not-run" | "passed" | "failed"; message?: string };
 }
 
 export interface ResearchIdentifier {
@@ -913,6 +956,7 @@ export interface SourceEvidence {
   createdAt: string;
   updatedAt: string;
   citationKey?: string;
+  stance?: "supports" | "contradicts" | "mentions" | "unknown";
 }
 
 export interface ClaimAnchor {
@@ -939,6 +983,40 @@ export interface PaperClaim {
   semanticType?: "background" | "contribution" | "method" | "result" | "comparison" | "limitation";
   normalizedText?: string;
   numbers?: Array<{ raw: string; normalized: number; unit?: string; metric?: string; direction?: "higher" | "lower"; aggregation?: string }> | undefined;
+}
+
+export interface ClaimEvidenceSummary {
+  claim: PaperClaim;
+  links: ClaimEvidenceLink[];
+  evidence: SourceEvidence[];
+  support: "supported" | "partial" | "unsupported" | "unresolved";
+}
+
+export interface EvidenceCockpit {
+  projectId: string;
+  projectVersion: number;
+  claims: ClaimEvidenceSummary[];
+  counts: { total: number; supported: number; partial: number; unsupported: number; unresolved: number; stale: number; orphaned: number };
+  generatedAt: string;
+}
+
+export interface CitationReviewItem {
+  claim: PaperClaim;
+  citationKeys: string[];
+  linkedEvidenceCount: number;
+  approvedEvidenceCount: number;
+  metadataVerifiedCount: number;
+  metadataConflictCount: number;
+  citationStatus: "cited" | "missing" | "unresolved";
+  evidenceStatus: "supported" | "partial" | "unsupported" | "unresolved";
+}
+
+export interface CitationReviewer {
+  projectId: string;
+  projectVersion: number;
+  items: CitationReviewItem[];
+  counts: { total: number; cited: number; missing: number; unresolved: number; supported: number; partial: number; unsupported: number };
+  generatedAt: string;
 }
 
 export interface SectionContract {

@@ -19,6 +19,7 @@ export async function startServer() {
   mailTimer.unref?.();
   console.log(`FastWrite server: http://localhost:${config.port}`);
   console.log(`Workspace data: ${config.dataDirectory}`);
+  if (config.features.multiNodeCollaboration && !config.redisUrl) console.warn("FASTWRITE_MULTI_NODE_COLLABORATION is enabled but FASTWRITE_REDIS_URL is not configured; collaboration remains single-node.");
   return server;
 }
 

@@ -1,6 +1,6 @@
 import type { NavigationRequest } from "../../lib/editor/navigationController";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type MutableRefObject } from "react";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
+import * as monaco from "monaco-editor";
 import { configureMonaco } from "../../lib/editor/monaco";
 import { Button, Checkbox, Icon, icons } from "../ui";
 import type { CompletionKind, CompletionResponse, FileContentResponse, SourceLocation, TextSelection } from "@fastwrite/shared";

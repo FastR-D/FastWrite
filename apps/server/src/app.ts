@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, createHash, randomBytes } from "node:crypto";
 import { DiagramService } from "./diagrams/service";
 import { diagramProvider } from "./diagrams/provider";
 import { diagramPrompt, diagramSchema } from "./diagrams/scene";
@@ -27,7 +27,9 @@ import type {
   WorkspaceTreeNode,
   OutlineItem,
   PaperClaim,
-  ReviewReport
+  ReviewReport,
+  SourceEvidence,
+  EvidenceCockpit, CitationReviewer
   ,AgentWireApi
 } from "@fastwrite/shared";
 import type { AgentProvider } from "./agent/provider";
@@ -59,6 +61,7 @@ import { writingGuardMany } from "./writing/writing-guard";
 import { deriveArgumentGraph } from "./claims/argument-graph";
 import { buildAdversarialMemo } from "./claims/adversarial-memo";
 import { normalizePlaceholderFindings } from "./agent/citation-findings";
+import { normalizeWorkspacePath } from "@fastwrite/shared";
 import { HarnessRegistry, McpRegistry, type McpServerDefinition } from "@fastwrite/harness-core";
 import { CodexHarnessAdapter } from "@fastwrite/harness-codex";
 import { ClaudeHarnessAdapter } from "@fastwrite/harness-claude";
@@ -74,6 +77,15 @@ import { CollaborationService } from "./collaboration/collaboration-service";
 import { CommentService } from "./comments/comment-service";
 import { CasIdentityProvider, OidcIdentityProvider, type IdentityProvider } from "./auth/identity-provider";
 import { MailDeliveryService, SmtpMailTransport, type MailTransport } from "./notifications/mail-delivery-service";
+import { InProcessJobQueue, type JobRecord, type JobStore } from "./jobs/job-queue";
+import { InMemoryCollaborationBus, RedisCollaborationBus, type CollaborationBus } from "./collaboration/collaboration-bus";
+import { adapterCapabilities, ExternalResearchAdapters, type ExternalAdapterKind } from "./research/external-adapters";
+import { ExperimentRunner } from "./experiments/experiment-runner";
+import { BackupService } from "./storage/backup-service";
+import { LocalObjectStore, createS3ObjectStore, type ObjectStore } from "./storage/object-storage";
+import { LocalModelProvider } from "./agent/local-model-provider";
+import { createNotification } from "./notifications/notification-service";
+import { MetricsRegistry } from "./metrics";
 
 const PROJECT_ACTIONS: ProjectAction[] = ["project:read", "project:write", "project:invite", "project:manage", "comment:write", "compile:run", "review:run", "agent:propose", "changeset:approve", "harness:use", "github:sync"];
 
@@ -111,6 +123,10 @@ interface Services {
   collaboration: CollaborationService;
   comments: CommentService;
   mailDelivery: MailDeliveryService;
+  externalAdapters: ExternalResearchAdapters;
+  jobs: InProcessJobQueue;
+  experiments: ExperimentRunner;
+  backups: BackupService;
 }
 
 type Handler = (request: Request, params: Record<string, string>, url: URL) => Promise<Response> | Response;
@@ -130,9 +146,39 @@ export interface ApplicationOptions {
   oidcProvider?: IdentityProvider;
   casProvider?: IdentityProvider;
   mailTransport?: MailTransport;
+  researchFetcher?: (input: string | Request | URL, init?: RequestInit) => Promise<Response>;
+  metrics?: MetricsRegistry;
+  collaborationBus?: CollaborationBus;
+  postgresRepository?: import("./storage/repository").PostgresRepository;
 }
 
-function providerFor(_configuration: AgentProviderConfiguration): AgentProvider | undefined { return undefined; }
+function providerFor(configuration: AgentProviderConfiguration): AgentProvider | undefined {
+  if (!configuration.baseURL || !configuration.model) return undefined;
+  return new LocalModelProvider({ endpoint: configuration.baseURL, model: configuration.model });
+}
+
+function createRedisCollaborationBus(url: string): CollaborationBus {
+  // The dependency is optional for local/offline deployments. Production
+  // multi-node mode must install `redis` and provide a reachable endpoint.
+  let clientModule: { createClient: (options: { url: string }) => any };
+  try {
+    clientModule = require("redis") as typeof clientModule;
+  } catch {
+    throw new ApiError(503, "redis_client_unavailable", "Install the redis client before enabling multi-node collaboration");
+  }
+  const publisher = clientModule.createClient({ url });
+  const subscriber = publisher.duplicate();
+  const ready = Promise.all([publisher.connect(), subscriber.connect()]);
+  return new RedisCollaborationBus(
+    { publish: async (channel, message) => { await ready; return publisher.publish(channel, message); } },
+    { subscribe: async (channel, listener) => { await ready; return subscriber.subscribe(channel, listener); }, unsubscribe: async (channel) => { await ready; return subscriber.unsubscribe(channel); } }
+  );
+}
+
+function providerForHarnessProfile(profile: { provider: string; baseUrl?: string; model?: string }): AgentProvider | undefined {
+  if (profile.provider === "openai-compatible" && profile.baseUrl && profile.model) return new LocalModelProvider({ endpoint: profile.baseUrl, model: profile.model });
+  return undefined;
+}
 
 interface AgentSettingsInput {
   harness?: "claude" | "codex";
@@ -208,9 +254,33 @@ function harnessProvider(runs: HarnessRunService, kind: "codex" | "claude", cwd:
 }
 
 export async function createApplication(dataDirectory = config.dataDirectory, options: ApplicationOptions = {}) {
+  const metrics = options.metrics ?? new MetricsRegistry();
   const features = { ...config.features, ...options.features };
   const database = new JsonDatabase(dataDirectory);
   await database.initialize();
+  const autoPostgres = options.postgresRepository ?? await configuredPostgresRepository(database.snapshot());
+  const postgresCutover = process.env.FASTWRITE_POSTGRES_MODE === "cutover";
+  if (autoPostgres) {
+    const persisted = await autoPostgres.loadPersistedState();
+    if (persisted && postgresCutover) await database.replaceState(persisted);
+  }
+  const postgresMirror = autoPostgres;
+  let postgresMirrorError: string | undefined;
+  let postgresMirrorFailures = 0;
+  const persistToPostgres = async () => {
+    if (!postgresMirror) return;
+    const snapshot = database.snapshot();
+    try {
+      await postgresMirror.mutate((state) => Object.assign(state, snapshot));
+      postgresMirrorError = undefined;
+    } catch (error) {
+      postgresMirrorFailures += 1;
+      postgresMirrorError = error instanceof Error ? error.message.slice(0, 500) : "postgres_mirror_failed";
+      console.error(`FastWrite PostgreSQL mirror failed (${postgresMirrorFailures}): ${postgresMirrorError}`);
+    }
+  };
+  if (postgresCutover && postgresMirror) await persistToPostgres();
+  const comparePostgres = async () => postgresMirror && "dualReadCompare" in postgresMirror ? await (postgresMirror as import("./storage/postgres-repository").SqlPostgresRepository).dualReadCompare() : { equal: true, legacyHash: "", normalizedHash: "", mismatches: [] as string[] };
   const auth = new AuthService(database, config.collaborationRoomTokenSecret);
   const bootstrapRequested = config.features.serverAuth || process.env.FASTWRITE_BOOTSTRAP_ADMIN_EMAIL || process.env.FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD;
   if (bootstrapRequested) {
@@ -224,7 +294,11 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const harnessProfiles = new HarnessProfileService(database, authorization);
   const workspaces = new WorkspaceService(dataDirectory, database);
   await workspaces.initialize();
-  const collaboration = new CollaborationService(database, workspaces);
+  const collaborationBus: CollaborationBus = options.collaborationBus ?? (features.multiNodeCollaboration && config.redisUrl
+    ? createRedisCollaborationBus(config.redisUrl)
+    : new InMemoryCollaborationBus());
+  const collaboration = new CollaborationService(database, workspaces, collaborationBus, postgresMirror && "appendUpdate" in postgresMirror && "saveSnapshot" in postgresMirror && "load" in postgresMirror ? postgresMirror as import("./collaboration/collaboration-bus").CollaborationPersistence : undefined);
+  const stopCollaborationBus = await collaboration.subscribeBus();
   const comments = new CommentService(database, collaboration, authorization);
   const mailDelivery = new MailDeliveryService(database, options.mailTransport ?? (config.mail ? new SmtpMailTransport(config.mail.smtpUrl, config.mail.from) : undefined));
   const uploads = new UploadService(dataDirectory, database, workspaces);
@@ -247,7 +321,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
     if (input.harness && input.harness !== config.harness) throw new ApiError(400, "harness_runtime_switch_unsupported", "Restart the server to switch Harness implementations");
     runtimeProvider = providerFor(runtimeConfiguration);
   };
-  const skillRegistry = new SkillRegistry(config.skillsDirectory);
+  const skillRegistry = new SkillRegistry(config.skillsDirectory, database);
   const harnessRegistry = new HarnessRegistry();
   harnessRegistry.register(new CodexHarnessAdapter());
   harnessRegistry.register(new ClaudeHarnessAdapter());
@@ -257,7 +331,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const harnessProviderInstance = harnessProvider(harnessRuns, config.harness, process.cwd(), config.harnessModel);
   const providers = configuredProviders ?? { completion: harnessProviderInstance, agent: harnessProviderInstance, revise: harnessProviderInstance, review: harnessProviderInstance, memory: harnessProviderInstance };
   const harnessSessions = new HarnessSessionService(database);
-  const latexCompiler = new LatexCompileService(dataDirectory, workspaces);
+  const latexCompiler = new LatexCompileService(dataDirectory, workspaces, { mode: process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host" });
   const mcpTools = new McpToolService(mcpRegistry, workspaces, latexCompiler, database);
   const latexTemplates = new LatexTemplateService(dataDirectory, fetch, config.templateDirectory);
   const memories = new MemoryService(database, workspaces, skillRegistry, asGateway(providers.memory));
@@ -265,22 +339,43 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const drafts = new DraftService(database, workspaces, skillRegistry, asGateway(providers.agent));
   const reviews = new ReviewService(database, workspaces, skillRegistry, asGateway(providers.review));
   const compliance = new ComplianceService(workspaces, skillRegistry);
-  const research = new ResearchService(database, workspaces);
+  const research = new ResearchService(database, workspaces, options.researchFetcher ?? fetch);
+  const externalAdapters = new ExternalResearchAdapters(options.researchFetcher ?? fetch);
+  const jobStore: JobStore = {
+    load: () => database.snapshot().jobs,
+    save: async (job) => { await database.mutate((state) => { const index = state.jobs.findIndex((candidate) => candidate.id === job.id); if (index >= 0) state.jobs[index] = job; else state.jobs.push(job); }); await persistToPostgres(); },
+    remove: async (id) => { await database.mutate((state) => { state.jobs = state.jobs.filter((candidate) => candidate.id !== id); }); await persistToPostgres(); }
+  };
+  const jobs = new InProcessJobQueue({ store: jobStore, limits: { total: Number(process.env.FASTWRITE_JOB_MAX_ACTIVE ?? 32), byKind: { "latex.compile": Number(process.env.FASTWRITE_COMPILE_MAX_ACTIVE ?? 4), "experiment.run": Number(process.env.FASTWRITE_EXPERIMENT_MAX_ACTIVE ?? 2) } } });
+  const experiments = new ExperimentRunner(dataDirectory, workspaces);
+  const objectStore: ObjectStore = config.objectStore ? await createS3ObjectStore(config.objectStore).catch(() => new LocalObjectStore(join(dataDirectory, "objects"))) : new LocalObjectStore(join(dataDirectory, "objects"));
+  const backups = new BackupService(database, dataDirectory, objectStore);
+  const jobPruneTimer = setInterval(() => { jobs.requeueExpiredLeases(); jobs.prune(); }, 15 * 60_000);
+  jobPruneTimer.unref?.();
+  for (const persistedJob of jobs.list("latex.compile").filter((job) => job.status === "queued" && process.env.FASTWRITE_JOB_WORKER_MODE !== "external")) {
+    jobs.start(persistedJob.id, async (input) => {
+      const projectId = (input as { projectId: string }).projectId;
+      const persisted = jobs.get(persistedJob.id); const actorId = persisted?.policy?.actorUserId; if (actorId) { const actor = database.snapshot().users.find((user) => user.id === actorId); if (!actor || actor.status !== "active") throw new ApiError(403, "job_actor_revoked", "The job owner is no longer active"); }
+      return latexCompiler.compile(projectId);
+    });
+  }
   const claims = new ClaimService(database, workspaces);
   const alignment = new AlignmentService(workspaces);
   const agentTasks = new AgentTaskService(database, workspaces, skillRegistry, asGateway(providers.agent), memories, asGateway(providers.review), compliance);
   const completions = new CompletionService(workspaces, skillRegistry, asGateway(providers.completion), memories);
   const diagrams = new DiagramService(dataDirectory, options.agentProvider?.generateDiagram ? options.agentProvider : diagramProvider(dataDirectory));
   await diagrams.initialize();
-  const services: Services = { diagrams, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery };
+  const services: Services = { diagrams, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
   const routes = buildRoutes(services, {
     status: () => {
       const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
       const discovered = discoverHarnessConfiguration(config.harness);
       return { configured: Boolean(runtimeConfiguration ?? runtimeProvider ?? providers.agent) || discovered.configured, harness: config.harness, source: runtimeConfiguration || runtimeProvider ? "runtime" : providers.agent ? "environment" : "none", ...(activeConfiguration.baseURL ? { baseURL: activeConfiguration.baseURL } : discovered.baseURL ? { baseURL: discovered.baseURL } : {}), ...(activeConfiguration.model ? { model: activeConfiguration.model } : discovered.model ? { model: discovered.model } : {}), wireAPI: activeConfiguration.wireAPI ?? (activeConfiguration.baseURL ? "chat" : "responses") };
     },
-    configure: configureAgent
-  }, features.serverAuth, oidc, cas);
+    configure: configureAgent,
+    postgresMirror: () => ({ configured: Boolean(postgresMirror), healthy: Boolean(postgresMirror) && !postgresMirrorError, failures: postgresMirrorFailures, ...(postgresMirrorError ? { lastError: postgresMirrorError } : {}) }),
+    postgresCompare: comparePostgres
+  }, features.serverAuth, oidc, cas, metrics);
 
   const applicationFetch: ApplicationFetch = async function applicationFetch(request: Request): Promise<Response> {
     try {
@@ -295,16 +390,37 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
           authorization.requireProject(current, params.projectId, projectActionFor(url.pathname, request.method));
         }
         const response = withRuntimeHeaders(await route.handler(request, params, url));
+        await persistToPostgres();
+        metrics.observe(request.method, url.pathname, response.status);
         void mailDelivery.dispatchPending();
         return response;
       }
-      return withRuntimeHeaders(await serveWeb(url.pathname));
+      const response = withRuntimeHeaders(await serveWeb(url.pathname));
+      metrics.observe(request.method, url.pathname, response.status);
+      return response;
     } catch (error) {
-      return withRuntimeHeaders(errorResponse(error));
+      const response = withRuntimeHeaders(errorResponse(error));
+      metrics.observe(request.method, new URL(request.url).pathname, response.status);
+      return response;
     }
   };
+  void stopCollaborationBus;
   applicationFetch.dispatchMail = () => mailDelivery.dispatchPending();
   return applicationFetch;
+}
+
+async function configuredPostgresRepository(initialState: import("./storage/database").DatabaseState): Promise<import("./storage/repository").PostgresRepository | undefined> {
+  if (!config.postgresUrl || !["mirror", "cutover"].includes(process.env.FASTWRITE_POSTGRES_MODE ?? "")) return undefined;
+  try {
+    const pg = await import("pg" as string) as any;
+    const client = new pg.Client({ connectionString: config.postgresUrl });
+    await client.connect();
+    const { SqlPostgresRepository } = await import("./storage/postgres-repository");
+    return SqlPostgresRepository.connect(client, initialState);
+  } catch (error) {
+    if (process.env.FASTWRITE_POSTGRES_REQUIRED === "true") throw error;
+    return undefined;
+  }
 }
 
 function projectActionFor(pathname: string, method: string): ProjectAction {
@@ -325,7 +441,7 @@ function pathAuthorizesIndividually(pathname: string): boolean {
   return /\/api\/projects\/[^/]+\/(?:file|asset|files|assets)$/.test(pathname);
 }
 
-function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider): Route[] {
+function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry()): Route[] {
   const presence = new Map<string, Map<string, { clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>();
   const principal = (request: Request, required = authEnabled): Principal | undefined => auth.principal(request, required);
   const authorize = (request: Request, projectId: string, action: Parameters<AuthorizationService["requireProject"]>[2]) => {
@@ -345,7 +461,8 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     });
   };
   return [
-    route("GET", "/api/health", async () => json({ status: "ok" })),
+    route("GET", "/api/health", async () => json({ status: "ok", version: "0.1.0" })),
+    route("GET", "/api/metrics", async () => new Response(metrics.prometheus(), { headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8" } })),
     route("POST", "/api/auth/register", async (request) => { const result = await auth.register(await readJson<{ email: string; password: string; displayName?: string }>(request)); await teams.personalWorkspace({ user: result.user, sessionId: "register" }); return authResponse(result, 201); }),
     route("POST", "/api/auth/login", async (request) => authResponse(await auth.login(await readJson<{ email: string; password: string }>(request)))),
     route("GET", "/api/auth/providers", async () => json({ local: true, oidc: Boolean(oidc), cas: Boolean(cas) })),
@@ -353,16 +470,29 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("GET", "/api/auth/oidc/callback", async (request, _params, url) => { if (!oidc) throw new ApiError(404, "oidc_not_configured", "OIDC is not configured"); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); requireLoginBinding(request, "oidc", state); const returnTo = oidc.loginReturnTo?.(state ?? undefined) ?? "/"; const identity = await oidc.finishLogin({ ...(code ? { code } : {}), ...(state ? { state } : {}) }); const result = await auth.loginExternal(identity); await teams.personalWorkspace({ user: result.user, sessionId: "external-login" }); await teams.syncIdpGroups(result.user, identityGroups(identity.issuer, identity.groups)); return externalAuthCallback("oidc", result, `${returnTo}${returnTo.includes("?") ? "&" : "?"}oidc=complete`); }),
     route("GET", "/api/auth/cas/login", async () => { if (!cas) throw new ApiError(404, "cas_not_configured", "CAS is not configured"); const login = await cas.beginLogin({}); if (login.kind !== "redirect" || !login.binding) throw new ApiError(400, "cas_login_invalid", "The configured identity provider does not return a login binding"); const response = Response.redirect(login.url, 302); response.headers.set("set-cookie", loginBindingCookie("cas", login.binding)); return response; }),
     route("GET", "/api/auth/cas/callback", async (request, _params, url) => { if (!cas) throw new ApiError(404, "cas_not_configured", "CAS is not configured"); const ticket = url.searchParams.get("ticket"); const state = url.searchParams.get("state"); requireLoginBinding(request, "cas", state); const identity = await cas.finishLogin({ ...(ticket ? { ticket } : {}), ...(state ? { state } : {}) }); const result = await auth.loginExternal(identity); await teams.personalWorkspace({ user: result.user, sessionId: "external-login" }); await teams.syncIdpGroups(result.user, identityGroups(identity.issuer, identity.groups)); return externalAuthCallback("cas", result, "/?cas=complete"); }),
+    route("GET", "/api/auth/cas/logout", async (request) => { if (!cas) throw new ApiError(404, "cas_not_configured", "CAS is not configured"); const current = principal(request, false); if (current) await auth.logout(request); const target = cas instanceof CasIdentityProvider ? cas.logoutRedirect() : "/"; const response = Response.redirect(target, 302); response.headers.set("set-cookie", expiredRefreshCookie()); return response; }),
     route("POST", "/api/auth/refresh", async (request) => { requireSameOrigin(request); return authResponse(await auth.refresh(request)); }),
     route("POST", "/api/auth/logout", async (request) => { await auth.logout(request); return new Response(null, { status: 204, headers: { "set-cookie": expiredRefreshCookie() } }); }),
     route("GET", "/api/auth/me", async (request) => json(principal(request, true)!.user)),
-    route("GET", "/api/admin/health", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const state = database.snapshot(); return json({ users: state.users.length, activeSessions: state.sessions.filter((item) => !item.revokedAt && item.expiresAt > new Date().toISOString()).length, teams: state.teams.length, projects: state.projects.length, collaborationDocuments: state.collaborationDocuments.filter((item) => item.status === "active").length, pendingInvitations: state.invitations.filter((item) => !item.revokedAt && !item.acceptedAt && item.expiresAt > new Date().toISOString()).length }); }),
+    route("GET", "/api/admin/health", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const state = database.snapshot(); return json({ users: state.users.length, activeSessions: state.sessions.filter((item) => !item.revokedAt && item.expiresAt > new Date().toISOString()).length, teams: state.teams.length, projects: state.projects.length, collaborationDocuments: state.collaborationDocuments.filter((item) => item.status === "active").length, pendingInvitations: state.invitations.filter((item) => !item.revokedAt && !item.acceptedAt && item.expiresAt > new Date().toISOString()).length, mail: mailDelivery.status(), postgres: agentSettings.postgresMirror?.() ?? { configured: false, healthy: false, failures: 0 }, jobs: { queued: state.jobs.filter((job) => job.status === "queued").length, running: state.jobs.filter((job) => job.status === "running").length, failed: state.jobs.filter((job) => job.status === "failed").length } }); }),
+    route("GET", "/api/admin/postgres/compare", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); if (!agentSettings.postgresCompare) throw new ApiError(404, "postgres_not_configured", "PostgreSQL is not configured"); return json(await agentSettings.postgresCompare()); }),
     route("GET", "/api/admin/identity-providers", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); return json({ oidc: { configured: Boolean(oidc), ...(config.oidc ? { issuer: config.oidc.issuer, redirectUri: config.oidc.redirectUri, clientId: config.oidc.clientId } : {}) }, cas: { configured: Boolean(cas), ...(config.cas ? { serverUrl: config.cas.serverUrl, serviceUrl: config.cas.serviceUrl } : {}) }, local: { configured: true } }); }),
     route("GET", "/api/admin/users", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const state = database.snapshot(); return json(state.users.map((user) => ({ id: user.id, emailNormalized: user.emailNormalized, displayName: user.displayName, platformRole: user.platformRole, status: user.status, createdAt: user.createdAt, updatedAt: user.updatedAt, activeSessionCount: state.sessions.filter((session) => session.userId === user.id && !session.revokedAt && session.expiresAt > new Date().toISOString()).length }))); }),
     route("POST", "/api/admin/users/:userId/disable", async (request, params) => { const body = await readJson<{ reason?: string }>(request); await auth.disable(required(params, "userId"), principal(request, true)!, body.reason ?? ""); return new Response(null, { status: 204 }); }),
     route("POST", "/api/admin/users/:userId/sessions/revoke", async (request, params) => { const body = await readJson<{ reason?: string }>(request); await auth.revokeSessions(required(params, "userId"), principal(request, true)!, body.reason ?? ""); return new Response(null, { status: 204 }); }),
     route("PATCH", "/api/admin/users/:userId/platform-role", async (request, params) => { const body = await readJson<{ role?: "platform_admin" | "support_auditor" | "user"; reason?: string }>(request); if (body.role !== "platform_admin" && body.role !== "support_auditor" && body.role !== "user") throw new ApiError(400, "platform_role_invalid", "A valid platform role is required"); return json(await auth.updatePlatformRole(required(params, "userId"), body.role, principal(request, true)!, body.reason ?? "")); }),
     route("GET", "/api/admin/audit-events", async (request, _params, url) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const rawLimit = Number.parseInt(url.searchParams.get("limit") ?? "100", 10); const limit = Number.isInteger(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 100; return json(database.snapshot().auditEvents.slice().sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, limit)); }),
+    route("GET", "/api/admin/jobs/dead-letters", async (request, _params, url) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const kind = url.searchParams.get("kind") ?? undefined; return json(jobs.deadLetters(kind)); }),
+    route("POST", "/api/admin/jobs/:jobId/retry", async (request, params) => { const actor = principal(request, true)!; requireRole(actor.user, "platform_admin"); const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); if (!job.deadLetter) throw new ApiError(409, "job_not_dead_letter", "Only dead-letter jobs can be manually retried"); const retried = await database.mutate((state) => { const stored = state.jobs.find((item) => item.id === job.id); if (!stored) throw new ApiError(404, "job_not_found", "Job not found"); stored.status = "queued"; delete stored.deadLetter; delete stored.error; stored.attempts = 0; stored.updatedAt = new Date().toISOString(); return structuredClone(stored); }); return json(retried, 202); }),
+    route("POST", "/api/admin/support-access", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const body = await readJson<{ projectId?: string; pathPrefix?: string; ticketId?: string; reason?: string; expiresInMinutes?: number }>(request); if (!body.projectId || !body.ticketId?.trim() || !body.reason?.trim() || body.reason.trim().length < 8) throw new ApiError(400, "support_access_invalid", "projectId, ticketId and a reason of at least 8 characters are required"); const state = database.snapshot(); const project = state.projects.find((item) => item.id === body.projectId); if (!project) throw new ApiError(404, "project_not_found", "Project not found"); const now = new Date().toISOString(); const expiresAt = new Date(Date.now() + Math.min(Math.max(body.expiresInMinutes ?? 60, 5), 24 * 60) * 60_000).toISOString(); const item = { id: `support_${crypto.randomUUID()}`, requesterUserId: actor.user.id, projectId: body.projectId, pathPrefix: body.pathPrefix?.trim() || "", ticketId: body.ticketId.trim().slice(0, 120), reason: body.reason.trim().slice(0, 500), expiresAt, status: "pending" as const, createdAt: now, updatedAt: now }; return json(await database.mutate((current) => { current.supportAccessRequests.push(item); const owners = new Set(current.projectMembers.filter((member) => member.projectId === item.projectId && member.role === "owner").map((member) => member.userId)); if (project.personalOwnerUserId) owners.add(project.personalOwnerUserId); for (const userId of owners) createNotification(current, { userId, type: "access_request", title: "Support access requested", body: `Ticket ${item.ticketId} requires approval.`, projectId: item.projectId }); current.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: actor.user.id, action: "support_access.request", resourceType: "support_access", resourceId: item.id, metadata: { projectId: item.projectId, ticketId: item.ticketId }, createdAt: now }); return item; }), 201); }),
+    route("GET", "/api/admin/support-access", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const now = new Date().toISOString(); await database.mutate((state) => { for (const item of state.supportAccessRequests) if (item.status === "approved" && item.expiresAt <= now) { item.status = "expired"; item.updatedAt = now; state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, action: "support_access.expire", resourceType: "support_access", resourceId: item.id, metadata: { ticketId: item.ticketId }, createdAt: now }); } }); return json(database.snapshot().supportAccessRequests.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }),
+    route("POST", "/api/admin/support-access/:requestId/revoke", async (request, params) => { const actor = principal(request, true)!; requireRole(actor.user, "platform_admin"); return json(await database.mutate((state) => { const item = state.supportAccessRequests.find((candidate) => candidate.id === required(params, "requestId")); if (!item) throw new ApiError(404, "support_access_not_found", "Support access request not found"); if (item.status !== "approved") throw new ApiError(409, "support_access_not_active", "Only approved support access can be revoked"); item.status = "revoked"; item.updatedAt = new Date().toISOString(); state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: actor.user.id, action: "support_access.revoke", resourceType: "support_access", resourceId: item.id, metadata: { ticketId: item.ticketId }, createdAt: item.updatedAt }); return item; })); }),
+    route("POST", "/api/admin/support-access/:requestId/decision", async (request, params) => { const actor = principal(request, true)!; requireRole(actor.user, "platform_admin"); const body = await readJson<{ approved?: boolean }>(request); if (typeof body.approved !== "boolean") throw new ApiError(400, "support_access_decision_invalid", "approved must be a boolean"); const token = body.approved ? randomBytes(32).toString("base64url") : undefined; const result = await database.mutate((state) => { const item = state.supportAccessRequests.find((candidate) => candidate.id === required(params, "requestId")); if (!item) throw new ApiError(404, "support_access_not_found", "Support access request not found"); if (item.requesterUserId === actor.user.id) throw new ApiError(409, "support_access_self_approval", "A request cannot be approved by its requester"); if (item.status !== "pending") throw new ApiError(409, "support_access_already_decided", "Support access request has already been decided"); item.status = body.approved ? "approved" : "denied"; item.approverUserId = actor.user.id; item.updatedAt = new Date().toISOString(); if (token) item.tokenHash = createHash("sha256").update(token).digest("hex"); const requester = state.users.find((user) => user.id === item.requesterUserId); if (requester) createNotification(state, { userId: requester.id, type: "access_request_decision", title: `Support access ${item.status}`, body: `Ticket ${item.ticketId} was ${item.status}.`, projectId: item.projectId }); state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: actor.user.id, action: `support_access.${item.status}`, resourceType: "support_access", resourceId: item.id, metadata: { ticketId: item.ticketId }, createdAt: item.updatedAt }); return { item: structuredClone(item), token }; }); return json({ ...result.item, ...(result.token ? { token: result.token } : {}) }); }),
+    route("POST", "/api/admin/support-access/:requestId/redeem", async (request, params) => { const actor = principal(request, true)!; const body = await readJson<{ token?: string; path?: string }>(request); if (!body.token || !body.path) throw new ApiError(400, "support_access_token_invalid", "token and path are required"); const now = new Date().toISOString(); const requestId = required(params, "requestId"); const digest = createHash("sha256").update(body.token).digest("hex"); const normalized = normalizeWorkspacePath(body.path); const result = await database.mutate((state) => { const item = state.supportAccessRequests.find((candidate) => candidate.id === requestId && candidate.tokenHash === digest); if (!item || item.status !== "approved" || item.expiresAt <= now) throw new ApiError(403, "support_access_expired", "Support access is invalid or expired"); if (!(item.pathPrefix === "" || normalized === item.pathPrefix || normalized.startsWith(`${item.pathPrefix}/`))) throw new ApiError(403, "support_access_scope_denied", "Path is outside the approved support scope"); const project = state.projects.find((candidate) => candidate.id === item.projectId); if (!project) throw new ApiError(404, "project_not_found", "Project not found"); delete item.tokenHash; item.updatedAt = now; state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: actor.user.id, action: "support_access.redeem", resourceType: "support_access", resourceId: item.id, metadata: { projectId: item.projectId, path: normalized, ticketId: item.ticketId }, createdAt: now }); return { projectId: item.projectId, path: normalized, userId: actor.user.id, sessionId: actor.sessionId, expiresAt: item.expiresAt, scope: "read" as const, authorized: true, oneTime: true }; }); return json(result); }),
+    route("POST", "/api/admin/mail/webhook", async (request) => { const rawBody = await request.text(); let body: { deliveryId?: string; status?: "delivered" | "bounced" | "complained"; error?: string }; try { body = JSON.parse(rawBody) as typeof body; } catch { throw new ApiError(400, "invalid_json", "Request body must be valid JSON"); } const signature = request.headers.get("x-fastwrite-mail-signature"); const secret = config.mail?.webhookSecret; if (!secret) throw new ApiError(503, "mail_webhook_not_configured", "Mail webhook secret is not configured"); const accepted = await mailDelivery.handleWebhook({ ...body, rawBody, ...(signature ? { signature } : {}), secret }); if (!accepted) throw new ApiError(401, "mail_webhook_signature_invalid", "Mail webhook signature is invalid"); return new Response(null, { status: 204 }); }),
+    route("POST", "/api/admin/backups", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); return json(await backups.create(), 201); }),
+    route("POST", "/api/admin/backups/verify", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const body = await readJson<{ path?: string }>(request); if (!body.path) throw new ApiError(400, "backup_path_required", "Backup path is required"); return json(await backups.verify(body.path)); }),
+    route("POST", "/api/admin/backups/restore", async (request) => { const actor = principal(request, true)!; requireRole(actor.user, "platform_admin"); const body = await readJson<{ path?: string; confirm?: "replace-database" }>(request); if (!body.path || body.confirm !== "replace-database") throw new ApiError(400, "backup_restore_confirmation_required", "An explicit replace-database confirmation is required"); return json(await backups.restore(body.path, { confirm: body.confirm }), 202); }),
     route("GET", "/api/harness/profiles", async (request) => json(harnessProfiles.list(principal(request, true)!))),
     route("POST", "/api/harness/profiles", async (request) => { const body = await readJson<any>(request); return json(await harnessProfiles.save(principal(request, true)!, body.scope, body, { teamId: body.teamId, profileId: body.profileId }), 201); }),
     route("GET", "/api/harness/effective", async (request, _params, url) => json(harnessProfiles.resolve(principal(request, true)!, url.searchParams.get("projectId") ?? undefined))),
@@ -423,6 +553,9 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("GET", "/api/venues", async () => json(await skillRegistry.catalog())),
     route("GET", "/api/skills/workflows", async () => json((await skillRegistry.workflowCatalog()).map(({ instructions: _instructions, ...descriptor }) => descriptor))),
     route("GET", "/api/skills/releases", async () => json(await skillRegistry.publishedCatalog())),
+    route("GET", "/api/skills/releases/:skillId", async (_request, params) => { try { return json(await skillRegistry.release(required(params, "skillId"))); } catch (error) { throw new ApiError(404, "skill_release_not_found", error instanceof Error ? error.message : "Skill release not found"); } }),
+    route("POST", "/api/skills/releases/:skillId/evaluate", async (request, params) => { const actor = principal(request, authEnabled); if (actor) requireRole(actor.user, "platform_admin"); try { return json(await skillRegistry.evaluate(required(params, "skillId"))); } catch (error) { throw new ApiError(404, "skill_release_not_found", error instanceof Error ? error.message : "Skill release not found"); } }),
+    route("POST", "/api/skills/releases/:skillId/rollback", async (request, params) => { const actor = principal(request, authEnabled); if (actor) requireRole(actor.user, "platform_admin"); const body = await readJson<{ reason?: string }>(request); if (!body.reason?.trim()) throw new ApiError(400, "skill_rollback_reason_required", "A rollback reason is required"); try { return json(await skillRegistry.rollback(required(params, "skillId"), body.reason)); } catch (error) { throw new ApiError(404, "skill_release_not_found", error instanceof Error ? error.message : "Skill release not found"); } }),
     route("GET", "/api/agent-skills", async () => json(await skillRegistry.taskCatalog())),
     route("GET", "/api/harnesses", async () => json(await Promise.all(harnessRegistry.list().map(async (adapter) => ({ status: await adapter.getStatus(), capabilities: await adapter.getCapabilities() }))))),
     route("GET", "/api/harness-sessions", async () => json(harnessSessions.list())),
@@ -509,45 +642,59 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("PATCH", "/api/projects/:projectId/comments/:threadId", async (request, params) => { const body = await readJson<{ status?: "open" | "resolved" }>(request); if (body.status !== "open" && body.status !== "resolved") throw new ApiError(400, "comment_status_invalid", "status must be open or resolved"); return json(await comments.updateStatus(required(params, "projectId"), required(params, "threadId"), principal(request, true)!, body.status)); }),
     route("POST", "/api/projects/:projectId/comments/:threadId/reanchor", async (request, params) => { const body = await readJson<{ path?: string; from?: number; to?: number }>(request); if (!body.path || !Number.isInteger(body.from) || !Number.isInteger(body.to)) throw new ApiError(400, "comment_anchor_invalid", "path, from and to are required"); return json(await comments.reanchor(required(params, "projectId"), required(params, "threadId"), principal(request, true)!, { path: body.path, from: body.from!, to: body.to! })); }),
     route("POST", "/api/projects/:projectId/shares", async (request, params) => {
-      const projectId = required(params, "projectId"); workspaces.getProject(projectId);
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:manage"); workspaces.getProject(projectId);
       const body = await readJson<{ permission?: "read" | "comment"; label?: string; expiresAt?: string }>(request);
       const token = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
       const createdAt = new Date().toISOString();
       const share = await database.mutate((state) => { const item = { id: `share_${crypto.randomUUID()}`, projectId, tokenHash: shareTokenHash(token), permission: body.permission === "comment" ? "comment" as const : "read" as const, ...(body.label?.trim() ? { label: body.label.trim().slice(0, 120) } : {}), ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}), createdAt }; state.projectShares.push(item); return item; });
       return json({ id: share.id, token, permission: share.permission, label: share.label, expiresAt: share.expiresAt, createdAt: share.createdAt }, 201);
     }),
-    route("GET", "/api/projects/:projectId/shares", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().projectShares.filter((item) => item.projectId === projectId).map(({ tokenHash: _tokenHash, ...item }) => item)); }),
-    route("DELETE", "/api/projects/:projectId/shares/:shareId", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); await database.mutate((state) => { const share = state.projectShares.find((item) => item.projectId === projectId && item.id === required(params, "shareId")); if (!share) throw new ApiError(404, "share_not_found", "Share link not found"); share.revokedAt = new Date().toISOString(); }); return new Response(null, { status: 204 }); }),
+    route("GET", "/api/projects/:projectId/shares", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:manage"); workspaces.getProject(projectId); return json(database.snapshot().projectShares.filter((item) => item.projectId === projectId).map(({ tokenHash: _tokenHash, ...item }) => item)); }),
+    route("DELETE", "/api/projects/:projectId/shares/:shareId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:manage"); workspaces.getProject(projectId); await database.mutate((state) => { const share = state.projectShares.find((item) => item.projectId === projectId && item.id === required(params, "shareId")); if (!share) throw new ApiError(404, "share_not_found", "Share link not found"); share.revokedAt = new Date().toISOString(); }); return new Response(null, { status: 204 }); }),
     route("GET", "/api/shared/:token", async (_request, params) => { const share = activeShare(database.snapshot().projectShares, required(params, "token")); const project = workspaces.getProject(share.projectId); return json({ project: { id: project.id, name: project.name, mainDocument: project.mainDocument, version: project.version }, permission: share.permission, tree: await workspaces.tree(project.id), comments: database.snapshot().shareComments.filter((item) => item.shareId === share.id) }); }),
     route("GET", "/api/shared/:token/file", async (_request, params, url) => { const share = activeShare(database.snapshot().projectShares, required(params, "token")); const path = requiredQuery(url, "path"); const file = await workspaces.readTextFile(share.projectId, path); return json({ path, content: file.content, version: file.file.version }); }),
     route("POST", "/api/shared/:token/comments", async (request, params) => { const share = activeShare(database.snapshot().projectShares, required(params, "token")); if (share.permission !== "comment") throw new ApiError(403, "share_read_only", "This share link is read-only"); const body = await readJson<{ path?: string; line?: number; author?: string; body?: string }>(request); if (!body.path || !body.body?.trim() || !body.author?.trim()) throw new ApiError(400, "comment_invalid", "path, author and body are required"); await workspaces.readTextFile(share.projectId, body.path); const createdAt = new Date().toISOString(); return json(await database.mutate((state) => { const comment = { id: `comment_${crypto.randomUUID()}`, shareId: share.id, projectId: share.projectId, path: body.path!, ...(Number.isInteger(body.line) && body.line! > 0 ? { line: body.line } : {}), author: body.author!.trim().slice(0, 80), body: body.body!.trim().slice(0, 4000), status: "open" as const, createdAt, updatedAt: createdAt }; state.shareComments.push(comment); return comment; }), 201); }),
     route("POST", "/api/projects/:projectId/compliance-checks", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read");
       const body = await readJson<{ pdfBase64?: string; renderedPages?: number; mainBodyPages?: number; verifyCitationsOnline?: boolean }>(request);
-      return json(await compliance.check(required(params, "projectId"), body), 201);
+      return json(await compliance.check(projectId, body), 201);
     }),
     route("POST", "/api/projects/:projectId/research-runs", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read");
       const body = await readJson<{ query?: string }>(request);
       if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiError(400, "invalid_research_request", "Research request must be an object");
-      return json(await research.search(required(params, "projectId"), typeof body.query === "string" ? body.query : "", request.signal), 201);
+      return json(await research.search(projectId, typeof body.query === "string" ? body.query : "", request.signal), 201);
     }),
-    route("POST", "/api/projects/:projectId/research-runs/:runId/confirm", async (_request, params) => json(await research.confirm(required(params, "projectId"), required(params, "runId")))),
-    route("PATCH", "/api/projects/:projectId/research-runs/:runId", async (request, params) => json(await research.updatePlan(required(params, "projectId"), required(params, "runId"), await readJson<{ steps: string[]; rationale?: string }>(request)))),
-    route("POST", "/api/projects/:projectId/research-runs/:runId/cancel", async (_request, params) => json(await research.cancel(required(params, "projectId"), required(params, "runId")))),
-    route("GET", "/api/projects/:projectId/research-runs", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().researchRuns.filter((item) => item.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }),
-    route("GET", "/api/projects/:projectId/fastread-bundles", async (_request, params) => json(await research.listFastReadBundles(required(params, "projectId")))),
+    route("POST", "/api/projects/:projectId/research-runs/:runId/confirm", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await research.confirm(projectId, required(params, "runId"))); }),
+    route("PATCH", "/api/projects/:projectId/research-runs/:runId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await research.updatePlan(projectId, required(params, "runId"), await readJson<{ steps: string[]; rationale?: string; inclusionCriteria?: string[]; exclusionCriteria?: string[]; extractionFields?: string[] }>(request))); }),
+    route("GET", "/api/projects/:projectId/research-runs/:runId/screening", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(research.listScreening(projectId, required(params, "runId"))); }),
+    route("PUT", "/api/projects/:projectId/research-runs/:runId/screening/:workId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await research.updateScreening(projectId, required(params, "runId"), required(params, "workId"), await readJson<{ decision: "included" | "excluded" | "uncertain"; reason?: string; extracted?: Record<string, string> }>(request))); }),
+    route("POST", "/api/projects/:projectId/research-runs/:runId/cancel", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await research.cancel(projectId, required(params, "runId"))); }),
+    route("GET", "/api/projects/:projectId/research-runs", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); workspaces.getProject(projectId); return json(database.snapshot().researchRuns.filter((item) => item.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }),
+    route("GET", "/api/projects/:projectId/fastread-bundles", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(await research.listFastReadBundles(projectId)); }),
     route("POST", "/api/projects/:projectId/fastread-bundles/import", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
       const body = await readJson<{ manifestPath?: string }>(request);
-      return json(await research.importFastReadBundles(required(params, "projectId"), typeof body.manifestPath === "string" ? body.manifestPath : undefined), 201);
+      return json(await research.importFastReadBundles(projectId, typeof body.manifestPath === "string" ? body.manifestPath : undefined), 201);
     }),
-    route("GET", "/api/projects/:projectId/research-works", async (_request, params) => json(research.listWorks(required(params, "projectId")))),
-    route("POST", "/api/projects/:projectId/research-works/import", async (request, params) => { const body = await readJson<Parameters<ResearchService["importWork"]>[1]>(request); if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiError(400, "invalid_research_request", "Research import must be an object"); return json(await research.importWork(required(params, "projectId"), body), 201); }),
-    route("PATCH", "/api/projects/:projectId/research-works/:workId", async (request, params) => json(await research.saveWork(required(params, "projectId"), required(params, "workId"), await readJson<{ status?: "candidate" | "saved" | "rejected"; citationKey?: string }>(request)))),
-    route("POST", "/api/projects/:projectId/research-works/:workId/verify-metadata", async (_request, params) => json(await research.verifyMetadata(required(params, "projectId"), required(params, "workId")))),
-    route("GET", "/api/projects/:projectId/research-citations/:citationKey", async (_request, params) => json(await research.citationContext(required(params, "projectId"), required(params, "citationKey")))),
-    route("POST", "/api/projects/:projectId/research-works/:workId/bibtex-changes", async (request, params) => { const body = await readJson<{ targetBibPath?: string }>(request); if (!body.targetBibPath) throw new ApiError(400, "target_bib_required", "targetBibPath is required"); const changeSet = await research.proposeBibtexChange(required(params, "projectId"), required(params, "workId"), body.targetBibPath); return json(await database.mutate((state) => { state.changeSets.push(changeSet); return changeSet; }), 201); }),
-    route("POST", "/api/projects/:projectId/research-works/:workId/pdf-evidence", async (request, params) => { const body = await readJson<{ pdfBase64?: string; authorized?: boolean }>(request); if (!body.pdfBase64 || body.authorized !== true) throw new ApiError(403, "pdf_authorization_required", "Provide bounded PDF data with explicit authorization"); return json(await research.extractPdfEvidence(required(params, "projectId"), required(params, "workId"), body.pdfBase64, body.authorized === true), 201); }),
+    route("GET", "/api/projects/:projectId/research-works", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(research.listWorks(projectId)); }),
+    route("GET", "/api/research-adapters", async () => json(["zotero", "grobid", "pandoc"].map((kind) => ({ kind, ...adapterCapabilities(kind as ExternalAdapterKind) })))),
+    route("POST", "/api/projects/:projectId/research-adapters/:kind", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); workspaces.getProject(projectId);
+      const kind = required(params, "kind") as ExternalAdapterKind;
+      if (!["zotero", "grobid", "pandoc"].includes(kind)) throw new ApiError(400, "external_adapter_invalid", "Unsupported research adapter");
+      const body = await readJson<{ baseUrl?: string; operation?: "health" | "search" | "parse" | "convert"; input?: unknown; authorized?: boolean }>(request);
+      if (!body.baseUrl || !body.operation || body.authorized !== true) throw new ApiError(403, "external_adapter_authorization_required", "baseUrl, operation and explicit authorization are required");
+      return json(await externalAdapters.call({ kind, operation: body.operation, input: body.input, authorized: body.authorized }, { kind, baseUrl: body.baseUrl, readOnly: true, allowed: true }, request.signal));
+    }),
+    route("POST", "/api/projects/:projectId/research-works/import", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); const body = await readJson<Parameters<ResearchService["importWork"]>[1]>(request); if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiError(400, "invalid_research_request", "Research import must be an object"); return json(await research.importWork(projectId, body), 201); }),
+    route("PATCH", "/api/projects/:projectId/research-works/:workId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await research.saveWork(projectId, required(params, "workId"), await readJson<{ status?: "candidate" | "saved" | "rejected"; citationKey?: string }>(request))); }),
+    route("POST", "/api/projects/:projectId/research-works/:workId/verify-metadata", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(await research.verifyMetadata(projectId, required(params, "workId"))); }),
+    route("GET", "/api/projects/:projectId/research-citations/:citationKey", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(await research.citationContext(projectId, required(params, "citationKey"))); }),
+    route("POST", "/api/projects/:projectId/research-works/:workId/bibtex-changes", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); const body = await readJson<{ targetBibPath?: string }>(request); if (!body.targetBibPath) throw new ApiError(400, "target_bib_required", "targetBibPath is required"); const changeSet = await research.proposeBibtexChange(projectId, required(params, "workId"), body.targetBibPath); return json(await database.mutate((state) => { state.changeSets.push(changeSet); return changeSet; }), 201); }),
+    route("POST", "/api/projects/:projectId/research-works/:workId/pdf-evidence", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); const body = await readJson<{ pdfBase64?: string; authorized?: boolean }>(request); if (!body.pdfBase64 || body.authorized !== true) throw new ApiError(403, "pdf_authorization_required", "Provide bounded PDF data with explicit authorization"); return json(await research.extractPdfEvidence(projectId, required(params, "workId"), body.pdfBase64, body.authorized === true), 201); }),
     route("POST", "/api/projects/:projectId/claim-scans", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "project:write", workspaces); return json(await claims.scan(projectId), 201); }),
-    route("POST", "/api/projects/:projectId/alignment-checks", async (_request, params) => json(await alignment.check(required(params, "projectId")), 201)),
+    route("POST", "/api/projects/:projectId/alignment-checks", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(await alignment.check(projectId), 201); }),
     route("POST", "/api/projects/:projectId/writing-checks", async (request, params) => {
       const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "project:read", workspaces); const project = workspaces.getProject(projectId); const tree = await workspaces.tree(projectId);
       const paths = textPaths(tree).filter((path) => /\.(?:tex|bib)$/i.test(path));
@@ -555,19 +702,71 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       const approved = new Set(database.snapshot().sourceEvidence.filter((item) => item.projectId === projectId && item.status === "approved").map((item) => item.citationKey).filter((key): key is string => Boolean(key)));
       return json({ projectId, projectVersion: project.version, findings: writingGuardMany(documents.map((document) => ({ ...document, approvedCitationKeys: approved }))) }, 201);
     }),
-    route("GET", "/api/projects/:projectId/claims", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); const ledger = await claims.list(projectId); return json(current ? filterVisibleClaims(ledger, current, projectId, authorization) : ledger); }),
-    route("GET", "/api/projects/:projectId/claim-links", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); const visibleIds = current ? new Set(filterVisibleClaims(await claims.list(projectId), current, projectId, authorization).map((claim) => claim.id)) : undefined; return json(claims.links(projectId).filter((link) => !visibleIds || visibleIds.has(link.claimId))); }),
-    route("GET", "/api/projects/:projectId/claims/:claimId/links", async (_request, params) => { const projectId = required(params, "projectId"); const claimId = required(params, "claimId"); if (!(await claims.list(projectId)).some((item) => item.id === claimId)) throw new ApiError(404, "claim_not_found", "Claim not found"); return json(database.snapshot().claimEvidenceLinks.filter((link) => link.claimId === claimId)); }),
-    route("GET", "/api/projects/:projectId/argument-graph", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); const ledger = await claims.list(projectId); const visible = current ? filterVisibleClaims(ledger, current, projectId, authorization) : ledger; const visibleIds = new Set(visible.map((claim) => claim.id)); const persisted = database.snapshot().claimRelations.filter((item) => item.projectId === projectId && visibleIds.has(item.fromClaimId) && visibleIds.has(item.toClaimId)); const generated = deriveArgumentGraph(projectId, visible).filter((item) => !persisted.some((saved) => saved.fromClaimId === item.fromClaimId && saved.toClaimId === item.toClaimId)); return json({ projectId, relations: [...persisted, ...generated] }); }),
-    route("POST", "/api/projects/:projectId/adversarial-memo", async (_request, params) => { const projectId = required(params, "projectId"); const ledger = await claims.list(projectId); return json(buildAdversarialMemo(projectId, ledger, deriveArgumentGraph(projectId, ledger)), 201); }),
+    route("GET", "/api/projects/:projectId/claims", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); const ledger = await claims.list(projectId); return json(current ? filterVisibleClaims(ledger, current, projectId, authorization) : ledger); }),
+    route("GET", "/api/projects/:projectId/evidence-cockpit", async (request, params) => {
+      const projectId = required(params, "projectId");
+      const project = workspaces.getProject(projectId);
+      const current = principal(request, authEnabled);
+      if (current) authorization.requireProject(current, projectId, "project:read");
+      const ledger = await claims.list(projectId);
+      const visible = current ? filterVisibleClaims(ledger, current, projectId, authorization) : ledger;
+      const visibleIds = new Set(visible.map((claim) => claim.id));
+      const state = database.snapshot();
+      const links = state.claimEvidenceLinks.filter((link) => visibleIds.has(link.claimId));
+      const evidenceById = new Map(state.sourceEvidence.filter((item) => item.projectId === projectId).map((item) => [item.id, item]));
+      const summaries = visible.map((claim) => {
+        const claimLinks = links.filter((link) => link.claimId === claim.id);
+        const linkedEvidence = claimLinks.flatMap((link) => link.kind === "literature" ? [evidenceById.get(link.evidenceId)].filter((item): item is SourceEvidence => Boolean(item)) : []);
+        const hasValid = claimLinks.some((link) => link.kind === "review-waiver" || (link.kind === "literature" && evidenceById.get(link.evidenceId)?.status === "approved") || (link.kind === "workspace" && !link.stale));
+        const support: "supported" | "partial" | "unsupported" | "unresolved" = claim.anchorStatus === "orphaned" || claim.anchorStatus === "stale" ? "unresolved" : claim.reviewStatus === "supported" && hasValid ? "supported" : claim.reviewStatus === "partial" || linkedEvidence.length > 0 ? "partial" : claim.reviewStatus === "unsupported" ? "unsupported" : "unresolved";
+        return { claim, links: claimLinks, evidence: linkedEvidence, support };
+      });
+      const counts = { total: summaries.length, supported: summaries.filter((item) => item.support === "supported").length, partial: summaries.filter((item) => item.support === "partial").length, unsupported: summaries.filter((item) => item.support === "unsupported").length, unresolved: summaries.filter((item) => item.support === "unresolved").length, stale: visible.filter((claim) => claim.anchorStatus === "stale").length, orphaned: visible.filter((claim) => claim.anchorStatus === "orphaned").length };
+      const result: EvidenceCockpit = { projectId, projectVersion: project.version, claims: summaries, counts, generatedAt: new Date().toISOString() };
+      return json(result);
+    }),
+    route("GET", "/api/projects/:projectId/citation-reviewer", async (request, params) => {
+      const projectId = required(params, "projectId");
+      const project = workspaces.getProject(projectId);
+      const current = principal(request, authEnabled);
+      if (current) authorization.requireProject(current, projectId, "project:read");
+      const ledger = await claims.list(projectId);
+      const visible = current ? filterVisibleClaims(ledger, current, projectId, authorization) : ledger;
+      const state = database.snapshot();
+      const links = state.claimEvidenceLinks.filter((link) => visible.some((claim) => claim.id === link.claimId));
+      const evidenceById = new Map(state.sourceEvidence.filter((item) => item.projectId === projectId).map((item) => [item.id, item]));
+      const worksById = new Map(state.researchWorks.map((work) => [work.id, work]));
+      const projectCitationKeys = new Map(state.projectResearchWorks.filter((item) => item.projectId === projectId).map((item) => [item.workId, item.citationKey]));
+      const items = visible.map((claim) => {
+        const claimLinks = links.filter((link) => link.claimId === claim.id);
+        const literature = claimLinks.filter((link): link is Extract<typeof link, { kind: "literature" }> => link.kind === "literature");
+        const inlineCitationKeys = [...claim.anchor.exactText.matchAll(/\\(?:cite|citep|citet|autocite)\{([^}]+)\}/g)].flatMap((match) => match[1]!.split(",").map((key) => key.trim())).filter(Boolean);
+        const citationKeys = [...new Set([...inlineCitationKeys, ...literature.map((link) => link.citationKey || projectCitationKeys.get(evidenceById.get(link.evidenceId)?.workId ?? "")).filter((key): key is string => Boolean(key))])];
+        const linkedEvidence = literature.map((link) => evidenceById.get(link.evidenceId)).filter((item): item is SourceEvidence => Boolean(item));
+        const approvedEvidenceCount = linkedEvidence.filter((item) => item.status === "approved").length;
+        const metadata = citationKeys.map((key) => [...projectCitationKeys.entries()].find(([, citationKey]) => citationKey === key)?.[0]).map((workId) => workId ? worksById.get(workId) : undefined);
+        const metadataVerifiedCount = metadata.filter((work) => work?.metadataStatus === "verified").length;
+        const metadataConflictCount = metadata.filter((work) => work?.metadataStatus === "conflicting").length;
+        const citationStatus: "cited" | "missing" | "unresolved" = claim.anchorStatus === "orphaned" || claim.anchorStatus === "stale" ? "unresolved" : citationKeys.length ? "cited" : "missing";
+        const evidenceStatus: "supported" | "partial" | "unsupported" | "unresolved" = claim.anchorStatus === "orphaned" || claim.anchorStatus === "stale" ? "unresolved" : claim.reviewStatus === "supported" && (approvedEvidenceCount > 0 || claimLinks.some((link) => link.kind === "review-waiver" || (link.kind === "workspace" && !link.stale))) ? "supported" : claim.reviewStatus === "partial" || linkedEvidence.length > 0 ? "partial" : claim.reviewStatus === "unsupported" ? "unsupported" : "unresolved";
+        return { claim, citationKeys, linkedEvidenceCount: linkedEvidence.length, approvedEvidenceCount, metadataVerifiedCount, metadataConflictCount, citationStatus, evidenceStatus };
+      });
+      const counts = { total: items.length, cited: items.filter((item) => item.citationStatus === "cited").length, missing: items.filter((item) => item.citationStatus === "missing").length, unresolved: items.filter((item) => item.citationStatus === "unresolved").length, supported: items.filter((item) => item.evidenceStatus === "supported").length, partial: items.filter((item) => item.evidenceStatus === "partial").length, unsupported: items.filter((item) => item.evidenceStatus === "unsupported").length };
+      const result: CitationReviewer = { projectId, projectVersion: project.version, items, counts, generatedAt: new Date().toISOString() };
+      return json(result);
+    }),
+    route("GET", "/api/projects/:projectId/claim-links", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); const visibleIds = current ? new Set(filterVisibleClaims(await claims.list(projectId), current, projectId, authorization).map((claim) => claim.id)) : undefined; return json(claims.links(projectId).filter((link) => !visibleIds || visibleIds.has(link.claimId))); }),
+    route("GET", "/api/projects/:projectId/claims/:claimId/links", async (request, params) => { const projectId = required(params, "projectId"); const claimId = required(params, "claimId"); const current = principal(request, authEnabled); if (current) await requireClaimReadAccess(projectId, claimId, current, authorization, claims); if (!(await claims.list(projectId)).some((item) => item.id === claimId)) throw new ApiError(404, "claim_not_found", "Claim not found"); return json(database.snapshot().claimEvidenceLinks.filter((link) => link.claimId === claimId)); }),
+    route("GET", "/api/projects/:projectId/argument-graph", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); const ledger = await claims.list(projectId); const visible = current ? filterVisibleClaims(ledger, current, projectId, authorization) : ledger; const visibleIds = new Set(visible.map((claim) => claim.id)); const persisted = database.snapshot().claimRelations.filter((item) => item.projectId === projectId && visibleIds.has(item.fromClaimId) && visibleIds.has(item.toClaimId)); const generated = deriveArgumentGraph(projectId, visible).filter((item) => !persisted.some((saved) => saved.fromClaimId === item.fromClaimId && saved.toClaimId === item.toClaimId)); return json({ projectId, relations: [...persisted, ...generated] }); }),
+    route("POST", "/api/projects/:projectId/adversarial-memo", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); const ledger = await claims.list(projectId); return json(buildAdversarialMemo(projectId, ledger, deriveArgumentGraph(projectId, ledger)), 201); }),
     route("POST", "/api/projects/:projectId/argument-graph/confirm", async (request, params) => { const projectId = required(params, "projectId"); const body = await readJson<{ fromClaimId: string; toClaimId: string; type: "motivates" | "addresses" | "implements" | "evaluates" | "supports" | "limits" }>(request); const projectClaims = await claims.list(projectId); if (!projectClaims.some((item) => item.id === body.fromClaimId) || !projectClaims.some((item) => item.id === body.toClaimId)) throw new ApiError(404, "claim_not_found", "Both claims must belong to the project"); const relation = { id: `relation_${crypto.randomUUID()}`, projectId, fromClaimId: body.fromClaimId, toClaimId: body.toClaimId, type: body.type, status: "confirmed" as const, origin: "user" as const }; await database.mutate((state) => { state.claimRelations.push(relation); }); return json(relation, 201); }),
     route("POST", "/api/projects/:projectId/claims/:claimId/reanchor", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireClaimAccess(projectId, required(params, "claimId"), current, authorization, claims); return json(await claims.reanchor(projectId, required(params, "claimId"))); }),
     route("PATCH", "/api/projects/:projectId/claims/:claimId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireClaimAccess(projectId, required(params, "claimId"), current, authorization, claims); return json(await claims.update(projectId, required(params, "claimId"), await readJson<{ reviewStatus?: "detected" | "needs-review" | "supported" | "partial" | "unsupported" }>(request))); }),
     route("POST", "/api/projects/:projectId/claims/:claimId/links", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireClaimAccess(projectId, required(params, "claimId"), current, authorization, claims); return json(await claims.link(projectId, required(params, "claimId"), await readJson<any>(request)), 201); }),
     route("DELETE", "/api/projects/:projectId/claims/:claimId/links/:linkId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireClaimAccess(projectId, required(params, "claimId"), current, authorization, claims); await claims.unlink(projectId, required(params, "claimId"), required(params, "linkId")); return new Response(null, { status: 204 }); }),
-    route("GET", "/api/projects/:projectId/evidence", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().sourceEvidence.filter((item) => item.projectId === projectId)); }),
-    route("POST", "/api/projects/:projectId/evidence", async (request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); const body = await readJson<{ workId?: string; kind?: "background" | "claim" | "method" | "result" | "limitation" | "quote"; content?: string; locatorType?: "page" | "section" | "paragraph" | "abstract"; locator?: string; origin?: "source-text" | "registry-abstract" | "model-extraction" | "user"; representation?: "verbatim" | "paraphrase" }>(request); if (!body.workId || !body.content?.trim() || !body.locator) throw new ApiError(400, "evidence_invalid", "workId, content and locator are required"); const state = database.snapshot(); if (!state.researchWorks.some((work) => work.id === body.workId)) throw new ApiError(404, "research_work_not_found", "Research work not found"); const timestamp = new Date().toISOString(); return json(await database.mutate((current) => { const evidence = { id: `evidence_${crypto.randomUUID()}`, projectId, workId: body.workId!, kind: body.kind ?? "background", origin: body.origin ?? "user", representation: body.representation ?? "paraphrase", status: "candidate" as const, content: body.content!.trim().slice(0, 4000), locatorType: body.locatorType ?? "abstract", locator: body.locator!.trim().slice(0, 200), createdAt: timestamp, updatedAt: timestamp }; current.sourceEvidence.push(evidence); return evidence; }), 201); }),
-    route("PATCH", "/api/projects/:projectId/evidence/:evidenceId", async (request, params) => { const body = await readJson<{ status?: "candidate" | "approved" | "rejected" | "stale" }>(request); return json(await claims.updateEvidence(required(params, "projectId"), required(params, "evidenceId"), body.status)); }),
+    route("GET", "/api/projects/:projectId/evidence", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); workspaces.getProject(projectId); return json(database.snapshot().sourceEvidence.filter((item) => item.projectId === projectId)); }),
+    route("POST", "/api/projects/:projectId/evidence", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); workspaces.getProject(projectId); const body = await readJson<{ workId?: string; kind?: "background" | "claim" | "method" | "result" | "limitation" | "quote"; content?: string; locatorType?: "page" | "section" | "paragraph" | "abstract"; locator?: string; origin?: "source-text" | "registry-abstract" | "model-extraction" | "user"; representation?: "verbatim" | "paraphrase"; stance?: "supports" | "contradicts" | "mentions" | "unknown" }>(request); if (!body.workId || !body.content?.trim() || !body.locator) throw new ApiError(400, "evidence_invalid", "workId, content and locator are required"); const state = database.snapshot(); if (!state.researchWorks.some((work) => work.id === body.workId)) throw new ApiError(404, "research_work_not_found", "Research work not found"); const timestamp = new Date().toISOString(); return json(await database.mutate((current) => { const evidence = { id: `evidence_${crypto.randomUUID()}`, projectId, workId: body.workId!, kind: body.kind ?? "background", origin: body.origin ?? "user", representation: body.representation ?? "paraphrase", status: "candidate" as const, content: body.content!.trim().slice(0, 4000), locatorType: body.locatorType ?? "abstract", locator: body.locator!.trim().slice(0, 200), ...(body.stance ? { stance: body.stance } : {}), createdAt: timestamp, updatedAt: timestamp }; current.sourceEvidence.push(evidence); return evidence; }), 201); }),
+    route("PATCH", "/api/projects/:projectId/evidence/:evidenceId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); const body = await readJson<{ status?: "candidate" | "approved" | "rejected" | "stale"; stance?: "supports" | "contradicts" | "mentions" | "unknown"; representation?: "verbatim" | "paraphrase" }>(request); return json(await claims.updateEvidence(projectId, required(params, "evidenceId"), body)); }),
     route("GET", "/api/texlive/:packageName", async (_request, params, url) => texPackages.texLiveArchive(required(params, "packageName"), url.searchParams.get("tlYear"))),
     route("GET", "/api/fetch/:packageName", async (_request, params, url) => texPackages.ctanPackage(required(params, "packageName"), url.searchParams.get("tlYear"))),
     route("GET", "/api/ctan-pkg/:packageName", async (_request, params) => texPackages.ctanPackageInfo(required(params, "packageName"))),
@@ -589,14 +788,15 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       await assignProjectOwner(project, principal(request, false), body.teamId);
       return json(project, 201);
     }),
-    route("GET", "/api/projects/:projectId", async (_request, params) => json(workspaces.getProject(required(params, "projectId")))),
+    route("GET", "/api/projects/:projectId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(workspaces.getProject(projectId)); }),
     route("POST", "/api/projects/:projectId/transfer", async (request, params) => { const body = await readJson<{ teamId?: string; personalOwnerUserId?: string }>(request); await teams.transferProject(required(params, "projectId"), principal(request)!, body); return json(workspaces.getProject(required(params, "projectId"))); }),
     route("PATCH", "/api/projects/:projectId", async (request, params) => {
       const body = await readJson<{ name?: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget | null }>(request);
       return json(await workspaces.updateProject(required(params, "projectId"), body));
     }),
-    route("DELETE", "/api/projects/:projectId", async (_request, params) => {
-      await workspaces.deleteProject(required(params, "projectId"));
+    route("DELETE", "/api/projects/:projectId", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:manage");
+      await workspaces.deleteProject(projectId);
       return new Response(null, { status: 204 });
     }),
     route("GET", "/api/projects/:projectId/export", async (request, params) => {
@@ -733,17 +933,17 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       return json(await githubSync.finalize(required(params, "projectId"), required(params, "syncId")));
     }),
     route("GET", "/api/projects/:projectId/files", async (request, params, url) => {
-      const projectId = required(params, "projectId"); const directory = url.searchParams.get("directory"); const current = principal(request, authEnabled);
+      const projectId = required(params, "projectId"); const directory = url.searchParams.get("directory"); const current = principal(request, authEnabled); const support = supportGrant(request, projectId, directory ?? "", current);
       if (current) { authorization.requireProject(current, projectId, "project:read"); if (directory !== null) authorization.requireProjectPath(current, projectId, directory, "project:read"); }
       const tree = directory === null ? await workspaces.tree(projectId) : await workspaces.treeLevel(projectId, directory);
-      return json(current ? filterVisibleTree(tree, current, projectId, authorization) : tree);
+      return json(current ? filterVisibleTree(tree, current, projectId, authorization) : support ? filterSupportTree(tree, support.path) : tree);
     }),
     route("GET", "/api/projects/:projectId/file", async (request, params, url) => {
-      const projectId = required(params, "projectId"); const path = requiredQuery(url, "path"); const current = principal(request, authEnabled); if (current) authorization.requireProjectPath(current, projectId, path, "project:read");
+      const projectId = required(params, "projectId"); const path = requiredQuery(url, "path"); const current = principal(request, authEnabled); const support = supportGrant(request, projectId, path, current); if (current) authorization.requireProjectPath(current, projectId, path, "project:read");
       return json(await workspaces.readTextFile(projectId, path));
     }),
     route("GET", "/api/projects/:projectId/asset", async (request, params, url) => {
-      const projectId = required(params, "projectId"); const path = requiredQuery(url, "path"); const current = principal(request, authEnabled); if (current) authorization.requireProjectPath(current, projectId, path, "project:read");
+      const projectId = required(params, "projectId"); const path = requiredQuery(url, "path"); const current = principal(request, authEnabled); const support = supportGrant(request, projectId, path, current); if (current) authorization.requireProjectPath(current, projectId, path, "project:read");
       return workspaces.readAsset(projectId, path);
     }),
     route("PUT", "/api/projects/:projectId/file", async (request, params, url) => {
@@ -771,7 +971,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       const projectId = required(params, "projectId");
       const current = principal(request, authEnabled); if (current) { authorization.requireProjectPath(current, projectId, body.from, "project:write"); authorization.requireProjectPath(current, projectId, body.to, "project:write"); }
       await workspaces.renamePath(projectId, body.from, body.to);
-      await collaboration.archivePath(projectId, body.from);
+      await collaboration.renamePath(projectId, normalizeWorkspacePath(body.from), normalizeWorkspacePath(body.to));
       await claims.renamePath(projectId, body.from, body.to);
       return new Response(null, { status: 204 });
     }),
@@ -784,9 +984,9 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       await claims.deletePath(projectId, path);
       return new Response(null, { status: 204 });
     }),
-    route("GET", "/api/projects/:projectId/outline", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); const outline = await workspaces.outline(projectId); return json(current ? filterVisibleOutline(outline, current, projectId, authorization) : outline); }),
+    route("GET", "/api/projects/:projectId/outline", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); const outline = await workspaces.outline(projectId); return json(current ? filterVisibleOutline(outline, current, projectId, authorization) : outline); }),
     route("GET", "/api/projects/:projectId/search", async (request, params, url) => { const projectId = required(params, "projectId"); const current = principal(request, true)!; return json(await projectSearch.search(projectId, current, url.searchParams.get("query") ?? "")); }),
-    route("GET", "/api/projects/:projectId/skills", async (_request, params) => json(workspaces.getProject(required(params, "projectId")).skill)),
+    route("GET", "/api/projects/:projectId/skills", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(workspaces.getProject(projectId).skill); }),
     route("POST", "/api/projects/:projectId/completions", async (request, params) => {
       const projectId = required(params, "projectId"); const body = await readJson<CompletionRequest>(request); const current = principal(request, authEnabled); if (current) authorization.requireProjectPath(current, projectId, body.path, "agent:propose"); await collaboration.flushProject(projectId);
       return json(await completions.suggest(projectId, body), 201);
@@ -795,19 +995,47 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       const projectId = required(params, "projectId"); const body = await readJson<ReviseRequest>(request); const current = principal(request, authEnabled); if (current) authorization.requireProjectPath(current, projectId, body.selection.path, "agent:propose"); await collaboration.flushProject(projectId);
       return json(await revisions.propose(projectId, body), 201);
     }),
-    route("GET", "/api/projects/:projectId/drafts", async (_request, params) => json(drafts.list(required(params, "projectId")))),
+    route("POST", "/api/projects/:projectId/table-equation-candidates", async (request, params) => {
+      const projectId = required(params, "projectId");
+      const current = principal(request, authEnabled);
+      const body = await readJson<{ kind: "table" | "equation"; targetPath: string; sourceFormat: "csv" | "natural-language" | "latex"; source: string; caption?: string; label?: string }>(request);
+      if (!new Set(["table", "equation"]).has(body.kind) || !new Set(["csv", "natural-language", "latex"]).has(body.sourceFormat)) throw new ApiError(400, "candidate_invalid", "Candidate kind or source format is invalid");
+      const targetPath = normalizeWorkspacePath(body.targetPath);
+      if (!/\.tex$/i.test(targetPath) || body.source.length > 100_000) throw new ApiError(400, "candidate_invalid", "Target must be a TeX path and source must be bounded");
+      if (current) authorization.requireProjectPath(current, projectId, targetPath, "agent:propose");
+      const opened = await workspaces.fileExists(projectId, targetPath) ? await workspaces.readTextFile(projectId, targetPath) : undefined;
+      const generated = body.kind === "table" ? tableCandidate(body.source, body.sourceFormat, body.caption, body.label) : equationCandidate(body.source, body.sourceFormat, body.label);
+      const change = opened ? { operation: "replace" as const, path: targetPath, from: opened.content.length, to: opened.content.length, before: "", after: `\n${generated.content}`, baseVersion: opened.file.version, baseContent: opened.content } : { operation: "create" as const, path: targetPath, from: 0, to: 0, before: "", after: generated.content, baseVersion: 0, baseContent: "" };
+      const changeSet = { id: `change_${crypto.randomUUID()}`, projectId, agentRunId: `assistant_${crypto.randomUUID()}`, status: "proposed" as const, approvalMode: "explicit-finish" as const, summary: `Propose ${body.kind} in ${targetPath}`, rationale: "Generated from bounded user input; review the ChangeSet and compile before applying.", changes: [{ ...change, currentVersion: change.baseVersion }], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      await database.mutate((state) => state.changeSets.push(changeSet));
+      return json({ kind: body.kind, projectId, targetPath, sourceFormat: body.sourceFormat, schema: generated.schema, preview: generated.content.slice(0, 4000), changeSet, compileCheck: { status: "not-run" as const } }, 201);
+    }),
+    route("POST", "/api/projects/:projectId/table-equation-candidates/:changeSetId/compile-check", async (request, params) => {
+      const projectId = required(params, "projectId");
+      const changeSetId = required(params, "changeSetId");
+      const changeSet = database.snapshot().changeSets.find((candidate) => candidate.projectId === projectId && candidate.id === changeSetId);
+      if (!changeSet) throw new ApiError(404, "changeset_not_found", "Candidate ChangeSet not found");
+      const change = changeSet.changes[0];
+      if (!change) throw new ApiError(400, "candidate_invalid", "Candidate ChangeSet has no file change");
+      const result = validateLatexCandidate(change.after);
+      return json({ status: result.status, message: result.message, changeSetId });
+    }),
+    route("GET", "/api/projects/:projectId/drafts", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(drafts.list(projectId)); }),
     route("POST", "/api/projects/:projectId/drafts", async (request, params) => {
-      const projectId = required(params, "projectId"); await collaboration.flushProject(projectId);
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces); await collaboration.flushProject(projectId);
       return json(await drafts.plan(projectId, await readJson<DraftRequest>(request), request.signal), 201);
     }),
     route("POST", "/api/projects/:projectId/drafts/:draftId/confirm", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces);
       const body = await readJson<{ outline: DraftOutlineSection[] }>(request);
-      return json(await drafts.confirm(required(params, "projectId"), required(params, "draftId"), body.outline, request.signal), 201);
+      return json(await drafts.confirm(projectId, required(params, "draftId"), body.outline, request.signal), 201);
     }),
-    route("POST", "/api/projects/:projectId/drafts/:draftId/cancel", async (_request, params) => {
-      return json(await drafts.cancel(required(params, "projectId"), required(params, "draftId")));
+    route("POST", "/api/projects/:projectId/drafts/:draftId/cancel", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
+      return json(await drafts.cancel(projectId, required(params, "draftId")));
     }),
-    route("GET", "/api/projects/:projectId/reviews", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); const reports = reviews.list(projectId); return json(current ? filterVisibleReviewReports(reports, projectId, current, authorization, database) : reports); }),
+    route("GET", "/api/projects/:projectId/reviews", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); const reports = reviews.list(projectId); return json(current ? filterVisibleReviewReports(reports, projectId, current, authorization, database) : reports); }),
+    route("GET", "/api/projects/:projectId/reviews/coverage", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); const reports = current ? filterVisibleReviewReports(reviews.list(projectId), projectId, current, authorization, database) : reviews.list(projectId); const latest = reports[0]; const passes = latest?.passes ?? []; return json({ ...reviews.coverage(projectId), inputBoundary: latest?.coverage?.inputBoundary ?? passes.map((pass) => pass.inputBoundary).find(Boolean) }); }),
     route("POST", "/api/projects/:projectId/reviews", async (request, params) => {
       const body = await readJson<{ sourceOnly?: boolean; pageText?: string[] }>(request);
       if (body.pageText !== undefined && (!Array.isArray(body.pageText) || body.pageText.some((item) => typeof item !== "string") || body.pageText.length > 20 || body.pageText.reduce((total, item) => total + item.length, 0) > 200_000)) throw new ApiError(400, "review_pdf_preview_invalid", "PDF preview text exceeds the bounded review input limits");
@@ -820,53 +1048,84 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     }),
     route("POST", "/api/projects/:projectId/review-issues", async (request, params) => { const projectId = required(params, "projectId"); const body = await readJson<Parameters<ReviewService["createIssue"]>[1]>(request); const current = principal(request, authEnabled); if (current) requireReviewReportAccess(projectId, body.reportId ?? reviews.list(projectId)[0]?.id, current, authorization, database); return json(await reviews.createIssue(projectId, body), 201); }),
     route("POST", "/api/projects/:projectId/review-issues/:issueId/merge", async (request, params) => { const projectId = required(params, "projectId"); const body = await readJson<{ duplicateIds: string[]; reason?: string }>(request); const current = principal(request, authEnabled); if (current) for (const issueId of [required(params, "issueId"), ...body.duplicateIds]) requireReviewIssueAccess(projectId, issueId, current, authorization, database); return json(await reviews.mergeIssues(projectId, required(params, "issueId"), body.duplicateIds, body.reason)); }),
-    route("GET", "/api/projects/:projectId/memory", async (_request, params) => json(await memories.get(required(params, "projectId")))),
-    route("POST", "/api/projects/:projectId/memory/extract", async (_request, params) => json(await memories.extract(required(params, "projectId")), 201)),
-    route("POST", "/api/projects/:projectId/memory/apply", async (_request, params) => json(await memories.applyReviewed(required(params, "projectId")))),
+    route("GET", "/api/projects/:projectId/memory", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(await memories.get(projectId)); }),
+    route("POST", "/api/projects/:projectId/memory/extract", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "project:read", workspaces); return json(await memories.extract(projectId), 201); }),
+    route("POST", "/api/projects/:projectId/memory/apply", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "project:write", workspaces); return json(await memories.applyReviewed(projectId)); }),
     route("PATCH", "/api/projects/:projectId/memory/overview", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
       const body = await readJson<{ content: string; locked?: boolean }>(request);
-      return json(await memories.updateOverview(required(params, "projectId"), body.content, body.locked !== false, request.signal));
+      return json(await memories.updateOverview(projectId, body.content, body.locked !== false, request.signal));
     }),
-    route("POST", "/api/projects/:projectId/memory/overview/accept", async (_request, params) => json(await memories.acceptOverviewCandidate(required(params, "projectId")))),
+    route("POST", "/api/projects/:projectId/memory/overview/accept", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await memories.acceptOverviewCandidate(projectId)); }),
     route("PATCH", "/api/projects/:projectId/memory/sections/:sectionId", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
       const body = await readJson<{ content: string; locked?: boolean }>(request);
-      return json(await memories.updateSection(required(params, "projectId"), required(params, "sectionId"), body.content, body.locked !== false, request.signal));
+      return json(await memories.updateSection(projectId, required(params, "sectionId"), body.content, body.locked !== false, request.signal));
     }),
-    route("POST", "/api/projects/:projectId/memory/sections/:sectionId/accept", async (_request, params) => json(await memories.acceptSectionCandidate(required(params, "projectId"), required(params, "sectionId")))),
+    route("POST", "/api/projects/:projectId/memory/sections/:sectionId/accept", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await memories.acceptSectionCandidate(projectId, required(params, "sectionId"))); }),
     route("PATCH", "/api/projects/:projectId/memory/items/:itemId", async (request, params) => {
-      return json(await memories.updateItem(required(params, "projectId"), required(params, "itemId"), await readJson<{ status?: MemoryItemStatus; content?: string; label?: string }>(request), request.signal));
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
+      return json(await memories.updateItem(projectId, required(params, "itemId"), await readJson<{ status?: MemoryItemStatus; content?: string; label?: string }>(request), request.signal));
     }),
-    route("POST", "/api/projects/:projectId/memory/items/:itemId/accept", async (_request, params) => json(await memories.acceptItemCandidate(required(params, "projectId"), required(params, "itemId")))),
-    route("POST", "/api/projects/:projectId/memory/rollback", async (_request, params) => json(await memories.rollback(required(params, "projectId")))),
-    route("GET", "/api/projects/:projectId/agent-tasks", async (_request, params) => json(agentTasks.list(required(params, "projectId")))),
-    route("GET", "/api/projects/:projectId/agent-runs", async (_request, params) => { const projectId = required(params, "projectId"); workspaces.getProject(projectId); return json(database.snapshot().agentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); }),
-    route("GET", "/api/projects/:projectId/provenance", async (_request, params) => {
+    route("POST", "/api/projects/:projectId/memory/items/:itemId/accept", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await memories.acceptItemCandidate(projectId, required(params, "itemId"))); }),
+    route("POST", "/api/projects/:projectId/memory/rollback", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await memories.rollback(projectId)); }),
+    route("GET", "/api/projects/:projectId/agent-tasks", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(agentTasks.list(projectId)); }),
+    route("GET", "/api/projects/:projectId/agent-runs", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); workspaces.getProject(projectId); return json(database.snapshot().agentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); }),
+    route("GET", "/api/projects/:projectId/provenance", async (request, params) => {
       const projectId = required(params, "projectId");
+      const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read");
       const project = workspaces.getProject(projectId);
       const state = database.snapshot();
       const runs = state.agentRuns.filter((run) => run.projectId === projectId).map((run) => ({ id: run.id, type: run.type, status: run.status, objective: run.objective, skill: run.skill, publicationTarget: run.publicationTarget, changeSetId: run.changeSetId, createdAt: run.createdAt, updatedAt: run.updatedAt, auditTrail: run.auditTrail ?? [] }));
       const changeSets = state.changeSets.filter((changeSet) => changeSet.projectId === projectId).map((changeSet) => ({ id: changeSet.id, agentRunId: changeSet.agentRunId, status: changeSet.status, summary: changeSet.summary, rationale: changeSet.rationale, baseCheckpointOid: changeSet.baseCheckpointOid, appliedCheckpointOids: changeSet.appliedCheckpointOids, reviewFinishedAt: changeSet.reviewFinishedAt, createdAt: changeSet.createdAt, updatedAt: changeSet.updatedAt, changes: changeSet.changes.map((change) => ({ path: change.path, operation: change.operation, appliedVersion: change.appliedVersion, hunks: (change.hunks ?? []).map((hunk) => ({ id: hunk.id, status: hunk.status, rationale: hunk.rationale, findings: hunk.findings, additions: classifyHunkAdditions(hunk.after) })) })) }));
+      const experiments = state.experimentRuns.filter((run) => run.projectId === projectId).map((run) => ({ id: run.id, projectVersion: run.projectVersion, scriptPath: run.scriptPath, status: run.status, authorization: run.authorization, inputSnapshotHash: run.inputSnapshotHash, result: run.result ? { success: run.result.success, exitCode: run.result.exitCode, artifactPaths: run.result.artifactPaths, runId: run.result.runId } : undefined, jobId: run.jobId, createdAt: run.createdAt, updatedAt: run.updatedAt }));
       const aiRuns = runs.filter((run) => run.type !== "review");
       const venueLabel = project.publicationTarget?.venueId ?? project.skill.venue;
       const disclosureDraft = aiRuns.length
         ? `AI usage disclosure (${venueLabel}): During preparation of this manuscript, the authors used FastWrite AI-assisted workflows for ${[...new Set(aiRuns.map((run) => run.type))].join(", ")} operations. All generated changes were reviewed and approved by the authors; the authors remain responsible for the final content, claims, citations, and compliance. This statement should be checked against the selected venue's current author instructions before submission.`
         : "No AI-assisted writing operation is recorded for this project.";
-      return json({ project: { id: project.id, version: project.version, mainDocument: project.mainDocument, skill: project.skill, publicationTarget: project.publicationTarget }, generatedAt: new Date().toISOString(), disclosureDraft, runs, changeSets });
+      return json({ project: { id: project.id, version: project.version, mainDocument: project.mainDocument, skill: project.skill, publicationTarget: project.publicationTarget }, generatedAt: new Date().toISOString(), disclosureDraft, runs, changeSets, experiments });
+    }),
+    route("GET", "/api/projects/:projectId/provenance/export", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read");
+      const project = workspaces.getProject(projectId); const state = database.snapshot();
+      const runs = state.agentRuns.filter((run) => run.projectId === projectId).map((run) => ({ id: run.id, type: run.type, status: run.status, objective: run.objective, createdAt: run.createdAt, updatedAt: run.updatedAt, skill: run.skill, publicationTarget: run.publicationTarget, auditTrail: run.auditTrail ?? [] }));
+      const changeSets = state.changeSets.filter((item) => item.projectId === projectId).map((item) => ({ id: item.id, status: item.status, summary: item.summary, agentRunId: item.agentRunId, changes: item.changes.map((change) => ({ path: change.path, operation: change.operation, hunks: (change.hunks ?? []).map((hunk) => ({ id: hunk.id, status: hunk.status, additions: classifyHunkAdditions(hunk.after) })) })) }));
+      const payload = JSON.stringify({ project: { id: project.id, version: project.version, mainDocument: project.mainDocument, skill: project.skill, publicationTarget: project.publicationTarget }, generatedAt: new Date().toISOString(), runs, changeSets }, null, 2);
+      return new Response(payload, { headers: { "content-type": "application/json; charset=utf-8", "content-disposition": `attachment; filename="fastwrite-provenance-${projectId}.json"` } });
     }),
     route("POST", "/api/projects/:projectId/agent-tasks", async (request, params) => { const projectId = required(params, "projectId"); await collaboration.flushProject(projectId); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces); return json(await agentTasks.plan(projectId, await readJson<AgentTaskRequest>(request), request.signal), 201); }),
     route("POST", "/api/projects/:projectId/agent-tasks/:planId/confirm", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces); return json(await agentTasks.confirm(projectId, required(params, "planId"), request.signal), 201); }),
-    route("POST", "/api/projects/:projectId/agent-tasks/:planId/cancel", async (_request, params) => json(await agentTasks.cancel(required(params, "projectId"), required(params, "planId")))),
-    route("GET", "/api/projects/:projectId/issue-resolutions", async (_request, params) => json(agentTasks.resolutions(required(params, "projectId")))),
-    route("POST", "/api/projects/:projectId/issue-resolutions/:resolutionId/rereview", async (request, params) => json(await agentTasks.rereview(required(params, "projectId"), required(params, "resolutionId"), request.signal))),
-    route("POST", "/api/projects/:projectId/issue-resolutions/:resolutionId/reopen", async (_request, params) => json(await agentTasks.reopen(required(params, "projectId"), required(params, "resolutionId")))),
-    route("GET", "/api/projects/:projectId/compile-results/latest", async (_request, params) => {
+    route("POST", "/api/projects/:projectId/agent-tasks/:planId/cancel", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await agentTasks.cancel(projectId, required(params, "planId"))); }),
+    route("GET", "/api/projects/:projectId/issue-resolutions", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(agentTasks.resolutions(projectId)); }),
+    route("POST", "/api/projects/:projectId/issue-resolutions/:resolutionId/rereview", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await agentTasks.rereview(projectId, required(params, "resolutionId"), request.signal)); }),
+    route("POST", "/api/projects/:projectId/issue-resolutions/:resolutionId/reopen", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await agentTasks.reopen(projectId, required(params, "resolutionId"))); }),
+    route("GET", "/api/projects/:projectId/compile-results/latest", async (request, params) => {
       const projectId = required(params, "projectId");
+      const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read");
       workspaces.getProject(projectId);
       return json(database.snapshot().compileRecords.filter((record) => record.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null);
     }),
-    route("POST", "/api/projects/:projectId/compile", async (request, params) => { const projectId = required(params, "projectId"); await collaboration.flushProject(projectId); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); const result = await latexCompiler.compile(projectId); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); return json(result); }),
+    route("POST", "/api/projects/:projectId/compile", async (request, params) => { const projectId = required(params, "projectId"); await collaboration.flushProject(projectId); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); const paths = current ? await visibleTextPaths(projectId, current, authorization, "compile:run", workspaces) : []; const job = jobs.enqueue("latex.compile", { projectId }, async ({ projectId: queuedProjectId }) => { const result = await latexCompiler.compile(queuedProjectId); if (current) await requireWorkspacePathAccess(queuedProjectId, current, authorization, "compile:run", workspaces); return result; }, { policy: { ...(current ? { actorUserId: current.user.id, authorizationVersion: current.user.authzVersion, action: "compile:run", paths } : {}), projectId, projectVersion: workspaces.getProject(projectId).version }, recheck: async () => { if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); } }); return json(job, 202); }),
+    route("POST", "/api/projects/:projectId/experiments", async (request, params) => {
+      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces);
+      const body = await readJson<{ scriptPath: string; authorization: "user-approved"; timeoutMs?: number; memoryLimitMb?: number; cpuSeconds?: number }>(request);
+      if (body.authorization !== "user-approved") throw new ApiError(403, "experiment_authorization_required", "Experiment execution requires explicit user authorization.");
+      let job: JobRecord;
+      const experimentId = `experiment_${crypto.randomUUID()}`;
+      const projectVersion = workspaces.getProject(projectId).version;
+      await database.mutate((state) => { state.experimentRuns.push({ id: experimentId, projectId, projectVersion, scriptPath: body.scriptPath, status: "queued", authorization: "user-approved", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); });
+      try { job = jobs.enqueue("experiment.run", { experimentId, projectId, scriptPath: body.scriptPath, authorization: body.authorization, timeoutMs: body.timeoutMs, memoryLimitMb: body.memoryLimitMb, cpuSeconds: body.cpuSeconds }, async (input) => { await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.status = "running"; run.updatedAt = new Date().toISOString(); } }); try { const result = await experiments.run(input as Parameters<ExperimentRunner["run"]>[0]); await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.status = result.success ? "completed" : "failed"; run.inputSnapshotHash = result.inputSnapshotHash; run.result = result; run.updatedAt = new Date().toISOString(); } }); return result; } catch (error) { await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.status = "failed"; run.updatedAt = new Date().toISOString(); } }); throw error; } }, { start: process.env.FASTWRITE_JOB_WORKER_MODE !== "external", policy: { ...(current ? { actorUserId: current.user.id, authorizationVersion: current.user.authzVersion, action: "compile:run" } : {}), projectId, projectVersion }, recheck: async () => { if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); } }); await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.jobId = job.id; run.updatedAt = new Date().toISOString(); } }); }
+      catch (error) { if (error instanceof Error && error.message === "job_quota_exceeded") throw new ApiError(429, "job_quota_exceeded", "Too many active jobs; retry later."); throw error; }
+      return json(job, 202);
+    }),
+    route("GET", "/api/projects/:projectId/experiments", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); workspaces.getProject(projectId); return json(database.snapshot().experimentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }),
+    route("GET", "/api/jobs/:jobId", async (request, params) => { const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); const current = principal(request, authEnabled); authorizeJob(request, job, current); if (current && job.policy?.projectId) authorization.requireProject(current, job.policy.projectId, "project:read"); return json(job); }),
+    route("POST", "/api/jobs/:jobId/progress", async (request, params) => { const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); const current = principal(request, authEnabled); authorizeJob(request, job, current); if (current && job.policy?.projectId) authorization.requireProject(current, job.policy.projectId, "project:write"); const body = await readJson<{ completed: number; total?: number; message?: string }>(request); if (!Number.isFinite(body.completed) || (body.total !== undefined && !Number.isFinite(body.total))) throw new ApiError(400, "job_progress_invalid", "Job progress must contain finite numbers"); try { return json(jobs.updateProgress(job.id, body)); } catch (error) { if (error instanceof Error && error.message === "Job is not active") throw new ApiError(409, "job_not_active", "Job is no longer active"); throw error; } }),
+    route("POST", "/api/jobs/:jobId/cancel", async (request, params) => { try { const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); const current = principal(request, authEnabled); authorizeJob(request, job, current); if (current && job.policy?.projectId) authorization.requireProject(current, job.policy.projectId, "project:manage"); return json(jobs.cancel(job.id)); } catch (error) { if (error instanceof ApiError) throw error; throw new ApiError(404, "job_not_found", "Job not found"); } }),
     route("POST", "/api/projects/:projectId/compile-results", async (request, params) => {
       const projectId = required(params, "projectId");
+      const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
       const project = workspaces.getProject(projectId);
       const body = await readJson<{ projectVersion: number; status: "success" | "error"; summary: string }>(request);
       if (!Number.isInteger(body.projectVersion) || body.projectVersion < 1 || body.projectVersion > project.version || !new Set(["success", "error"]).has(body.status)) throw new ApiError(400, "compile_result_invalid", "Compile result does not match a valid project version");
@@ -987,11 +1246,55 @@ function classifyHunkAdditions(after: string): { claims: boolean; citations: boo
   return { claims: /\b(?:we|our|this work|results? show|demonstrate|achieve)\b/i.test(after), citations: /\\(?:cite|citep|citet|autocite)\b|\[[^\]]*\d{4}[^\]]*\]/i.test(after), numbers: /\b\d+(?:\.\d+)?\s*(?:%|ms|s|m|k|mb|gb|x)?\b/i.test(after), experimentalConclusions: /\b(?:improv|outperform|significant|accuracy|f1|auc|recall|precision)\b/i.test(after) };
 }
 
+function tableCandidate(source: string, format: "csv" | "natural-language" | "latex", caption?: string, label?: string): { content: string; schema: { columns?: string[]; rows?: number } } {
+  if (format === "latex") {
+    if (!/\\begin\{tabular\}/.test(source) || /\\(?:input|include|write18|openin|openout)\b/.test(source)) throw new ApiError(400, "table_source_invalid", "LaTeX table must contain tabular and no file or shell commands");
+    return { content: source.trim(), schema: {} };
+  }
+  const rows = format === "csv" ? source.trim().split(/\r?\n/).filter(Boolean).map((line) => line.split(",").map((cell) => cell.trim())) : [[source.trim()]];
+  if (!rows.length || rows.length > 200 || rows.some((row) => row.length > 30)) throw new ApiError(400, "table_source_invalid", "Table input has too many rows or columns");
+  const columns = rows[0]!.map((cell, index) => cell || `Column ${index + 1}`);
+  const body = rows.slice(1).map((row) => `${row.map((cell) => escapeLatex(cell)).join(" & ")} \\\\`).join("\n");
+  const content = `\\begin{table}[t]\n\\centering\n${caption?.trim() ? `\\caption{${escapeLatex(caption.trim())}}\n` : ""}${label?.trim() ? `\\label{${safeLabel(label)} }\n` : ""}\\begin{tabular}{${"l".repeat(columns.length)}}\n${columns.map(escapeLatex).join(" & ")} \\\\ \\hline\n${body}\n\\end{tabular}\n\\end{table}\n`;
+  return { content, schema: { columns, rows: Math.max(0, rows.length - 1) } };
+}
+
+function equationCandidate(source: string, format: "natural-language" | "latex" | "csv", label?: string): { content: string; schema: { variables?: string[] } } {
+  const expression = source.trim();
+  if (!expression || expression.length > 4000 || /\\(?:input|include|write18|openin|openout)\b/.test(expression)) throw new ApiError(400, "equation_source_invalid", "Equation input is empty, too large, or contains file commands");
+  const content = `\\begin{equation}\n${expression}\n${label?.trim() ? `\\label{${safeLabel(label)}}\n` : ""}\\end{equation}\n`;
+  const variables = [...new Set(expression.match(/\\?[A-Za-z][A-Za-z0-9_]*/g) ?? [])].filter((item) => !/^\\?(?:frac|sum|sqrt|text|mathrm|mathbf)$/.test(item)).slice(0, 100);
+  return { content, schema: { variables } };
+}
+
+function escapeLatex(value: string): string { return value.replace(/[&%$#_{}~^\\]/g, (character) => ({ "&": "\\&", "%": "\\%", "$": "\\$", "#": "\\#", _: "\\_", "{": "\\{", "}": "\\}", "~": "\\textasciitilde{}", "^": "\\textasciicircum{}", "\\": "\\textbackslash{}" }[character] ?? character)); }
+function safeLabel(value: string): string { return value.replace(/[^A-Za-z0-9:._-]/g, "-").slice(0, 120); }
+function validateLatexCandidate(content: string): { status: "passed" | "failed"; message: string } {
+  if (/\\(?:input|include|write18|openin|openout)\b/.test(content)) return { status: "failed", message: "Candidate contains disallowed file or shell commands." };
+  const environments = [...content.matchAll(/\\(begin|end)\{([^}]+)\}/g)].map((match) => `${match[1]}:${match[2]}`);
+  const stack: string[] = [];
+  for (const item of environments) { const [kind, name] = item.split(":"); if (kind === "begin") stack.push(name!); else if (stack.pop() !== name) return { status: "failed", message: `Unbalanced LaTeX environment near ${name}.` }; }
+  if (stack.length) return { status: "failed", message: `Unclosed LaTeX environment ${stack.at(-1)}.` };
+  return { status: "passed", message: "Balanced environments and no disallowed commands detected. Full project compile is still required." };
+}
+
 function shareTokenHash(token: string): string { return new Bun.CryptoHasher("sha256").update(token).digest("hex"); }
 function activeShare(shares: Array<{ tokenHash: string; revokedAt?: string; expiresAt?: string }>, token: string) {
   const share = shares.find((item) => item.tokenHash === shareTokenHash(token));
   if (!share || share.revokedAt || (share.expiresAt && Date.parse(share.expiresAt) <= Date.now())) throw new ApiError(404, "share_not_found", "Share link not found or expired");
   return share as typeof share & { id: string; projectId: string; permission: "read" | "comment" };
+}
+
+function supportGrant(request: Request, projectId: string, path: string, actor?: Principal): { path: string } | undefined {
+  const header = request.headers.get("x-fastwrite-support-grant");
+  if (!header) return undefined;
+  let grant: { projectId?: string; path?: string; expiresAt?: string; scope?: string; authorized?: boolean; userId?: string; sessionId?: string };
+  try { grant = JSON.parse(header); } catch { throw new ApiError(403, "support_grant_invalid", "Support grant is invalid"); }
+  if (grant.authorized !== true || grant.scope !== "read" || grant.projectId !== projectId || !grant.path || !grant.expiresAt || !grant.userId || !grant.sessionId || !actor || grant.userId !== actor.user.id || grant.sessionId !== actor.sessionId || Date.parse(grant.expiresAt) <= Date.now()) throw new ApiError(403, "support_grant_expired", "Support grant is invalid or expired");
+  const normalized = normalizeWorkspacePath(path);
+  const prefix = normalizeWorkspacePath(grant.path);
+  if (!(normalized === prefix || normalized.startsWith(`${prefix}/`) || prefix === "")) throw new ApiError(403, "support_grant_scope_denied", "Path is outside the support grant scope");
+  return { path: prefix };
 }
 
 function textPaths(nodes: any[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }
@@ -1058,6 +1361,17 @@ function filterVisibleTree(nodes: WorkspaceTreeNode[], principal: Principal, pro
   return visible;
 }
 
+function filterSupportTree(nodes: WorkspaceTreeNode[], prefix: string): WorkspaceTreeNode[] {
+  const result: WorkspaceTreeNode[] = [];
+  for (const node of nodes) {
+    if (!(node.path === prefix || prefix === "" || node.path.startsWith(`${prefix}/`) || prefix.startsWith(`${node.path}/`))) continue;
+    if (node.type === "file") { result.push(node); continue; }
+    const children = filterSupportTree(node.children, prefix);
+    if (children.length) result.push({ ...node, children });
+  }
+  return result;
+}
+
 function filterVisibleOutline(items: OutlineItem[], principal: Principal, projectId: string, authorization: AuthorizationService): OutlineItem[] {
   return items.filter((item) => canReadProjectPath(principal, projectId, item.path, authorization)).map((item) => ({ ...item, children: filterVisibleOutline(item.children, principal, projectId, authorization) }));
 }
@@ -1069,6 +1383,7 @@ async function requireClaimAccess(projectId: string, claimId: string, principal:
   if (!claim) throw new ApiError(404, "claim_not_found", "Claim was not found");
   authorization.requireProjectPath(principal, projectId, claim.anchor.path, "project:write");
 }
+async function requireClaimReadAccess(projectId: string, claimId: string, principal: Principal, authorization: AuthorizationService, claims: ClaimService): Promise<void> { const claim = (await claims.list(projectId)).find((item) => item.id === claimId); if (!claim) throw new ApiError(404, "claim_not_found", "Claim was not found"); authorization.requireProjectPath(principal, projectId, claim.anchor.path, "project:read"); }
 
 function canReadProjectPath(principal: Principal, projectId: string, path: string, authorization: AuthorizationService): boolean { try { authorization.requireProjectPath(principal, projectId, path, "project:read"); return true; } catch { return false; } }
 
@@ -1094,6 +1409,10 @@ function requireReviewReportAccess(projectId: string, reportId: string | undefin
   const report = reportId ? state.reviewReports.find((candidate) => candidate.id === reportId && candidate.projectId === projectId) : undefined;
   const snapshot = report ? state.reviewSnapshots.find((candidate) => candidate.id === report.snapshotId && candidate.projectId === projectId) : undefined;
   if (!report || !snapshot || !snapshot.files.every((file) => { try { authorization.requireProjectPath(principal, projectId, file.path, "project:read"); return true; } catch { return false; } })) throw new ApiError(403, "review_report_access_denied", "You do not have permission to access this review report");
+}
+
+function authorizeJob(request: Request, job: import("./jobs/job-queue").JobRecord, current: Principal | undefined): void {
+  if (job.policy?.actorUserId && (!current || job.policy.actorUserId !== current.user.id)) throw new ApiError(403, "job_access_denied", "This job belongs to another principal");
 }
 
 async function visibleTextPaths(projectId: string, principal: Principal, authorization: AuthorizationService, action: ProjectAction, workspaces: WorkspaceService): Promise<string[]> {

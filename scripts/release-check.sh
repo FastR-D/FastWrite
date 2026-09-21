@@ -7,6 +7,7 @@ cd "$PROJECT_ROOT"
 bun run typecheck
 bun run test
 bun run writing:eval
+bun run security:check
 bun run build
 FASTWRITE_E2E_SKIP_BUILD=1 bun run e2e:smoke
 

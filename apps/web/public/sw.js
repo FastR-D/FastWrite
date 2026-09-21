@@ -1,5 +1,5 @@
-const CACHE = "fastwrite-shell-v1";
-const SHELL = ["/", "/index.html", "/busytex.js", "/busytex.wasm", "/worker.js"];
+const CACHE = "fastwrite-shell-v2";
+const SHELL = ["/", "/index.html", "/manifest.webmanifest", "/busytex.js", "/busytex.wasm", "/worker.js"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -16,5 +16,5 @@ self.addEventListener("fetch", (event) => {
     const copy = response.clone();
     void caches.open(CACHE).then((cache) => cache.put(request, copy));
     return response;
-  })));
+  }).catch(() => caches.match("/index.html")));
 });

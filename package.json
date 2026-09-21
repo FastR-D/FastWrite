@@ -22,7 +22,11 @@
     "e2e:cross-browser": "sh scripts/e2e-cross-browser.sh",
     "llm:smoke": "bun scripts/llm-smoke.ts",
     "release:check": "sh scripts/release-check.sh",
+    "security:check": "bash scripts/security-check.sh",
     "start": "bun apps/server/src/server.ts",
+    "worker:jobs": "bun apps/server/src/jobs/job-worker.ts",
+    "worker:mail": "bun apps/server/src/notifications/mail-worker.ts",
+    "storage:postgres:migrate": "bun scripts/postgres-migrate.ts",
     "e2e:editor": "node scripts/e2e-editor-reliability.mjs",
     "e2e:compile-snapshot": "node scripts/e2e-compile-snapshot.mjs",
     "e2e:workbench": "node scripts/e2e-workbench.mjs",
@@ -33,11 +37,11 @@
     "e2e:document-recovery": "node scripts/e2e-document-recovery.mjs",
     "e2e:two-checkpoints": "node scripts/e2e-two-checkpoints.mjs",
     "e2e:current-changes": "node scripts/e2e-current-changes.mjs",
-    "e2e:evidence-outline": "node scripts/e2e-evidence-outline.mjs"
-    ,"e2e:bottom-panel-layout": "node scripts/e2e-bottom-panel-layout.mjs"
-    ,"e2e:editor-matrix": "node scripts/e2e-editor-matrix.mjs"
-    ,"e2e:workbench-performance": "node scripts/e2e-workbench-performance.mjs"
-    ,"e2e:large-document": "node scripts/e2e-large-document.mjs"
+    "e2e:evidence-outline": "node scripts/e2e-evidence-outline.mjs",
+    "e2e:bottom-panel-layout": "node scripts/e2e-bottom-panel-layout.mjs",
+    "e2e:editor-matrix": "node scripts/e2e-editor-matrix.mjs",
+    "e2e:workbench-performance": "node scripts/e2e-workbench-performance.mjs",
+    "e2e:large-document": "node scripts/e2e-large-document.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
@@ -47,11 +51,15 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.879.0",
     "lib0": "^0.2.117",
     "y-protocols": "^1.0.7",
     "yjs": "^13.6.32"
   },
   "patchedDependencies": {
-    "monaco-editor@0.55.1": "patches/monaco-editor@0.55.1.patch"
+    "monaco-editor@0.56.0": "patches/monaco-editor@0.55.1.patch"
+  },
+  "overrides": {
+    "dompurify": "3.4.13"
   }
 }

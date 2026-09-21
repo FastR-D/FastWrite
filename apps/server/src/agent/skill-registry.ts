@@ -1,7 +1,9 @@
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, relative } from "node:path";
 import { WRITING_PROFILES, type AgentTaskIntent, type AgentTaskSkillDescriptor, type PaperSkillRef, type PublicationTarget, type PublicationVenueOption, type ResearchDomainId } from "@fastwrite/shared";
 import { templateForVenue } from "../templates/latex-template-service";
+import type { JsonDatabase } from "../storage/database";
+import { writingGuard, writingGuardMany } from "../writing/writing-guard";
 
 export interface LoadedSkill {
   instructions: string;
@@ -12,10 +14,10 @@ export interface LoadedSkill {
 export type WorkflowSkill = "draft" | "revise" | "review" | "completion" | "memory-extract" | "memory-polish" | "compile-repair";
 
 export interface WorkflowSkillDescriptor { id: WorkflowSkill; version: string; instructions: string }
-export interface SkillManifest { id: string; version: string; scope: "system" | "team" | "project"; owner: string; license: string; workflows: string[]; requiredEvidence: string[]; capabilities: string[]; maxContextChars: number; riskLevel: "low" | "medium" | "high"; requiresReview: boolean; references: Array<{ url: string; license: string; verifiedAt: string }> }
+export interface SkillManifest { id: string; version: string; scope: "system" | "team" | "project"; owner: string; license: string; workflows: string[]; requiredEvidence: string[]; capabilities: string[]; maxContextChars: number; riskLevel: "low" | "medium" | "high"; requiresReview: boolean; references: Array<{ url: string; license: string; verifiedAt: string }>; fixtures?: Array<{ id: string; input: string; expected: string }>; eval?: { status: "not-run" | "passed" | "failed"; score?: number; checkedAt?: string; message?: string }; revoked?: boolean; revokedReason?: string }
 
 export class SkillRegistry {
-  constructor(private readonly skillsDirectory: string) {}
+  constructor(private readonly skillsDirectory: string, private readonly database?: JsonDatabase) {}
 
   async loadWorkflow(workflow: WorkflowSkill): Promise<string> {
     return readFile(join(this.skillsDirectory, workflow, "SKILL.md"), "utf8");
@@ -36,7 +38,53 @@ export class SkillRegistry {
       const raw = await readFile(join(this.skillsDirectory, entry.name, "manifest.json"), "utf8").catch(() => undefined);
       return raw ? parseSkillManifest(raw, entry.name) : undefined;
     }));
-    return manifests.filter((manifest): manifest is SkillManifest => Boolean(manifest)).sort((a, b) => a.id.localeCompare(b.id));
+    const overrides = new Map((this.database?.snapshot().skillReleaseOverrides ?? []).map((item) => [item.skillId, item]));
+    return manifests.filter((manifest): manifest is SkillManifest => Boolean(manifest)).map((manifest) => {
+      const override = overrides.get(manifest.id);
+      return override ? { ...manifest, ...(override.revoked ? { revoked: true, revokedReason: override.reason } : {}), ...(override.eval ? { eval: override.eval } : {}) } : manifest;
+    }).sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  async release(id: string): Promise<SkillManifest> {
+    const manifest = (await this.publishedCatalog()).find((item) => item.id === id);
+    if (!manifest) throw new Error(`Unknown Skill release '${id}'`);
+    return manifest;
+  }
+
+  async evaluate(id: string): Promise<SkillManifest> {
+    const manifest = await this.release(id);
+    if (manifest.revoked) return { ...manifest, eval: { status: "failed", score: 0, message: "Release is revoked and cannot be evaluated.", checkedAt: new Date().toISOString() } };
+    const fixtures = manifest.fixtures ?? [];
+    const checkedAt = new Date().toISOString();
+    if (!fixtures.length) return { ...manifest, eval: { status: "not-run", message: "No fixtures declared for this release.", checkedAt } };
+    const failures: string[] = [];
+    for (const fixture of fixtures) {
+      let content = fixture.input;
+      if (fixture.input.startsWith("fixture:")) {
+        const name = fixture.input.slice("fixture:".length);
+        const root = resolve(this.skillsDirectory, manifest.id, "fixtures");
+        const candidate = resolve(root, name);
+        if (relative(root, candidate).startsWith("..") || relative(root, candidate).includes("..")) { failures.push(`${fixture.id}: fixture path escapes release directory`); continue; }
+        try { content = await readFile(candidate, "utf8"); } catch { failures.push(`${fixture.id}: fixture file not found`); continue; }
+      }
+      const findings = (manifest.id === "review" ? writingGuard({ path: `${fixture.id}.tex`, content }) : writingGuard({ path: `${fixture.id}.txt`, content }));
+      const expected = fixture.expected.trim().toLowerCase();
+      const actual = findings.length ? "findings" : "clean";
+      const valid = expected === actual || (expected === "blocking" && findings.some((item) => item.status === "blocking")) || (expected === "warning" && findings.some((item) => item.status === "warning"));
+      if (!valid) failures.push(`${fixture.id}: expected ${fixture.expected}, got ${actual}`);
+    }
+    const result = { status: failures.length ? "failed" as const : "passed" as const, score: (fixtures.length - failures.length) / fixtures.length, message: failures.length ? failures.join("; ").slice(0, 500) : `${fixtures.length} fixture${fixtures.length === 1 ? "" : "s"} passed.` };
+    const evaluated = { ...manifest, eval: { ...result, checkedAt } };
+    if (this.database) await this.database.mutate((state) => { const prior = state.skillReleaseOverrides.find((item) => item.skillId === id); if (prior) prior.eval = { ...result, checkedAt }; else state.skillReleaseOverrides.push({ skillId: id, revoked: false, reason: "", eval: { ...result, checkedAt }, createdAt: checkedAt }); });
+    return evaluated;
+  }
+
+  async rollback(id: string, reason: string): Promise<SkillManifest> {
+    const manifest = await this.release(id);
+    if (!reason.trim()) throw new Error("A rollback reason is required");
+    const cleanReason = reason.trim().slice(0, 500); const createdAt = new Date().toISOString();
+    if (this.database) await this.database.mutate((state) => { const prior = state.skillReleaseOverrides.find((item) => item.skillId === id); if (prior) { prior.revoked = true; prior.reason = cleanReason; prior.createdAt = createdAt; } else state.skillReleaseOverrides.push({ skillId: id, revoked: true, reason: cleanReason, createdAt }); });
+    return { ...manifest, revoked: true, revokedReason: cleanReason };
   }
 
   async taskCatalog(): Promise<AgentTaskSkillDescriptor[]> {
@@ -111,7 +159,10 @@ export function parseSkillManifest(raw: string, directoryName?: string): SkillMa
   const maxContextChars = value.maxContextChars; if (!Number.isInteger(maxContextChars) || (maxContextChars as number) < 1 || (maxContextChars as number) > 1_000_000) throw new Error("Skill manifest maxContextChars is invalid");
   if (typeof value.requiresReview !== "boolean") throw new Error("Skill manifest requiresReview is invalid");
   const references = value.references; if (!Array.isArray(references) || references.some((reference) => !reference || typeof reference !== "object" || Array.isArray(reference) || typeof (reference as Record<string, unknown>).url !== "string" || typeof (reference as Record<string, unknown>).license !== "string" || typeof (reference as Record<string, unknown>).verifiedAt !== "string")) throw new Error("Skill manifest references are invalid");
-  return { id, version: string("version", /^\d+\.\d+\.\d+$/), scope, owner: string("owner"), license: string("license"), workflows: list("workflows"), requiredEvidence: list("requiredEvidence"), capabilities: list("capabilities"), maxContextChars: maxContextChars as number, riskLevel, requiresReview: value.requiresReview, references: references.map((reference) => { const item = reference as Record<string, string>; return { url: item.url!, license: item.license!, verifiedAt: item.verifiedAt! }; }) };
+  const fixtures = value.fixtures === undefined ? undefined : (() => { if (!Array.isArray(value.fixtures) || value.fixtures.some((fixture) => !fixture || typeof fixture !== "object" || typeof (fixture as Record<string, unknown>).id !== "string" || typeof (fixture as Record<string, unknown>).input !== "string" || typeof (fixture as Record<string, unknown>).expected !== "string")) throw new Error("Skill manifest fixtures are invalid"); return (value.fixtures as Array<Record<string, unknown>>).slice(0, 100).map((fixture) => ({ id: String(fixture.id).slice(0, 100), input: String(fixture.input).slice(0, 20_000), expected: String(fixture.expected).slice(0, 20_000) })); })();
+  const evalRecord = value.eval === undefined ? undefined : (() => { if (!value.eval || typeof value.eval !== "object") throw new Error("Skill manifest eval is invalid"); const item = value.eval as Record<string, unknown>; if (typeof item.status !== "string" || !new Set(["not-run", "passed", "failed"]).has(item.status) || (item.score !== undefined && (typeof item.score !== "number" || item.score < 0 || item.score > 1))) throw new Error("Skill manifest eval is invalid"); return { status: item.status as "not-run" | "passed" | "failed", ...(typeof item.score === "number" ? { score: item.score } : {}), ...(typeof item.checkedAt === "string" ? { checkedAt: item.checkedAt } : {}), ...(typeof item.message === "string" ? { message: item.message.slice(0, 500) } : {}) }; })();
+  if (typeof value.revoked !== "undefined" && typeof value.revoked !== "boolean") throw new Error("Skill manifest revoked is invalid");
+  return { id, version: string("version", /^\d+\.\d+\.\d+$/), scope, owner: string("owner"), license: string("license"), workflows: list("workflows"), requiredEvidence: list("requiredEvidence"), capabilities: list("capabilities"), maxContextChars: maxContextChars as number, riskLevel, requiresReview: value.requiresReview, references: references.map((reference) => { const item = reference as Record<string, string>; return { url: item.url!, license: item.license!, verifiedAt: item.verifiedAt! }; }), ...(fixtures ? { fixtures } : {}), ...(evalRecord ? { eval: evalRecord } : {}), ...(value.revoked === true ? { revoked: true, ...(typeof value.revokedReason === "string" ? { revokedReason: value.revokedReason.slice(0, 500) } : {}) } : {}) };
 }
 
 function parseVenueFrontmatter(content: string, expectedDomain: ResearchDomainId): PublicationVenueOption | undefined {

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeSet, PaperProject, ReviewIssue, ReviseCommandId, ReviseTurn, TextSelection } from "@fastwrite/shared";
+import type { ChangeSet, PaperProject, ReviewIssue, ReviseCommandId, ReviseTurn, TextSelection, TableEquationCandidate } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { diffWords } from "../../lib/wordDiff";
-import { Button, Dialog, Icon, IconButton, icons, QuickPick, Select, SegmentedControl, Tag, TextArea } from "../ui";
+import { Button, Dialog, Field, Icon, IconButton, icons, QuickPick, Select, SegmentedControl, Tag, TextArea } from "../ui";
 import { ReviewDialog } from "./ReviewDialog";
 import { MemoryDialog } from "./MemoryDialog";
 import { ResearchDialog } from "./ResearchDialog";
@@ -58,6 +58,13 @@ export function AiWorkspace({ project, selection, paragraphSelection, sectionSel
   const [reviewOpen, setReviewOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [researchOpen, setResearchOpen] = useState(false);
+  const [structuredOpen, setStructuredOpen] = useState(false);
+  const [structuredKind, setStructuredKind] = useState<"table" | "equation">("table");
+  const [structuredFormat, setStructuredFormat] = useState<"csv" | "natural-language" | "latex">("csv");
+  const [structuredPath, setStructuredPath] = useState("sections/results.tex");
+  const [structuredSource, setStructuredSource] = useState("");
+  const [structuredCandidate, setStructuredCandidate] = useState<TableEquationCandidate | null>(null);
+  const [structuredBusy, setStructuredBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<"revise" | "agent">("revise");
   const [harnesses, setHarnesses] = useState<Array<{ status: { kind: string; state: string; version?: string; message?: string }; capabilities: Record<string, boolean> }>>([]);
   const [harnessLoading, setHarnessLoading] = useState(true);
@@ -138,6 +145,24 @@ export function AiWorkspace({ project, selection, paragraphSelection, sectionSel
     setState("idle");
     if (selectionKey) localStorage.removeItem(conversationStorageKey(project.id, selectionKey));
     localStorage.removeItem(latestConversationStorageKey(project.id));
+  };
+
+  const proposeStructured = async () => {
+    setStructuredBusy(true);
+    try {
+      const candidate = await api.structuredCandidates.propose(project.id, { kind: structuredKind, targetPath: structuredPath, sourceFormat: structuredKind === "equation" && structuredFormat === "csv" ? "latex" : structuredFormat, source: structuredSource });
+      setStructuredCandidate(candidate);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not create structured candidate"); }
+    finally { setStructuredBusy(false); }
+  };
+  const compileStructured = async () => {
+    if (!structuredCandidate) return;
+    setStructuredBusy(true);
+    try {
+      const result = await api.structuredCandidates.compileCheck(project.id, structuredCandidate.changeSet.id);
+      setStructuredCandidate((current) => current ? { ...current, compileCheck: { status: result.status, message: result.message } } : current);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not validate candidate"); }
+    finally { setStructuredBusy(false); }
   };
 
   const clearConversation = () => {
@@ -287,8 +312,9 @@ export function AiWorkspace({ project, selection, paragraphSelection, sectionSel
         <div className="ai-workspace__tools">
           <IconButton label="Memory" icon={<Icon name={icons.database} />} onClick={() => setMemoryOpen(true)} />
           <IconButton label="Research" icon={<Icon name={icons.search} />} onClick={() => setResearchOpen(true)} />
+          <IconButton label="Table or equation assistant" icon={<Icon name={icons.listTree} />} onClick={() => setStructuredOpen(true)} />
           <IconButton label="Review" icon={<Icon name={icons.verified} />} onClick={() => setReviewOpen(true)} />
-          {activeTab === "revise" ? <IconButton label="Clear current conversation" icon={<Icon name={icons.trash} />} onClick={clearConversation} /> : null}
+      {activeTab === "revise" ? <IconButton label="Clear current conversation" icon={<Icon name={icons.trash} />} onClick={clearConversation} /> : null}
           <IconButton label={fullscreen ? "Exit fullscreen" : "Fullscreen"} icon={<Icon name={fullscreen ? icons.screenNormal : icons.screenFull} />} onClick={onToggleFullscreen} />
         </div>
       </header>
@@ -332,6 +358,9 @@ export function AiWorkspace({ project, selection, paragraphSelection, sectionSel
       <QuickPick label="Revision actions" filterLabel="Find a revision action" items={SHORTCUTS.slice(3)} onSelect={(command) => { setActionsOpen(false); void propose(command as ReviseCommandId); }} />
     </Dialog>
     <ReviewDialog open={reviewOpen} project={project} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setReviewOpen(false)} onNavigate={onNavigate} onReviseLocally={(issue) => void beginLocalRevision(issue)} onReviseWithAgent={(issueIds, objective) => { setAgentSeed({ issueIds, objective }); setReviewOpen(false); setActiveTab("agent"); }} />
+    <Dialog open={structuredOpen} width="wide" title="Table and equation assistant" description="Create an auditable LaTeX candidate; review the ChangeSet before applying it." onClose={() => setStructuredOpen(false)}>
+      <div className="structured-assistant"><div className="form-grid"><Field label="Kind"><Select value={structuredKind} onChange={(value) => { setStructuredKind(value as "table" | "equation"); setStructuredFormat(value === "table" ? "csv" : "latex"); }} options={[{ value: "table", label: "Table" }, { value: "equation", label: "Equation" }]} /></Field><Field label="Input format"><Select value={structuredFormat} onChange={(value) => setStructuredFormat(value as typeof structuredFormat)} options={structuredKind === "table" ? [{ value: "csv", label: "CSV" }, { value: "natural-language", label: "Natural language" }, { value: "latex", label: "LaTeX" }] : [{ value: "latex", label: "LaTeX" }, { value: "natural-language", label: "Natural language" }]} /></Field><Field label="Target .tex path"><TextArea rows={1} value={structuredPath} onChange={setStructuredPath} /></Field></div><Field label="Source"><TextArea value={structuredSource} onChange={setStructuredSource} placeholder={structuredKind === "table" ? "Method,Accuracy\nA,0.9" : "x = y + 1"} /></Field><Button loading={structuredBusy} disabled={!structuredSource.trim() || !structuredPath.trim()} onClick={() => void proposeStructured()}>Generate candidate</Button>{structuredCandidate ? <section className="structured-candidate"><header><strong>Candidate preview</strong><span>{structuredCandidate.compileCheck.status}</span></header><pre>{structuredCandidate.preview}</pre><p>{structuredCandidate.compileCheck.message ?? "Run the deterministic candidate check before full project compilation."}</p><div><Button size="small" variant="secondary" loading={structuredBusy} onClick={() => void compileStructured()}>Run candidate check</Button><Button size="small" variant="ghost" onClick={() => { setStructuredOpen(false); setStructuredCandidate(null); }}>Close</Button></div></section> : null}</div>
+    </Dialog>
     <MemoryDialog open={memoryOpen} project={project} onClose={() => setMemoryOpen(false)} onNavigate={onNavigate} onChanged={onWorkspaceChanged} />
     <ResearchDialog open={researchOpen} project={project} onClose={() => setResearchOpen(false)} onChanged={onWorkspaceChanged} onNavigate={onNavigate} />
   </>);

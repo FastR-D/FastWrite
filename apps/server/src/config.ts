@@ -10,6 +10,8 @@ const harnessApiKey = process.env.FASTWRITE_HARNESS_API_KEY;
 const harnessBaseURL = process.env.FASTWRITE_HARNESS_BASE_URL;
 const harnessModel = process.env.FASTWRITE_HARNESS_MODEL;
 const collaborationRoomTokenSecret = process.env.FASTWRITE_COLLABORATION_ROOM_TOKEN_SECRET;
+const redisUrl = process.env.FASTWRITE_REDIS_URL?.trim();
+const postgresUrl = process.env.FASTWRITE_POSTGRES_URL?.trim();
 const oidcIssuer = process.env.FASTWRITE_OIDC_ISSUER?.trim();
 const oidcClientId = process.env.FASTWRITE_OIDC_CLIENT_ID?.trim();
 const oidcRedirectUri = process.env.FASTWRITE_OIDC_REDIRECT_URI?.trim();
@@ -18,6 +20,12 @@ const casServerUrl = process.env.FASTWRITE_CAS_SERVER_URL?.trim();
 const casServiceUrl = process.env.FASTWRITE_CAS_SERVICE_URL?.trim();
 const smtpUrl = process.env.FASTWRITE_SMTP_URL?.trim();
 const mailFrom = process.env.FASTWRITE_MAIL_FROM?.trim();
+const mailWebhookSecret = process.env.FASTWRITE_MAIL_WEBHOOK_SECRET?.trim();
+const objectStoreBucket = process.env.FASTWRITE_OBJECT_STORE_BUCKET?.trim();
+const objectStoreEndpoint = process.env.FASTWRITE_OBJECT_STORE_ENDPOINT?.trim();
+const objectStoreRegion = process.env.FASTWRITE_OBJECT_STORE_REGION?.trim() || "us-east-1";
+const objectStoreAccessKey = process.env.FASTWRITE_OBJECT_STORE_ACCESS_KEY?.trim();
+const objectStoreSecretKey = process.env.FASTWRITE_OBJECT_STORE_SECRET_KEY?.trim();
 const bootstrapAdminEmail = process.env.FASTWRITE_BOOTSTRAP_ADMIN_EMAIL?.trim() || "admin@qq.com";
 const bootstrapAdminPassword = process.env.FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD?.trim() || "admin123456789";
 const packagedWebDirectory = resolve(import.meta.dir, "web");
@@ -38,7 +46,7 @@ export interface AgentProviderConfiguration {
 
 export interface OidcConfiguration { issuer: string; clientId: string; redirectUri: string; clientSecret?: string; }
 export interface CasConfiguration { serverUrl: string; serviceUrl: string; }
-export interface MailConfiguration { smtpUrl: string; from: string; }
+export interface MailConfiguration { smtpUrl: string; from: string; webhookSecret?: string; }
 
 function configured(environment: NodeJS.ProcessEnv, key: string): string | undefined {
   return environment[key]?.trim() || undefined;
@@ -112,9 +120,12 @@ export const config = {
   harnessBaseURL,
   harnessModel,
   collaborationRoomTokenSecret,
+  redisUrl,
+  postgresUrl,
   oidc: oidcIssuer && oidcClientId && oidcRedirectUri ? { issuer: oidcIssuer, clientId: oidcClientId, redirectUri: oidcRedirectUri, ...(oidcClientSecret ? { clientSecret: oidcClientSecret } : {}) } satisfies OidcConfiguration : undefined,
   cas: casServerUrl && casServiceUrl ? { serverUrl: casServerUrl, serviceUrl: casServiceUrl } satisfies CasConfiguration : undefined,
-  mail: smtpUrl && mailFrom ? { smtpUrl, from: mailFrom } satisfies MailConfiguration : undefined,
+  mail: smtpUrl && mailFrom ? { smtpUrl, from: mailFrom, ...(mailWebhookSecret ? { webhookSecret: mailWebhookSecret } : {}) } satisfies MailConfiguration : undefined,
+  objectStore: objectStoreBucket && objectStoreEndpoint && objectStoreAccessKey && objectStoreSecretKey ? { bucket: objectStoreBucket, endpoint: objectStoreEndpoint, region: objectStoreRegion, accessKey: objectStoreAccessKey, secretKey: objectStoreSecretKey } : undefined,
   bootstrapAdmin: { email: bootstrapAdminEmail, password: bootstrapAdminPassword },
   agentProviders: agentProviderConfigurations(),
   features: {
@@ -124,5 +135,6 @@ export const config = {
     realtimeV2: process.env.FASTWRITE_REALTIME_V2 === "true",
     commentsV2: process.env.FASTWRITE_COMMENTS_V2 === "true",
     pwaOffline: process.env.FASTWRITE_PWA_OFFLINE === "true"
+    ,multiNodeCollaboration: process.env.FASTWRITE_MULTI_NODE_COLLABORATION === "true"
   }
 };

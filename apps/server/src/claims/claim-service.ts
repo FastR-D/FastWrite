@@ -192,13 +192,18 @@ export class ClaimService {
     });
   }
 
-  async updateEvidence(projectId: string, evidenceId: string, status?: SourceEvidence["status"]): Promise<SourceEvidence> {
+  async updateEvidence(projectId: string, evidenceId: string, updates?: { status?: SourceEvidence["status"]; stance?: SourceEvidence["stance"]; representation?: SourceEvidence["representation"] }): Promise<SourceEvidence> {
     this.workspaces.getProject(projectId);
+    const status = updates?.status;
     if (status && !new Set(["candidate", "approved", "rejected", "stale"]).has(status)) throw new ApiError(400, "evidence_status_invalid", "Evidence status is invalid");
+    if (updates?.stance && !new Set(["supports", "contradicts", "mentions", "unknown"]).has(updates.stance)) throw new ApiError(400, "evidence_stance_invalid", "Evidence stance is invalid");
+    if (updates?.representation && !new Set(["verbatim", "paraphrase"]).has(updates.representation)) throw new ApiError(400, "evidence_representation_invalid", "Evidence representation is invalid");
     return this.database.mutate((state) => {
       const evidence = state.sourceEvidence.find((item) => item.projectId === projectId && item.id === evidenceId);
       if (!evidence) throw new ApiError(404, "evidence_not_found", "Evidence not found");
       if (status) evidence.status = status;
+      if (updates?.stance) evidence.stance = updates.stance;
+      if (updates?.representation) evidence.representation = updates.representation;
       if (status === "approved") evidence.approvedAt = now(); else if (status) delete evidence.approvedAt;
       evidence.updatedAt = now();
       const claimIds = new Set(state.claimEvidenceLinks.filter((link) => link.kind === "literature" && link.evidenceId === evidenceId).map((link) => link.claimId));

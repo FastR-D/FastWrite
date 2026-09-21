@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
+import * as monaco from "monaco-editor";
 import type { FileContentResponse } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import type { DocumentEntry, DocumentRegistry } from "../../lib/editor/documentRegistry";

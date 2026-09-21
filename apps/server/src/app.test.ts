@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, ClaimEvidenceLink, CompletionResponse, ComplianceReport, FastReadBundleReceipt, FileContentResponse, PaperClaim, PaperMemory, PaperProject, ProjectResearchWorkDetails, ResearchWork, ReviseResponse, SaveFileResponse, SourceEvidence, UploadSession, WorkingStatus, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, ClaimEvidenceLink, CompletionResponse, ComplianceReport, FastReadBundleReceipt, FileContentResponse, PaperClaim, PaperMemory, PaperProject, ProjectResearchWorkDetails, ResearchRun, ResearchWork, ReviseResponse, SaveFileResponse, SourceEvidence, UploadSession, WorkingStatus, WorkspaceTreeNode } from "@fastwrite/shared";
 import type { AgentProvider, AgentTaskPlanOutput, CompletionAgentInput, DraftGeneratedFile, ReviseAgentInput } from "./agent/provider";
 import { createApplication, mimeType } from "./app";
 import type { IdentityProvider } from "./auth/identity-provider";
@@ -15,10 +15,10 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function testApplication(agentProvider?: AgentProvider, features?: { serverAuth?: boolean }, oidcProvider?: IdentityProvider, casProvider?: IdentityProvider, mailTransport?: MailTransport) {
+async function testApplication(agentProvider?: AgentProvider, features?: { serverAuth?: boolean }, oidcProvider?: IdentityProvider, casProvider?: IdentityProvider, mailTransport?: MailTransport, researchFetcher?: typeof fetch) {
   const directory = await mkdtemp(join(tmpdir(), "fastwrite-test-"));
   temporaryDirectories.push(directory);
-  const app = await createApplication(directory, { ...(agentProvider ? { agentProvider } : {}), ...(features ? { features } : {}), ...(oidcProvider ? { oidcProvider } : {}), ...(casProvider ? { casProvider } : {}), ...(mailTransport ? { mailTransport } : {}) });
+  const app = await createApplication(directory, { ...(agentProvider ? { agentProvider } : {}), ...(features ? { features } : {}), ...(oidcProvider ? { oidcProvider } : {}), ...(casProvider ? { casProvider } : {}), ...(mailTransport ? { mailTransport } : {}), ...(researchFetcher ? { researchFetcher } : {}) });
   return (path: string, init?: RequestInit) => app(new Request(`http://fastwrite.test${path}`, init));
 }
 
@@ -548,6 +548,28 @@ describe("workspace API", () => {
     expect(JSON.stringify(dossier)).not.toContain("documentclass");
   });
 
+  test("queues compile jobs and exposes bounded job lifecycle", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Queued compile" }) })).json() as { id: string };
+    const queued = await request(`/api/projects/${project.id}/compile`, { method: "POST" });
+    expect(queued.status).toBe(202);
+    const job = await queued.json() as { id: string; kind: string; status: string };
+    expect(job).toMatchObject({ kind: "latex.compile", status: expect.stringMatching(/queued|running|completed|failed/) });
+    const state = await request(`/api/jobs/${job.id}`);
+    expect(state.status).toBe(200);
+    expect(await state.json()).toMatchObject({ id: job.id, kind: "latex.compile" });
+  });
+
+  test("does not expose an authenticated compile job to another user", async () => {
+    const request = await testApplication(undefined, { serverAuth: true });
+    const first = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: `job-a-${crypto.randomUUID()}@example.test`, password: "job-password-123" }) })).json() as { token: string };
+    const second = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: `job-b-${crypto.randomUUID()}@example.test`, password: "job-password-123" }) })).json() as { token: string };
+    const project = await (await request("/api/projects", { method: "POST", headers: { authorization: `Bearer ${first.token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "Private queued compile" }) })).json() as { id: string };
+    const queued = await request(`/api/projects/${project.id}/compile`, { method: "POST", headers: { authorization: `Bearer ${first.token}` } });
+    const job = await queued.json() as { id: string };
+    expect((await request(`/api/jobs/${job.id}`, { headers: { authorization: `Bearer ${second.token}` } })).status).toBe(403);
+  });
+
   test("lists bounded internal history checkpoints", async () => {
     const request = await testApplication();
     const created = await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "History paper", mainDocument: "main.tex", venue: "sp" }) });
@@ -734,6 +756,30 @@ describe("workspace API", () => {
     expect((await request("/api/collaboration/room-access?token=not-a-room-token")).status).toBe(401);
   });
 
+  test("enforces two-person, scoped, one-time support access grants", async () => {
+    const request = await testApplication(undefined, { serverAuth: true });
+    const register = async (email: string) => await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const requester = await register("support-requester@example.test");
+    const approver = await register("support-approver@example.test");
+    const requesterHeaders = { authorization: `Bearer ${requester.token}`, "content-type": "application/json" };
+    const approverHeaders = { authorization: `Bearer ${approver.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", { method: "POST", headers: requesterHeaders, body: JSON.stringify({ name: "Support scoped paper" }) })).json() as PaperProject;
+    await request(`/api/admin/users/${approver.user.id}/platform-role`, { method: "PATCH", headers: requesterHeaders, body: JSON.stringify({ role: "platform_admin", reason: "Grant temporary support approval role." }) });
+    await request(`/api/admin/users/${requester.user.id}/platform-role`, { method: "PATCH", headers: approverHeaders, body: JSON.stringify({ role: "support_auditor", reason: "Allow audited support requests." }) });
+    const created = await request("/api/admin/support-access", { method: "POST", headers: requesterHeaders, body: JSON.stringify({ projectId: project.id, pathPrefix: "sections", ticketId: "SUP-42", reason: "Investigate a reported rendering issue." }) });
+    expect(created.status).toBe(201);
+    const pending = await created.json() as { id: string };
+    expect((await request(`/api/admin/support-access/${pending.id}/decision`, { method: "POST", headers: requesterHeaders, body: JSON.stringify({ approved: true }) })).status).toBe(403);
+    const approved = await (await request(`/api/admin/support-access/${pending.id}/decision`, { method: "POST", headers: approverHeaders, body: JSON.stringify({ approved: true }) })).json() as { token: string };
+    expect(approved.token).toEqual(expect.any(String));
+    const outside = await request(`/api/admin/support-access/${pending.id}/redeem`, { method: "POST", headers: requesterHeaders, body: JSON.stringify({ token: approved.token, path: "main.tex" }) });
+    expect(outside.status).toBe(403);
+    const redeemed = await (await request(`/api/admin/support-access/${pending.id}/redeem`, { method: "POST", headers: approverHeaders, body: JSON.stringify({ token: approved.token, path: "sections/method.tex" }) })).json() as { userId: string; sessionId: string; scope: string; oneTime: boolean };
+    expect(redeemed).toMatchObject({ userId: approver.user.id, scope: "read", oneTime: true });
+    expect((await request(`/api/admin/support-access/${pending.id}/redeem`, { method: "POST", headers: approverHeaders, body: JSON.stringify({ token: approved.token, path: "sections/method.tex" }) })).status).toBe(403);
+    expect((await request(`/api/admin/support-access/${pending.id}/revoke`, { method: "POST", headers: approverHeaders })).status).toBe(200);
+  });
+
   test("rejects an unsupported runtime Agent wire API", async () => {
     const request = await testApplication();
     const response = await request("/api/harness-settings", {
@@ -876,6 +922,20 @@ describe("workspace API", () => {
     const archiveText = new TextDecoder().decode(tar);
     expect(archiveText).toContain("sections/results.tex");
     expect(archiveText).toContain("Evaluation");
+  });
+
+  test("preserves the collaboration document identity across a file rename", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Rename collaboration" }) })).json() as PaperProject;
+    const opened = await (await request(`/api/projects/${project.id}/collaboration?path=main.tex`)).json() as { documentId: string; update: string; fileVersion: number };
+    const ydoc = new Y.Doc(); Y.applyUpdate(ydoc, Buffer.from(opened.update, "base64")); ydoc.getText("content").insert(0, "% identity survives\n");
+    expect((await request(`/api/projects/${project.id}/collaboration`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "main.tex", baseVersion: opened.fileVersion, update: Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString("base64") }) })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/files`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: "main.tex", to: "paper.tex" }) })).status).toBe(204);
+    const renamed = await (await request(`/api/projects/${project.id}/collaboration?path=paper.tex`)).json() as { documentId: string; update: string };
+    expect(renamed.documentId).toBe(opened.documentId);
+    const restored = new Y.Doc(); Y.applyUpdate(restored, Buffer.from(renamed.update, "base64"));
+    expect(restored.getText("content").toString()).toContain("identity survives");
+    expect((await request(`/api/projects/${project.id}/collaboration?path=main.tex`)).status).toBe(404);
   });
 
   test("builds a document-order outline across included TeX files", async () => {
@@ -2100,6 +2160,51 @@ describe("workspace API", () => {
     expect((await (await request(`/api/projects/${project.id}/claims`)).json() as PaperClaim[]).find((item) => item.id === claim.id)?.reviewStatus).toBe("needs-review");
   });
 
+  test("aggregates the evidence cockpit with support and anchor counts", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Evidence cockpit" }) })).json() as PaperProject;
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const content = "\\documentclass{article}\n\\begin{document}\nOur method improves accuracy by ten percent.\nThe deployment setting is fixed.\n\\end{document}\n";
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, baseVersion: opened.file.version }) });
+    const claims = await (await request(`/api/projects/${project.id}/claim-scans`, { method: "POST" })).json() as PaperClaim[];
+    expect(claims.length).toBeGreaterThanOrEqual(1);
+    const cockpit = await (await request(`/api/projects/${project.id}/evidence-cockpit`)).json() as { counts: { total: number; supported: number; unresolved: number }; claims: Array<{ support: string }> };
+    expect(cockpit.counts.total).toBe(cockpit.claims.length);
+    expect(cockpit.counts.unresolved).toBeGreaterThanOrEqual(1);
+    expect(cockpit.claims.every((item) => item.support === "unresolved" || item.support === "unsupported" || item.support === "partial" || item.support === "supported")).toBe(true);
+  });
+
+  test("separates citation presence, metadata verification, and claim support", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Citation reviewer" }) })).json() as PaperProject;
+    const source = await (await request(`/api/projects/${project.id}/research-works/import`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "Metadata only", authors: ["Ada Lovelace"], year: 2026, citationKey: "lovelace2026meta" }) })).json() as ResearchWork;
+    const opened = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    const content = "\\documentclass{article}\n\\begin{document}\nPrior work is cited \\cite{lovelace2026meta}.\nOur method improves accuracy by ten percent.\n\\end{document}\n";
+    await request(`/api/projects/${project.id}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, baseVersion: opened.file.version }) });
+    const claims = await (await request(`/api/projects/${project.id}/claim-scans`, { method: "POST" })).json() as PaperClaim[];
+    const reviewer = await (await request(`/api/projects/${project.id}/citation-reviewer`)).json() as { items: Array<{ claim: PaperClaim; citationStatus: string; evidenceStatus: string; metadataVerifiedCount: number; approvedEvidenceCount: number }>; counts: { total: number; missing: number } };
+    expect(reviewer.counts.total).toBe(claims.length);
+    const cited = reviewer.items.find((item) => item.claim.anchor.exactText.includes("Prior work"));
+    expect(cited).toMatchObject({ citationStatus: "cited", evidenceStatus: "unresolved", approvedEvidenceCount: 0 });
+    const unsupported = reviewer.items.find((item) => item.claim.anchor.exactText.includes("improves accuracy"));
+    expect(unsupported?.citationStatus).toBe("missing");
+    expect(reviewer.counts.missing).toBeGreaterThanOrEqual(1);
+    expect(source.id).toBeTruthy();
+  });
+
+  test("keeps citation stance independent from evidence approval", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Citation stance" }) })).json() as PaperProject;
+    const work = await (await request(`/api/projects/${project.id}/research-works/import`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "Contrary study", authors: ["Ada Lovelace"], citationKey: "contrary2026" }) })).json() as ResearchWork;
+    const created = await (await request(`/api/projects/${project.id}/evidence`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ workId: work.id, content: "The source reports a contrary result.", locatorType: "page", locator: "4", stance: "contradicts" }) })).json() as SourceEvidence;
+    expect(created).toMatchObject({ stance: "contradicts", status: "candidate" });
+    const updated = await (await request(`/api/projects/${project.id}/evidence/${created.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "approved" }) })).json() as SourceEvidence;
+    expect(updated).toMatchObject({ id: created.id, stance: "contradicts", status: "approved" });
+    const restated = await (await request(`/api/projects/${project.id}/evidence/${created.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ stance: "mentions" }) })).json() as SourceEvidence;
+    expect(restated).toMatchObject({ id: created.id, stance: "mentions", status: "approved" });
+    expect((await (await request(`/api/projects/${project.id}/evidence`)).json() as SourceEvidence[])).toHaveLength(1);
+  });
+
   test("deduplicates manual sources and exposes provenance, identifiers and citation context", async () => {
     const request = await testApplication();
     const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Source provenance" }) })).json() as PaperProject;
@@ -2117,6 +2222,45 @@ describe("workspace API", () => {
     expect(context.contexts[0]).toMatchObject({ path: "main.tex", line: 3 });
     expect(context.contexts[0]!.excerpt).toContain("lovelace2026trace");
   });
+
+  test("persists a research protocol on a completed run", async () => {
+    const fetcher = (async (input: string | URL | Request) => String(input).includes("api.crossref.org") ? Response.json({ message: { items: [{ title: ["Protocol fixture"], author: [{ given: "Ada", family: "Lovelace" }], issued: { "date-parts": [[2026]] }, DOI: "10.1000/protocol" }] } }) : new Response("<feed></feed>", { status: 200 })) as unknown as typeof fetch;
+    const request = await testApplication(undefined, undefined, undefined, undefined, undefined, fetcher);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Research protocol" }) })).json() as PaperProject;
+    const created = await (await request(`/api/projects/${project.id}/research-runs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "protocol fixture" }) })).json() as { run: { id: string } };
+    const response = await request(`/api/projects/${project.id}/research-runs/${created.run.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ steps: ["Search indexed literature", "Screen titles"], rationale: "Reproducible review", inclusionCriteria: ["Peer reviewed"], exclusionCriteria: ["Retracted"], extractionFields: ["outcome"] }) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ queryPlan: { steps: ["Search indexed literature", "Screen titles"], inclusionCriteria: ["Peer reviewed"], exclusionCriteria: ["Retracted"], extractionFields: ["outcome"] } });
+  });
+
+  test("audits research screening decisions and extraction notes", async () => {
+    const fetcher = (async () => Response.json({ message: { items: [{ title: ["Screen fixture"], author: [{ given: "Ada", family: "Lovelace" }], issued: { "date-parts": [[2026]] } }] } })) as unknown as typeof fetch;
+    const request = await testApplication(undefined, undefined, undefined, undefined, undefined, fetcher);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Screening audit" }) })).json() as PaperProject;
+    const result = await (await request(`/api/projects/${project.id}/research-runs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "screen fixture" }) })).json() as { run: ResearchRun; works: ResearchWork[] };
+    const work = result.works[0]!;
+    const response = await request(`/api/projects/${project.id}/research-runs/${result.run.id}/screening/${work.id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision: "included", reason: "Matches population", extracted: { outcome: "accuracy" } }) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ runId: result.run.id, workId: work.id, decision: "included", reason: "Matches population", extracted: { outcome: "accuracy" } });
+    expect(await (await request(`/api/projects/${project.id}/research-runs/${result.run.id}/screening`)).json()).toHaveLength(1);
+  });
+
+  test("proposes bounded table and equation ChangeSets without writing files", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Structured candidates" }) })).json() as PaperProject;
+    const table = await (await request(`/api/projects/${project.id}/table-equation-candidates`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "table", targetPath: "sections/results.tex", sourceFormat: "csv", source: "Method,Accuracy\nA,0.9\nB,0.8", caption: "Results" }) })).json() as { schema: { columns: string[]; rows: number }; preview: string; changeSet: ChangeSet; compileCheck: { status: string } };
+    expect(table.schema).toMatchObject({ columns: ["Method", "Accuracy"], rows: 2 });
+    expect(table.preview).toContain("\\begin{table}");
+    expect(table.changeSet.status).toBe("proposed");
+    expect(table.compileCheck.status).toBe("not-run");
+    expect((await request(`/api/projects/${project.id}/file?path=sections/results.tex`)).status).toBe(404);
+    const equation = await (await request(`/api/projects/${project.id}/table-equation-candidates`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "equation", targetPath: "sections/math.tex", sourceFormat: "latex", source: "x = y + 1", label: "eq:offset" }) })).json() as { preview: string; schema: { variables: string[] } };
+    expect(equation.preview).toContain("\\label{eq:offset}");
+    expect(equation.schema.variables).toContain("x");
+    const check = await (await request(`/api/projects/${project.id}/table-equation-candidates/${table.changeSet.id}/compile-check`, { method: "POST" })).json() as { status: string; message: string };
+    expect(check).toMatchObject({ status: "passed" });
+  });
+
 
   test("keeps a failed FastRead hash receipt visible and retryable", async () => {
     const request = await testApplication();

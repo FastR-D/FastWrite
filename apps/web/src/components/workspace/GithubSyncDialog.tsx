@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
+import * as monaco from "monaco-editor";
 import type { GithubSyncResolution, GithubSyncResolutionChoice, GithubSyncRun, PaperProject } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { Button, Dialog, Field, Icon, TextArea, icons } from "../ui";

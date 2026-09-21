@@ -953,9 +953,18 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .research-provider-results .is-completed { border-color: rgba(21, 128, 61, .28); color: var(--research-success); }
 .research-provider-results .is-failed { border-color: rgba(185, 28, 28, .28); color: #b91c1c; }
 .research-results, .research-bundles, .research-evidence-list, .research-claims-list { display: grid; gap: 8px; }
+.research-reader-controls { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(250px, 1.5fr) minmax(180px, 1fr); align-items: end; gap: 10px; padding: 10px; border: 1px solid var(--research-border); background: var(--slate-25); }
+.research-reader-controls input[type="file"] { width: 100%; font-size: 9px; }
+.checkbox-field { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); font-size: 9px; line-height: 1.4; }
 .research-results article, .research-bundle, .research-evidence-list > article, .research-claims-list > article { display: grid; gap: 7px; min-width: 0; border: 1px solid var(--research-border); border-radius: 7px; padding: 10px; background: var(--slate-25); }
 .research-results small, .research-bundle small, .research-evidence-list small, .research-claims-list small { color: var(--text-muted); font-size: 8px; }
 .research-work-title, .research-evidence-list article > header, .research-claims-list article > header { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.research-screening { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 220px; }
+.research-screening input { min-width: 120px; flex: 1; }
+.structured-assistant { display: grid; gap: 12px; }
+.structured-assistant pre, .structured-candidate pre { max-height: 320px; overflow: auto; padding: 12px; border: 1px solid var(--border); background: var(--slate-25); white-space: pre-wrap; font: 11px/1.5 ui-monospace, monospace; }
+.structured-candidate { display: grid; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
+.structured-candidate header { display: flex; justify-content: space-between; color: var(--text-secondary); }
 .research-work-title strong, .research-evidence-list article > header strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 10px; }
 .research-work-actions { display: flex; align-items: center; gap: 7px; }
 .research-work-actions em { margin-right: auto; color: var(--research-success); font-size: 9px; font-style: normal; font-weight: 700; }
@@ -999,6 +1008,28 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .research-claims-list article > header strong { color: var(--text-secondary); font-size: 8px; text-transform: uppercase; }
 .research-claims-list article > header small { margin-left: auto; }
 .research-claims-list article > footer { justify-content: flex-start; }
+.research-claim-review-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-muted); font-size: 9px; }
+.research-protocol { display: grid; gap: 9px; padding: 10px; border: 1px solid var(--research-border); border-radius: 7px; background: var(--surface); }
+.research-status.is-cited { background: #dbeafe; color: #1e40af; }
+.research-status.is-missing, .research-status.is-unresolved { background: #fef3c7; color: #92400e; }
+.research-status.is-supports { background: #dcfce7; color: #166534; }
+.research-status.is-contradicts { background: #fee2e2; color: #991b1b; }
+.research-status.is-mentions, .research-status.is-unknown { background: #e0e7ff; color: #3730a3; }
+.provenance-dialog { display: grid; gap: 16px; }
+.provenance-dialog > section { display: grid; gap: 8px; }
+.provenance-section-heading, .provenance-disclosure header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.provenance-section-heading h3, .provenance-disclosure h3 { margin: 0; }
+.provenance-section-heading p, .provenance-disclosure p { margin: 3px 0 0; color: var(--text-muted); font-size: 10px; }
+.provenance-disclosure { border: 1px solid var(--research-border); border-radius: 7px; padding: 10px; background: var(--slate-25); }
+.provenance-disclosure blockquote { margin: 8px 0 0; padding: 9px 11px; background: var(--surface); color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.provenance-dialog dl { display: grid; gap: 6px; margin: 8px 0 0; }
+.provenance-dialog dl div { display: grid; grid-template-columns: 90px 1fr; gap: 8px; }
+.provenance-dialog dt { color: var(--text-muted); font-size: 9px; text-transform: uppercase; }
+.provenance-dialog dd { margin: 0; font-size: 10px; overflow-wrap: anywhere; }
+.provenance-changes { display: grid; gap: 7px; margin-top: 8px; }
+.provenance-changes div { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; }
+.provenance-changes span { color: var(--text-muted); }
+.provenance-empty { display: flex; align-items: center; gap: 8px; color: var(--text-muted); }
 .research-claims-list article > footer select { min-width: 0; flex: 1; }
 .research-linked-evidence { display: grid; gap: 5px; }
 .research-linked-evidence > span { display: grid; grid-template-columns: 13px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 5px; background: var(--blue-50); color: var(--blue-800); font-size: 8px; }
@@ -1075,6 +1106,11 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .workbench-outline { height: 100%; max-height: none; }
 .workbench-git { overflow: auto; }
 .source-control-view > p, .source-control-view > label { margin: 10px; font-size: 12px; }
+.source-control-history { display: grid; gap: 2px; padding: 6px 10px 10px; border-bottom: 1px solid var(--border); }
+.source-control-history button { display: grid; gap: 2px; text-align: left; padding: 7px 8px; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
+.source-control-history button:hover, .source-control-history button:focus-visible { background: var(--surface-hover); outline: 2px solid var(--focus); outline-offset: -2px; }
+.source-control-history strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.source-control-history small { color: var(--muted); font-size: 11px; }
 /*
  * The Source Control body: commit box over the Changes / Staged / Merge groups.
  *

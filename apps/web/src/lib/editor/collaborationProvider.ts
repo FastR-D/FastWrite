@@ -1,5 +1,5 @@
 import * as Y from "yjs";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
+import * as monaco from "monaco-editor";
 import { IndexeddbPersistence } from "y-indexeddb";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
@@ -23,6 +23,8 @@ export class CollaborationProvider {
   private persistence: IndexeddbPersistence | undefined;
   private socket: WebSocket | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private tokenExpired = false;
+  private tokenExpiresAt = 0;
   private localRevision = 0;
   private persistedRevision = 0;
   private persistTail: Promise<unknown> = Promise.resolve();
@@ -42,7 +44,7 @@ export class CollaborationProvider {
 
   constructor(readonly projectId: string, readonly entry: DocumentEntry, private readonly changed: () => void) {
     this.initialContent = entry.model.getValue();
-    this.modelSubscription = entry.model.onDidChangeContent(event => {
+    this.modelSubscription = entry.model.onDidChangeContent((event: monaco.editor.IModelContentChangedEvent) => {
       if (this.applying || entry.applyingExternal) return;
       if (this.initialized) {
         this.applying = true;
@@ -70,7 +72,7 @@ export class CollaborationProvider {
     if (this.initialized) return Promise.resolve();
     if (this.initializing) return this.initializing;
     this.initializing = this.initialize().catch(error => {
-      this.error = error; this.state = navigator.onLine ? "conflict" : "offline"; this.changed(); throw error;
+      this.tokenExpired = error instanceof Error && /401|403|expired|revoked/i.test(error.message); this.error = error; this.state = navigator.onLine ? "conflict" : "offline"; this.changed(); throw error;
     }).finally(() => { this.initializing = undefined; });
     return this.initializing;
   }
@@ -185,8 +187,9 @@ export class CollaborationProvider {
     this.changed();
   };
   private online = () => { void this.ready().then(() => { void this.connect(); return this.entry.session.flush(); }).catch(() => undefined); };
+  private tokenIsExpired() { return this.tokenExpiresAt > 0 && Date.now() >= this.tokenExpiresAt - 2_000; }
   private async connect() {
-    if (this.disposed || this.connecting || this.socket && this.socket.readyState < WebSocket.CLOSING) return;
+    if (this.disposed || this.tokenExpired || this.tokenIsExpired() || this.connecting || this.socket && this.socket.readyState < WebSocket.CLOSING) return;
     this.connecting = true;
     this.state = "connecting"; this.changed();
     try {
@@ -195,6 +198,7 @@ export class CollaborationProvider {
       if (state.documentId !== this.documentId) { this.state = "conflict"; this.error = new Error("The collaboration document was replaced. Local text is retained for comparison."); this.changed(); return; }
       Y.applyUpdate(this.doc, fromBase64(state.update), REMOTE);
       const grant = await api.projects.collaborationToken(this.projectId, this.entry.session.path);
+      this.tokenExpiresAt = Date.parse(grant.expiresAt);
       if (this.disposed) return;
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const socket = new WebSocket(`${protocol}//${location.host}/api/collaboration/socket?clientId=${this.clientId}&token=${encodeURIComponent(grant.token)}`);
@@ -213,12 +217,12 @@ export class CollaborationProvider {
           else socket.close(1003, "Invalid collaboration message");
         } catch { socket.close(1003, "Invalid collaboration update"); }
       };
-      socket.onclose = () => { if (this.socket === socket) { this.socket = undefined; this.scheduleReconnect(); } };
-    } catch (error) { this.error = error; this.scheduleReconnect(); }
+      socket.onclose = (event) => { if (this.socket === socket) { this.socket = undefined; if ([4003, 4008].includes(event.code)) this.tokenExpired = true; this.scheduleReconnect(); } };
+    } catch (error) { this.tokenExpired = error instanceof Error && /401|403|expired|revoked/i.test(error.message); this.error = error; this.scheduleReconnect(); }
     finally { this.connecting = false; }
   }
   private scheduleReconnect() {
-    if (this.disposed || this.reconnectTimer) return;
+    if (this.disposed || this.tokenExpired || this.reconnectTimer) return;
     this.state = "offline"; this.changed();
     this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; void this.connect(); }, Math.min(1000 * 2 ** this.attempts++, 30000));
   }

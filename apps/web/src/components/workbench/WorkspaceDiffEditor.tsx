@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
+import * as monaco from "monaco-editor";
 import type { HistoryComparison } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
 import type { DocumentRegistry, DocumentEntry } from "../../lib/editor/documentRegistry";

@@ -45,8 +45,8 @@ import type {
   WorkingStatus,
   WorkspaceTreeNode
   ,AgentWireApi
-  ,ResearchWork, ResearchRun, ProjectResearchWork, ProjectResearchWorkDetails, PaperClaim, SourceEvidence, FastReadBundleReceipt, ClaimEvidenceLink
-  ,AlignmentFinding
+  ,ResearchWork, ResearchRun, ProjectResearchWork, ProjectResearchWorkDetails, PaperClaim, SourceEvidence, FastReadBundleReceipt, ClaimEvidenceLink, EvidenceCockpit, CitationReviewer, PublishedSkillDescriptor
+  ,AlignmentFinding, SupportAccessRequest
 } from "@fastwrite/shared";
 
 export class ApiClientError extends Error {
@@ -92,6 +92,10 @@ function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestI
 }
 
 export const api = {
+  jobs: {
+    get: (jobId: string, signal?: AbortSignal) => request<{ id: string; kind: string; status: "queued" | "running" | "completed" | "failed" | "cancelled"; attempts: number; error?: string; output?: unknown }>(`/api/jobs/${encodeURIComponent(jobId)}`, signal ? { signal } : undefined),
+    cancel: (jobId: string) => request<{ id: string; status: string }>(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" })
+  },
   auth: {
     register: (body: { email: string; password: string; displayName?: string }) => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/register", jsonInit("POST", body)),
     login: (body: { email: string; password: string }) => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/login", jsonInit("POST", body)),
@@ -101,13 +105,21 @@ export const api = {
     logout: () => request<void>("/api/auth/logout", { method: "POST" })
   },
   admin: {
-    health: () => request<{ users: number; activeSessions: number; teams: number; projects: number; collaborationDocuments: number; pendingInvitations: number }>("/api/admin/health"),
+    health: () => request<{ users: number; activeSessions: number; teams: number; projects: number; collaborationDocuments: number; pendingInvitations: number; mail?: { configured: boolean; pending: number; sent: number; failed: number }; postgres?: { configured: boolean; healthy: boolean; failures: number; lastError?: string }; jobs?: { queued: number; running: number; failed: number } }>("/api/admin/health"),
     identityProviders: () => request<{ oidc: { configured: boolean; issuer?: string; redirectUri?: string; clientId?: string }; cas: { configured: boolean; serverUrl?: string; serviceUrl?: string }; local: { configured: boolean } }>("/api/admin/identity-providers"),
     users: () => request<Array<{ id: string; emailNormalized: string; displayName: string; platformRole: string; status: string; createdAt: string; updatedAt: string; activeSessionCount: number }>>("/api/admin/users"),
     audits: (limit = 100) => request<Array<{ id: string; actorUserId?: string; action: string; resourceType: string; resourceId: string; metadata?: Record<string, string>; createdAt: string }>>(`/api/admin/audit-events?limit=${limit}`),
     disableUser: (userId: string, reason: string) => request<void>(`/api/admin/users/${encodeURIComponent(userId)}/disable`, jsonInit("POST", { reason })),
     revokeSessions: (userId: string, reason: string) => request<void>(`/api/admin/users/${encodeURIComponent(userId)}/sessions/revoke`, jsonInit("POST", { reason })),
-    updatePlatformRole: (userId: string, role: "platform_admin" | "support_auditor" | "user", reason: string) => request<{ id: string; platformRole: string }>(`/api/admin/users/${encodeURIComponent(userId)}/platform-role`, jsonInit("PATCH", { role, reason }))
+    updatePlatformRole: (userId: string, role: "platform_admin" | "support_auditor" | "user", reason: string) => request<{ id: string; platformRole: string }>(`/api/admin/users/${encodeURIComponent(userId)}/platform-role`, jsonInit("PATCH", { role, reason })),
+    createBackup: () => request<{ path: string; bytes: number; createdAt: string }>("/api/admin/backups", jsonInit("POST", {}))
+    ,verifyBackup: (path: string) => request<{ valid: boolean; schemaVersion?: number; bytes: number; stateCounts?: { projects: number; jobs: number; users: number } }>("/api/admin/backups/verify", jsonInit("POST", { path }))
+    ,restoreBackup: (path: string) => request<{ schemaVersion: number; projects: number }>("/api/admin/backups/restore", jsonInit("POST", { path, confirm: "replace-database" }))
+    ,deadLetters: (kind?: string) => request<Array<{ id: string; kind: string; status: string; attempts: number; error?: string; createdAt: string; updatedAt: string }>>(`/api/admin/jobs/dead-letters${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`)
+    ,retryJob: (jobId: string) => request<{ id: string; status: string; attempts: number }>(`/api/admin/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST" })
+    ,supportAccess: () => request<SupportAccessRequest[]>("/api/admin/support-access")
+    ,decideSupportAccess: (requestId: string, approved: boolean) => request<SupportAccessRequest & { token?: string }>(`/api/admin/support-access/${encodeURIComponent(requestId)}/decision`, jsonInit("POST", { approved }))
+    ,revokeSupportAccess: (requestId: string) => request<SupportAccessRequest>(`/api/admin/support-access/${encodeURIComponent(requestId)}/revoke`, { method: "POST" })
   },
   teams: {
     list: (signal?: AbortSignal) => request<Array<{ id: string; name: string; slug: string; personalUserId?: string }>>("/api/teams", signal ? { signal } : undefined),
@@ -136,6 +148,8 @@ export const api = {
     updatePreference: (type: "access_request" | "access_request_decision" | "mention", input: { inApp?: boolean; email?: boolean }) => request<unknown>(`/api/notification-preferences/${encodeURIComponent(type)}`, { method: "PUT", body: JSON.stringify(input) })
   },
   harness: {
+    profiles: (signal?: AbortSignal) => request<Array<{ id: string; scope: "system" | "team" | "user"; name: string; provider: "codex" | "claude" | "openai-compatible"; model?: string; baseUrl?: string; wireApi: "responses" | "chat"; allowedTools: string[]; version: number }>>("/api/harness/profiles", signal ? { signal } : undefined),
+    effective: (projectId?: string, signal?: AbortSignal) => request<{ profileId: string; provider: string; model?: string; baseUrl?: string; wireApi: string; hasSecret: boolean }>(`/api/harness/effective${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`, signal ? { signal } : undefined),
     sessions: (signal?: AbortSignal) => request<Array<{ harness: string; sessionId: string; cwd: string; title?: string; createdAt: string; updatedAt: string }>>("/api/harness-sessions", signal ? { signal } : undefined),
     createSession: (kind: string, body: { cwd: string; title?: string }) => request<{ harness: string; sessionId: string; cwd: string }>(`/api/harnesses/${encodeURIComponent(kind)}/sessions`, jsonInit("POST", body)),
     resumeSession: (kind: string, sessionId: string, cwd: string) => request<{ harness: string; sessionId: string; cwd: string }>(`/api/harnesses/${encodeURIComponent(kind)}/sessions/${encodeURIComponent(sessionId)}/resume`, jsonInit("POST", { cwd })),
@@ -163,7 +177,7 @@ export const api = {
   venues: {
     list: (signal?: AbortSignal) => request<PublicationVenueOption[]>("/api/venues", signal ? { signal } : undefined)
   },
-  agentSkills: { list: (signal?: AbortSignal) => request<AgentTaskSkillDescriptor[]>("/api/agent-skills", signal ? { signal } : undefined) },
+  agentSkills: { list: (signal?: AbortSignal) => request<AgentTaskSkillDescriptor[]>("/api/agent-skills", signal ? { signal } : undefined), releases: (signal?: AbortSignal) => request<PublishedSkillDescriptor[]>("/api/skills/releases", signal ? { signal } : undefined), release: (id: string) => request<PublishedSkillDescriptor>(`/api/skills/releases/${encodeURIComponent(id)}`), evaluate: (id: string) => request<PublishedSkillDescriptor>(`/api/skills/releases/${encodeURIComponent(id)}/evaluate`, { method: "POST" }), rollback: (id: string, reason: string) => request<PublishedSkillDescriptor>(`/api/skills/releases/${encodeURIComponent(id)}/rollback`, jsonInit("POST", { reason })) },
   projects: {
     accessRequestInfo: (id: string) => request<{ id: string; name: string }>(`/api/access-requests/${encodeURIComponent(id)}`),
     requestAccess: (id: string, body: { role: "maintainer" | "editor" | "commenter" | "viewer"; message?: string }) => request<{ id: string; status: "pending" }>(`/api/projects/${encodeURIComponent(id)}/access-requests`, jsonInit("POST", body)),
@@ -203,6 +217,7 @@ export const api = {
     historyFile: (id: string, oid: string, path: string, signal?: AbortSignal) => request<{ path: string; content: string }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/file?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined),
     restoreHistory: (id: string, oid: string, paths: string[], expectedVersion?: number) => request<{ oid?: string; restored: string[] }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/restore`, jsonInit("POST", { paths, ...(expectedVersion !== undefined ? { expectedVersion } : {}) })),
     provenance: (id: string, signal?: AbortSignal) => request<unknown>(`/api/projects/${id}/provenance`, signal ? { signal } : undefined),
+    provenanceExport: (id: string) => request<unknown>(`/api/projects/${id}/provenance/export`),
     createShare: (id: string, permission: "read" | "comment") => request<{ id: string; token: string; permission: "read" | "comment"; createdAt: string }>(`/api/projects/${id}/shares`, jsonInit("POST", { permission })),
     shares: (id: string) => request<Array<{ id: string; permission: "read" | "comment"; label?: string; expiresAt?: string; revokedAt?: string; createdAt: string }>>(`/api/projects/${id}/shares`),
     revokeShare: (id: string, shareId: string) => request<void>(`/api/projects/${id}/shares/${shareId}`, { method: "DELETE" }),
@@ -269,6 +284,10 @@ export const api = {
     decide: (projectId: string, changeSetId: string, body: ChangeSetDecisionRequest) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/decide`, jsonInit("POST", body)),
     finish: (projectId: string, changeSetId: string) => request<ChangeSet>(`/api/projects/${projectId}/change-sets/${changeSetId}/finish`, { method: "POST" })
   },
+  structuredCandidates: {
+    propose: (projectId: string, body: { kind: "table" | "equation"; targetPath: string; sourceFormat: "csv" | "natural-language" | "latex"; source: string; caption?: string; label?: string }) => request<import("@fastwrite/shared").TableEquationCandidate>(`/api/projects/${projectId}/table-equation-candidates`, jsonInit("POST", body)),
+    compileCheck: (projectId: string, changeSetId: string) => request<{ status: "passed" | "failed"; message: string; changeSetId: string }>(`/api/projects/${projectId}/table-equation-candidates/${changeSetId}/compile-check`, { method: "POST" })
+  },
   drafts: {
     list: (projectId: string, signal?: AbortSignal) => request<DraftPlan[]>(`/api/projects/${projectId}/drafts`, signal ? { signal } : undefined),
     plan: (projectId: string, body: DraftRequest, signal?: AbortSignal) => request<DraftPlanResponse>(`/api/projects/${projectId}/drafts`, jsonInit("POST", body, signal)),
@@ -309,7 +328,8 @@ export const api = {
     record: (projectId: string, body: { projectVersion: number; status: "success" | "error"; summary: string }) => request<CompileRecord>(`/api/projects/${projectId}/compile-results`, jsonInit("POST", body))
   },
   compiler: {
-    compileOnServer: (projectId: string, signal?: AbortSignal) => request<{ success: boolean; projectVersion: number; snapshotId: string; engine: "server"; log: string; error?: string; pdfBase64?: string; syncTexData?: string; workspacePaths: string[] }>(`/api/projects/${projectId}/compile`, { method: "POST", ...(signal ? { signal } : {}) })
+    compileOnServer: (projectId: string, signal?: AbortSignal) => request<{ id: string; kind: "latex.compile"; status: "queued" | "running" | "completed" | "failed" | "cancelled" }>(`/api/projects/${projectId}/compile`, { method: "POST", ...(signal ? { signal } : {}) }),
+    compileJob: (jobId: string, signal?: AbortSignal) => api.jobs.get(jobId, signal)
   },
   completions: {
     suggest: (projectId: string, body: CompletionRequest, signal?: AbortSignal) => request<CompletionResponse>(`/api/projects/${projectId}/completions`, jsonInit("POST", body, signal))
@@ -320,8 +340,10 @@ export const api = {
   research: {
     search: (projectId: string, query: string, signal?: AbortSignal) => request<{ run: ResearchRun; works: ResearchWork[] }>(`/api/projects/${projectId}/research-runs`, jsonInit("POST", { query }, signal)),
     confirm: (projectId: string, runId: string) => request<ResearchRun>(`/api/projects/${projectId}/research-runs/${runId}/confirm`, { method: "POST" }),
-    updatePlan: (projectId: string, runId: string, queryPlan: { steps: string[]; rationale?: string }) => request<ResearchRun>(`/api/projects/${projectId}/research-runs/${runId}`, jsonInit("PATCH", queryPlan)),
+    updatePlan: (projectId: string, runId: string, queryPlan: { steps: string[]; rationale?: string; inclusionCriteria?: string[]; exclusionCriteria?: string[]; extractionFields?: string[] }) => request<ResearchRun>(`/api/projects/${projectId}/research-runs/${runId}`, jsonInit("PATCH", queryPlan)),
     cancel: (projectId: string, runId: string) => request<ResearchRun>(`/api/projects/${projectId}/research-runs/${runId}/cancel`, { method: "POST" }),
+    screening: (projectId: string, runId: string) => request<Array<{ id: string; projectId: string; runId: string; workId: string; decision: "included" | "excluded" | "uncertain"; reason?: string; extracted?: Record<string, string>; decidedAt: string; updatedAt: string }>>(`/api/projects/${projectId}/research-runs/${runId}/screening`),
+    updateScreening: (projectId: string, runId: string, workId: string, body: { decision: "included" | "excluded" | "uncertain"; reason?: string; extracted?: Record<string, string> }) => request(`/api/projects/${projectId}/research-runs/${runId}/screening/${workId}`, jsonInit("PUT", body)),
     works: (projectId: string, signal?: AbortSignal) => request<ProjectResearchWorkDetails[]>(`/api/projects/${projectId}/research-works`, signal ? { signal } : undefined),
     fastReadBundles: (projectId: string, signal?: AbortSignal) => request<FastReadBundleReceipt[]>(`/api/projects/${projectId}/fastread-bundles`, signal ? { signal } : undefined),
     importFastReadBundles: (projectId: string, manifestPath?: string) => request<FastReadBundleReceipt[]>(`/api/projects/${projectId}/fastread-bundles/import`, jsonInit("POST", manifestPath ? { manifestPath } : {})),
@@ -333,6 +355,8 @@ export const api = {
     ,pdfEvidence: (projectId: string, workId: string, pdfBase64: string) => request<SourceEvidence[]>(`/api/projects/${projectId}/research-works/${workId}/pdf-evidence`, jsonInit("POST", { pdfBase64, authorized: true }))
   },
   claims: {
+    cockpit: (projectId: string, signal?: AbortSignal) => request<EvidenceCockpit>(`/api/projects/${projectId}/evidence-cockpit`, signal ? { signal } : undefined),
+    citationReviewer: (projectId: string, signal?: AbortSignal) => request<CitationReviewer>(`/api/projects/${projectId}/citation-reviewer`, signal ? { signal } : undefined),
     scan: (projectId: string) => request<PaperClaim[]>(`/api/projects/${projectId}/claim-scans`, { method: "POST" }),
     list: (projectId: string) => request<PaperClaim[]>(`/api/projects/${projectId}/claims`),
     links: (projectId: string, claimId?: string) => request<ClaimEvidenceLink[]>(claimId ? `/api/projects/${projectId}/claims/${claimId}/links` : `/api/projects/${projectId}/claim-links`),
@@ -342,8 +366,8 @@ export const api = {
     reanchor: (projectId: string, claimId: string) => request<PaperClaim>(`/api/projects/${projectId}/claims/${claimId}/reanchor`, { method: "POST" }),
     update: (projectId: string, claimId: string, body: { reviewStatus?: PaperClaim["reviewStatus"] }) => request<PaperClaim>(`/api/projects/${projectId}/claims/${claimId}`, jsonInit("PATCH", body)),
     evidence: (projectId: string) => request<SourceEvidence[]>(`/api/projects/${projectId}/evidence`),
-    updateEvidence: (projectId: string, evidenceId: string, status: SourceEvidence["status"]) => request<SourceEvidence>(`/api/projects/${projectId}/evidence/${evidenceId}`, jsonInit("PATCH", { status })),
-    addEvidence: (projectId: string, body: { workId: string; content: string; kind?: string; locator: string; locatorType?: string; origin?: string; representation?: string }) => request<SourceEvidence>(`/api/projects/${projectId}/evidence`, jsonInit("POST", body)),
+    updateEvidence: (projectId: string, evidenceId: string, updates: { status?: SourceEvidence["status"]; stance?: SourceEvidence["stance"]; representation?: SourceEvidence["representation"] }) => request<SourceEvidence>(`/api/projects/${projectId}/evidence/${evidenceId}`, jsonInit("PATCH", updates)),
+    addEvidence: (projectId: string, body: { workId: string; content: string; kind?: string; locator: string; locatorType?: string; origin?: string; representation?: string; stance?: "supports" | "contradicts" | "mentions" | "unknown" }) => request<SourceEvidence>(`/api/projects/${projectId}/evidence`, jsonInit("POST", body)),
     writingChecks: (projectId: string, signal?: AbortSignal) => request<{ projectId: string; projectVersion: number; findings: HunkFinding[] }>(`/api/projects/${projectId}/writing-checks`, { method: "POST", ...(signal ? { signal } : {}) }),
     argumentGraph: (projectId: string, signal?: AbortSignal) => request<{ projectId: string; relations: ClaimRelation[] }>(`/api/projects/${projectId}/argument-graph`, signal ? { signal } : undefined),
     confirmRelation: (projectId: string, body: { fromClaimId: string; toClaimId: string; type: ClaimRelation["type"] }) => request<ClaimRelation>(`/api/projects/${projectId}/argument-graph/confirm`, jsonInit("POST", body)),

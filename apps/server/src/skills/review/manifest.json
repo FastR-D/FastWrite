@@ -12,5 +12,9 @@
   "requiresReview": true,
   "references": [
     { "url": "https://fastwrite.local/docs/RDA.md", "license": "internal", "verifiedAt": "2026-09-16" }
+  ],
+  "fixtures": [
+    { "id": "positive", "input": "fixture:positive.tex", "expected": "clean" },
+    { "id": "negative", "input": "fixture:negative.tex", "expected": "findings" }
   ]
 }

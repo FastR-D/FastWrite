@@ -97,7 +97,17 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
     try {
       await beforeCompileRef.current();
       if (controller.signal.aborted) return;
-      const result = await api.compiler.compileOnServer(projectId, controller.signal).then((server) => ({ ...server, pdf: server.pdfBase64 ? base64ToBytes(server.pdfBase64) : undefined }));
+      const queued = await api.compiler.compileOnServer(projectId, controller.signal);
+      setProgress("Compilation queued…");
+      let result: any;
+      for (;;) {
+        if (controller.signal.aborted) return;
+        const job = await api.compiler.compileJob(queued.id, controller.signal);
+        if (job.status === "completed") { result = job.output as any; break; }
+        if (job.status === "failed" || job.status === "cancelled") throw new Error(job.error ?? `Compilation ${job.status}`);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      result = { ...result, pdf: result.pdfBase64 ? base64ToBytes(result.pdfBase64) : undefined };
       if (controller.signal.aborted) {
         if (abortRef.current === controller) {
           runningRef.current = false;
@@ -130,6 +140,12 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
       setProgress("Compiled successfully");
       void api.compileResults.record(projectId, { projectVersion: result.projectVersion, status: "success", summary: "Compiled successfully with local LaTeX" }).catch(() => undefined);
     } catch (error) {
+      if (controller.signal.aborted) {
+        runningRef.current = false;
+        setState(pdfUrlRef.current ? "success" : "idle");
+        setProgress("Compilation cancelled");
+        return;
+      }
       if (abortRef.current !== controller) return;
       if ((error as DOMException).name === "AbortError") {
         if (abortRef.current === controller) {

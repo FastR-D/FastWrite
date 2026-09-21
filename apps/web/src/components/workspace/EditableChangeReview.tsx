@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { TextChange } from "@fastwrite/shared";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
+import * as monaco from "monaco-editor";
 import { Button, Icon, TextArea, icons } from "../ui";
 import { ChangeHunkReview } from "./ChangeHunkReview";
 import { TextModelComparison } from "../workbench/TextModelComparison";

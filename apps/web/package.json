@@ -14,7 +14,7 @@
     "@fastwrite/shared": "workspace:*",
     "@siglum/engine": "^0.1.4",
     "@siglum/filesystem": "^0.2.1",
-    "monaco-editor": "^0.55.1",
+    "monaco-editor": "0.56.0",
     "pdfjs-dist": "^5.4.296",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

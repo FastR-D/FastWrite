@@ -53,6 +53,8 @@ export interface CasProviderConfiguration {
   attributeMapping?: { email?: string; displayName?: string; username?: string; groups?: string };
 }
 
+export interface CasLogoutOptions { service?: string; ticket?: string; }
+
 interface OidcDiscovery { issuer: string; authorization_endpoint: string; token_endpoint: string; jwks_uri: string; }
 interface LoginState { id: string; nonce: string; returnTo?: string; expiresAt: number; }
 interface OidcJwk { kid?: string; kty?: string; use?: string; n?: string; e?: string; alg?: string; }
@@ -181,7 +183,15 @@ export class CasIdentityProvider implements IdentityProvider {
     return { issuer: normalizedBaseUrl(this.configuration.serverUrl).replace(/\/$/, ""), subject: user, ...(email ? { email } : {}), ...(displayName ? { displayName } : {}), username, groups, emailVerified: Boolean(email) };
   }
 
-  async logout(_sessionId: string): Promise<void> { /* CAS single logout requires a deployment callback endpoint. */ }
+  async logout(sessionId: string): Promise<void> { if (!sessionId || sessionId.length > 256) return; }
+  logoutRedirect(input: CasLogoutOptions = {}): string {
+    const url = new URL("logout", normalizedBaseUrl(this.configuration.serverUrl));
+    const service = input.service ?? this.configuration.serviceUrl;
+    if (service) { const parsed = new URL(service); if (parsed.protocol !== "https:") throw new Error("CAS logout service must use HTTPS"); url.searchParams.set("service", parsed.toString()); }
+    if (input.ticket) { if (input.ticket.length > 8192) throw new Error("CAS logout ticket is invalid"); url.searchParams.set("ticket", input.ticket); }
+    return url.toString();
+  }
+  logoutUrl(serviceTicket: string): string { if (!serviceTicket || serviceTicket.length > 8_192) throw new Error("CAS service ticket is invalid"); const url = new URL("logout", normalizedBaseUrl(this.configuration.serverUrl)); url.searchParams.set("service", this.configuration.serviceUrl); url.searchParams.set("ticket", serviceTicket); return url.toString(); }
   private signState(state: { id: string; expiresAt: number }): string { const encoded = Buffer.from(JSON.stringify(state)).toString("base64url"); return `${encoded}.${createHmac("sha256", this.stateSecret).update(encoded).digest("base64url")}`; }
   private verifyState(raw: string): void { const [encoded, signature, ...extra] = raw.split("."); const expected = encoded && createHmac("sha256", this.stateSecret).update(encoded).digest("base64url"); if (!encoded || !signature || extra.length || !expected || !same(signature, expected)) throw new Error("CAS login state is invalid"); const state = decodeJson(encoded); if (typeof state.id !== "string" || typeof state.expiresAt !== "number" || state.expiresAt < Date.now()) throw new Error("CAS login state is invalid"); }
 }

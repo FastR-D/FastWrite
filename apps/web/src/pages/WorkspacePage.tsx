@@ -23,6 +23,7 @@ import type {
   SourceLocation,
   TextSelection,
   WorkspaceTreeNode,
+  EvidenceCockpit,
 } from "@fastwrite/shared";
 import { api } from "../api/client";
 import { Button, Dialog, Field, Icon, IconButton, Link, SegmentedControl, Select, TabBar, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
@@ -48,6 +49,7 @@ import {
 import { FASTWRITE_SAVE_EVENT } from "../lib/keyboard";
 import { publicationTargetAbbreviation } from "../lib/labels";
 import { ProjectSearchDialog } from "../components/workspace/ProjectSearchDialog";
+import { ProvenanceDialog } from "../components/workspace/ProvenanceDialog";
 import { loadWorkspaceFile, loadWorkspaceSnapshot, saveWorkspaceFile, saveWorkspaceSnapshot } from "../lib/offlineWorkspace";
 
 const SourceEditor = lazy(() =>
@@ -89,6 +91,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [outline, setOutline] = useState<OutlineItem[]>([]);
   const [outlineMode, setOutlineMode] = useStoredString(`fastwrite.workbench-layout:${projectId}:outline-mode`, "project", ["project", "current"] as const);
   const [claims, setClaims] = useState<PaperClaim[]>([]);
+  const [evidenceCockpit, setEvidenceCockpit] = useState<EvidenceCockpit | null>(null);
   const [claimStatusFilter, setClaimStatusFilter] = useState<"all" | PaperClaim["reviewStatus"] | "stale" | "orphaned">("all");
   const [claimPathFilter, setClaimPathFilter] = useState("all");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -155,6 +158,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   useEffect(() => { setSettingsOpen(false); setSettingsActive(false); }, [projectId]);
   const [syncOpen, setSyncOpen] = useState(false);
   const [complianceOpen, setComplianceOpen] = useState(false);
+  const [provenanceOpen, setProvenanceOpen] = useState(false);
   const [settingsTree, setSettingsTree] = useState<WorkspaceTreeNode[]>([]);
   const [deleteError, setDeleteError] = useState("");
   const [compileRequest, setCompileRequest] = useState(0);
@@ -274,6 +278,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       api.projects.outline(projectId, controller.signal),
       api.compileResults.latest(projectId, controller.signal),
       api.claims.list(projectId),
+      api.claims.cockpit(projectId),
     ])
       .then(
         async ([
@@ -282,6 +287,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           nextOutline,
           latestCompile,
           nextClaims,
+          nextCockpit,
         ]) => {
           const nextTree = await hydrateTreePath(
             projectId,
@@ -293,6 +299,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           commitTree(nextTree);
           setOutline(nextOutline);
           setClaims(nextClaims);
+          setEvidenceCockpit(nextCockpit);
           saveWorkspaceSnapshot(projectId, { project: nextProject, tree: nextTree, outline: nextOutline, claims: nextClaims });
           setSelectedPath(nextProject.mainDocument);
           if (latestCompile)
@@ -471,6 +478,10 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       const nextSelection = makeSelection(resolved.anchor.path, opened, resolved.anchor.startOffset, resolved.anchor.endOffset);
       closeHistoryDiff(); navigationRef.current.cancel(); setSelectedPath(resolved.anchor.path); setFileDocument(opened); setTargetLine(null); setSelection(nextSelection); setTargetSelection(nextSelection); setCursorLocation({ path: resolved.anchor.path, line: nextSelection.startLine, column: 1 });
     } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not verify the claim location"); }
+  };
+  const selectEvidenceClaim = async (claim: PaperClaim) => {
+    setSidebarView("evidence");
+    await selectClaim(claim);
   };
   const claimPaths = useMemo(() => [...new Set(claims.map(claim => claim.anchor.path))].sort((a, b) => a.localeCompare(b)), [claims]);
   const visibleClaims = useMemo(() => claims.filter(claim => {
@@ -686,6 +697,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           >
             Compliance
           </Button>
+          <Button size="small" variant="secondary" icon={<Icon name={icons.history} />} onClick={() => setProvenanceOpen(true)}>Provenance</Button>
           <Button
             size="small"
             variant="secondary"
@@ -731,7 +743,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       </header>
 
       <div className="workspace-shell" ref={containerRef}>
-        <ActivityBar active={sidebarView} expanded={!sidebarForcedCollapsed && sidebarWidth > 0} onSelect={chooseSidebar} onSettings={() => void openSettings()} evidenceCount={claims.filter(claim => claim.reviewStatus === "needs-review" || claim.anchorStatus === "stale").length} />
+        <ActivityBar active={sidebarView} expanded={!sidebarForcedCollapsed && sidebarWidth > 0} onSelect={chooseSidebar} onSettings={() => void openSettings()} evidenceCount={evidenceCockpit?.counts.unresolved ?? claims.filter(claim => claim.reviewStatus === "needs-review" || claim.anchorStatus === "stale").length} />
         {(
           <aside className="workspace-sidebar" hidden={sidebarForcedCollapsed || sidebarWidth === 0} style={{ width: sidebarWidth }}>
             <section id="sidebar-files" hidden={sidebarView !== "files"} className="sidebar-section sidebar-section--files">
@@ -843,13 +855,15 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             </section>
             <section id="sidebar-evidence" hidden={sidebarView !== "evidence"} className="sidebar-section sidebar-section--claims">
               <header className="panel-heading panel-heading--plain">
-                <span>Claims & evidence</span>
+                <div><span>Claims & evidence</span>{evidenceCockpit ? <small>{evidenceCockpit.counts.supported}/{evidenceCockpit.counts.total} supported · {evidenceCockpit.counts.unresolved} unresolved</small> : null}</div>
                 <IconButton
                   label="Rescan claims"
                   icon={<Icon name={icons.refresh} />}
                   onClick={async () => {
                     try {
-                      setClaims(await api.claims.scan(projectId));
+                      const next = await api.claims.scan(projectId);
+                      setClaims(next);
+                      setEvidenceCockpit(await api.claims.cockpit(projectId));
                     } catch {
                       /* keep the last ledger visible */
                     }
@@ -896,7 +910,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                             variant="ghost"
                             className={`claim-ledger-item is-${status}`}
                             key={claim.id}
-                            onClick={() => { void selectClaim(claim); }}
+                            onClick={() => { void selectEvidenceClaim(claim); }}
                             title={
                               `${claim.anchor.path} · saved v${claim.anchor.fileVersion} · ${claim.anchorStatus === "current" ? "verified anchor" : "verify and reanchor before opening"}`
                             }
@@ -1129,7 +1143,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           </div>
           <div className="bottom-panel-content bottom-panel-problems" role="tabpanel" hidden={bottomPanelTab !== "problems"}>
             <header><span>{compileState.state === "error" ? "Compilation failed" : compileState.diagnostics.length ? "Compiler diagnostics" : "No compiler problems"}</span><small>{compileState.progress}</small></header>
-            {compileState.diagnostics.length ? <div className="diagnostic-list">{compileState.diagnostics.map(diagnostic => <Button variant="ghost" key={diagnostic.id} className={`diagnostic-row diagnostic-row--${diagnostic.severity}`} disabled={!diagnostic.path || !diagnostic.line} onClick={() => { if (diagnostic.path && diagnostic.line) void navigateToPath(diagnostic.path, diagnostic.line); }}><Icon name={icons.warning} /><span><strong>{diagnostic.message}</strong>{diagnostic.path ? <code>{diagnostic.path}{diagnostic.line ? `:${diagnostic.line}` : ""}</code> : null}</span></Button>)}</div> : <div className="bottom-panel-empty"><Icon name={icons.passFilled} />{compileState.state === "error" ? "The compiler did not provide a source location." : "Compile the project to populate diagnostics."}</div>}
+            {compileState.diagnostics.length ? <div className="diagnostic-list">{compileState.diagnostics.map(diagnostic => <div className={`diagnostic-row diagnostic-row--${diagnostic.severity}`} key={diagnostic.id}><Button variant="ghost" disabled={!diagnostic.path || !diagnostic.line} onClick={() => { if (diagnostic.path && diagnostic.line) void navigateToPath(diagnostic.path, diagnostic.line); }}><Icon name={icons.warning} /><span><strong>{diagnostic.message}</strong>{diagnostic.path ? <code>{diagnostic.path}{diagnostic.line ? `:${diagnostic.line}` : ""}</code> : null}</span></Button>{compileState.failure ? <Button size="small" variant="secondary" icon={<Icon name={icons.tools} />} onClick={() => { setBottomPanelTab("ai"); setPanelCollapsed(false); fixCompileWithAgent(compileState.failure!); }}>Fix with Agent</Button> : null}</div>)}</div> : <div className="bottom-panel-empty"><Icon name={icons.passFilled} />{compileState.state === "error" ? "The compiler did not provide a source location." : "Compile the project to populate diagnostics."}</div>}
           </div>
           <div className="bottom-panel-content bottom-panel-output" role="tabpanel" hidden={bottomPanelTab !== "output"}>
             <header><Icon name={icons.filePdf} /><span>Compiler output</span><small>{compileState.compiledVersion === null ? "No compiled version" : `Workspace version ${compileState.compiledVersion}`}</small></header>
@@ -1246,6 +1260,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           : {})}
         onClose={() => setComplianceOpen(false)}
       />
+      <ProvenanceDialog open={provenanceOpen} projectId={projectId} onClose={() => setProvenanceOpen(false)} />
       <QuickOpenDialog open={quickOpen} projectId={projectId} onClose={() => setQuickOpen(false)} onOpen={path => { closeHistoryDiff(); void navigateToPath(path); }} />
       <ShareDialog
         open={shareOpen}

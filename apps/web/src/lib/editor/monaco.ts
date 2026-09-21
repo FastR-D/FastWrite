@@ -1,6 +1,5 @@
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import "monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution";
+import * as monaco from "monaco-editor";
+import EditorWorker from "./monacoWorker?worker";
 declare global {
   interface Window {
     MonacoEnvironment?: { getWorker: (_moduleId: string, _label: string) => Worker };
@@ -105,4 +104,3 @@ export function languageForPath(path: string): string {
   if (lower.endsWith(".tex") || lower.endsWith(".sty") || lower.endsWith(".cls") || lower.endsWith(".bib")) return "latex";
   return "plaintext";
 }
-

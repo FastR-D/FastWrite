@@ -1,4 +1,4 @@
-import { normalizeWorkspacePath, type ChangeSet, type FastReadBundleReceipt, type MetadataObservation, type ProjectResearchWork, type ProjectResearchWorkDetails, type ResearchIdentifier, type ResearchProviderResult, type ResearchRun, type ResearchWork, type SourceEvidence } from "@fastwrite/shared";
+import { normalizeWorkspacePath, type ChangeSet, type FastReadBundleReceipt, type MetadataObservation, type ProjectResearchWork, type ProjectResearchWorkDetails, type ResearchIdentifier, type ResearchProviderResult, type ResearchRun, type ResearchWork, type ResearchScreeningRecord, type SourceEvidence } from "@fastwrite/shared";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
@@ -11,7 +11,7 @@ const now = () => new Date().toISOString();
 
 export class ResearchService {
   private readonly cache = new Map<string, { expiresAt: number; observations: Observation[] }>();
-  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly fetcher: typeof fetch = fetch) {}
+  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly fetcher: (input: string | Request | URL, init?: RequestInit) => Promise<Response> = fetch) {}
 
   async search(projectId: string, query: string, signal?: AbortSignal): Promise<{ run: ResearchRun; works: ResearchWork[] }> {
     this.workspaces.getProject(projectId);
@@ -80,8 +80,29 @@ export class ResearchService {
     this.workspaces.getProject(projectId); return this.database.mutate((state) => { const run = state.researchRuns.find((item) => item.projectId === projectId && item.id === runId); if (!run) throw new ApiError(404, "research_run_not_found", "Research run not found"); if (run.status === "cancelled") throw new ApiError(409, "research_run_cancelled", "Research run is cancelled"); return run; });
   }
 
-  async updatePlan(projectId: string, runId: string, queryPlan: { steps: string[]; rationale?: string }): Promise<ResearchRun> {
-    this.workspaces.getProject(projectId); return this.database.mutate((state) => { const run = state.researchRuns.find((item) => item.projectId === projectId && item.id === runId); if (!run) throw new ApiError(404, "research_run_not_found", "Research run not found"); if (!Array.isArray(queryPlan.steps) || queryPlan.steps.length === 0 || queryPlan.steps.length > 20 || queryPlan.steps.some((step) => typeof step !== "string" || !step.trim())) throw new ApiError(400, "research_plan_invalid", "Research query plan must contain 1-20 non-empty steps"); run.queryPlan = { steps: queryPlan.steps.map((step) => step.trim()), ...(queryPlan.rationale?.trim() ? { rationale: queryPlan.rationale.trim().slice(0, 1000) } : {}) }; run.updatedAt = now(); return run; });
+  async updatePlan(projectId: string, runId: string, queryPlan: { steps: string[]; rationale?: string; inclusionCriteria?: string[]; exclusionCriteria?: string[]; extractionFields?: string[] }): Promise<ResearchRun> {
+    this.workspaces.getProject(projectId); return this.database.mutate((state) => { const run = state.researchRuns.find((item) => item.projectId === projectId && item.id === runId); if (!run) throw new ApiError(404, "research_run_not_found", "Research run not found"); if (!Array.isArray(queryPlan.steps) || queryPlan.steps.length === 0 || queryPlan.steps.length > 20 || queryPlan.steps.some((step) => typeof step !== "string" || !step.trim())) throw new ApiError(400, "research_plan_invalid", "Research query plan must contain 1-20 non-empty steps"); const list = (value?: string[]) => value?.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim().slice(0, 300)).slice(0, 20); const nextPlan: ResearchRun["queryPlan"] = { steps: queryPlan.steps.map((step) => step.trim().slice(0, 500)) }; if (queryPlan.rationale?.trim()) nextPlan.rationale = queryPlan.rationale.trim().slice(0, 1000); const inclusion = list(queryPlan.inclusionCriteria); const exclusion = list(queryPlan.exclusionCriteria); const extraction = list(queryPlan.extractionFields); if (inclusion?.length) nextPlan.inclusionCriteria = inclusion; if (exclusion?.length) nextPlan.exclusionCriteria = exclusion; if (extraction?.length) nextPlan.extractionFields = extraction; run.queryPlan = nextPlan; run.updatedAt = now(); return run; });
+  }
+
+  listScreening(projectId: string, runId?: string): ResearchScreeningRecord[] {
+    this.workspaces.getProject(projectId);
+    return this.database.snapshot().researchScreening.filter((item) => item.projectId === projectId && (!runId || item.runId === runId));
+  }
+
+  async updateScreening(projectId: string, runId: string, workId: string, input: { decision: ResearchScreeningRecord["decision"]; reason?: string; extracted?: Record<string, string> }): Promise<ResearchScreeningRecord> {
+    this.workspaces.getProject(projectId);
+    const state = this.database.snapshot();
+    if (!state.researchRuns.some((run) => run.projectId === projectId && run.id === runId)) throw new ApiError(404, "research_run_not_found", "Research run not found");
+    if (!state.projectResearchWorks.some((link) => link.projectId === projectId && link.workId === workId)) throw new ApiError(404, "research_work_not_found", "Research work is not linked to this project");
+    if (!new Set(["included", "excluded", "uncertain"]).has(input.decision)) throw new ApiError(400, "screening_decision_invalid", "Screening decision is invalid");
+    const timestamp = now();
+    return this.database.mutate((current) => {
+      const existing = current.researchScreening.find((item) => item.projectId === projectId && item.runId === runId && item.workId === workId);
+      const next = { id: existing?.id ?? `screen_${crypto.randomUUID()}`, projectId, runId, workId, decision: input.decision, ...(input.reason?.trim() ? { reason: input.reason.trim().slice(0, 1000) } : {}), ...(input.extracted ? { extracted: Object.fromEntries(Object.entries(input.extracted).slice(0, 30).map(([key, value]) => [key.slice(0, 100), String(value).slice(0, 1000)])) } : {}), decidedAt: existing?.decidedAt ?? timestamp, updatedAt: timestamp } satisfies ResearchScreeningRecord;
+      if (existing) Object.assign(existing, next);
+      else current.researchScreening.push(next);
+      return next;
+    });
   }
 
   async cancel(projectId: string, runId: string): Promise<ResearchRun> {
@@ -349,6 +370,7 @@ export class ResearchService {
     }
     if (!extracted.length) return [];
 
+    const sourceHash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
     const timestamp = now();
     const evidence = extracted.map(({ page, content }): SourceEvidence => ({
       id: `evidence_${crypto.randomUUID()}`,
@@ -361,6 +383,7 @@ export class ResearchService {
       content,
       locatorType: "page",
       locator: String(page),
+      sourceHash,
       sourceNote: "Deterministically extracted from a user-authorized local PDF; verify layout-sensitive text against the source document.",
       createdAt: timestamp,
       updatedAt: timestamp

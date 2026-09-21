@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { isIgnoredWorkspacePath, WRITING_PROFILES, type AgentWireApi, type PaperProject, type ProjectAclAction, type PublicationTarget, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
+import { isIgnoredWorkspacePath, WRITING_PROFILES, type AgentWireApi, type PaperProject, type ProjectAclAction, type PublicationTarget, type PublishedSkillDescriptor, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { Button, Field, Icon, icons, Select, TextField, Link } from "../ui";
 import { PublicationTargetFields } from "../ui/PublicationTargetFields";
@@ -37,11 +37,13 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
   const [agentBaseline, setAgentBaseline] = useState<HarnessSettingsBaseline>({ configured: null, baseURL: "", model: "", wireAPI: "chat" });
   const [savingAgent, setSavingAgent] = useState(false);
   const [agentError, setAgentError] = useState("");
+  const [publishedSkills, setPublishedSkills] = useState<PublishedSkillDescriptor[]>([]);
   const [aclRules, setAclRules] = useState<AclRule[]>([]);
   const [aclAvailable, setAclAvailable] = useState<boolean | null>(null);
   const [aclDraft, setAclDraft] = useState<Omit<AclRule, "id">>({ pathPrefix: "", subjectType: "project_role", subjectId: "editor", action: "read", effect: "deny" });
   const [aclBusy, setAclBusy] = useState(false);
   const [aclError, setAclError] = useState("");
+  useEffect(() => { void api.agentSkills.releases().then(setPublishedSkills).catch(() => setPublishedSkills([])); }, []);
   const texFiles = useMemo(() => [...new Set([project.mainDocument, ...flattenFiles(tree)])].filter((path) => path.toLowerCase().endsWith(".tex") && !isIgnoredWorkspacePath(path)), [tree, project.mainDocument]);
 
   useEffect(() => {
@@ -181,6 +183,11 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
         <Field label="Main document">
           <Select aria-label="Main document" value={mainDocument} onChange={setMainDocument} options={texFiles.map((path) => ({ value: path, label: path }))} placeholder="Choose a document" />
         </Field>
+          </section>
+          <section className={styles.section} hidden={!visible("skills")} aria-labelledby="skills-settings-title">
+            <h2 id="skills-settings-title">Skill governance</h2>
+            <p className={styles.description}>Published Skills remain governed by manifest, license, capability, risk, and review metadata.</p>
+            <div className="settings-export">{publishedSkills.length ? publishedSkills.map((skill) => <div key={skill.id}><strong>{skill.id} · v{skill.version}</strong><span>{skill.license} · {skill.scope} · {skill.riskLevel} risk · {skill.requiresReview ? "review required" : "review optional"}</span></div>) : <span>No published Skill manifests are available.</span>}</div>
           </section>
           <section className={styles.section} hidden={!visible("writing")} aria-labelledby="writing-settings-title">
             <h2 id="writing-settings-title">Writing</h2>

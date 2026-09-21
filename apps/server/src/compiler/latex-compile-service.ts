@@ -18,9 +18,24 @@ export interface ServerCompileResult {
   workspacePaths: string[];
 }
 
-/** Runs the host TeX toolchain in a disposable copy of a managed workspace. */
+export type CompileSandboxMode = "host" | "bubblewrap";
+
+export interface CompileSandboxPolicy {
+  mode: CompileSandboxMode;
+  network: "disabled";
+  timeoutMs: number;
+  memoryMb: number;
+  pids: number;
+}
+
+/** Runs a bounded local compile. Production deployments must use the sandbox worker boundary. */
 export class LatexCompileService {
-  constructor(private readonly dataDirectory: string, private readonly workspaces: WorkspaceService) {}
+  private readonly policy: CompileSandboxPolicy;
+  constructor(private readonly dataDirectory: string, private readonly workspaces: WorkspaceService, policy: Partial<CompileSandboxPolicy> = {}) {
+    const mode = policy.mode ?? (process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host");
+    if (mode === "host" && process.env.FASTWRITE_COMPILE_PRODUCTION === "true") throw new ApiError(503, "compile_sandbox_required", "Production compilation requires FASTWRITE_COMPILE_SANDBOX=bubblewrap.");
+    this.policy = { mode, network: "disabled", timeoutMs: Math.min(Math.max(policy.timeoutMs ?? Number(process.env.FASTWRITE_COMPILE_TIMEOUT_MS ?? 120_000), 5_000), 300_000), memoryMb: Math.min(Math.max(policy.memoryMb ?? Number(process.env.FASTWRITE_COMPILE_MEMORY_MB ?? 1024), 128), 4096), pids: Math.min(Math.max(policy.pids ?? Number(process.env.FASTWRITE_COMPILE_MAX_PIDS ?? 256), 32), 4096) };
+  }
 
   async compile(projectId: string): Promise<ServerCompileResult> {
     this.workspaces.getProject(projectId);
@@ -40,8 +55,9 @@ export class LatexCompileService {
       const argumentsList = executable.endsWith("latexmk") || executable.includes("latexmk")
         ? [executable, "-pdf", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${output}`, `-auxdir=${output}`, mainDocument]
         : [executable, "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-output-directory=${output}`, mainDocument];
-      const child = Bun.spawn(argumentsList, { cwd: source, stdout: "pipe", stderr: "pipe", env: { ...process.env, TEXMFOUTPUT: output, openin_any: "p", openout_any: "p" } });
-      const timeout = setTimeout(() => child.kill(), 120_000);
+      const command = this.policy.mode === "bubblewrap" ? this.bubblewrapCommand(argumentsList, source, output) : argumentsList;
+      const child = Bun.spawn(command, { cwd: source, stdout: "pipe", stderr: "pipe", env: { ...process.env, TEXMFOUTPUT: output, openin_any: "p", openout_any: "p", SOURCE_DATE_EPOCH: "0", TEXMFCONFIG: join(output, "texmf-config"), TEXMFVAR: join(output, "texmf-var") } });
+      const timeout = setTimeout(() => child.kill(), this.policy.timeoutMs);
       const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
       clearTimeout(timeout);
       const log = [stdout, stderr].filter(Boolean).join("\n").slice(-1_000_000);
@@ -56,6 +72,14 @@ export class LatexCompileService {
     } finally {
       await rm(temporary, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  private bubblewrapCommand(command: string[], source: string, output: string): string[] {
+    const bwrap = Bun.which("bwrap");
+    if (!bwrap) throw new ApiError(503, "compile_sandbox_unavailable", "Bubblewrap is required for sandboxed server compilation.");
+    const cpuSeconds = Math.max(1, Math.ceil(this.policy.timeoutMs / 1000));
+    const memoryKb = this.policy.memoryMb * 1024;
+    return [bwrap, "--die-with-parent", "--unshare-net", "--new-session", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib", "--ro-bind", "/lib64", "/lib64", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--bind", source, "/workspace/source", "--bind", output, "/workspace/output", "--chdir", "/workspace/source", "--", "sh", "-c", `ulimit -t ${cpuSeconds}; ulimit -v ${memoryKb}; ulimit -u ${this.policy.pids}; exec "$@"`, "fastwrite-compile", ...command.map((part) => part === source ? "/workspace/source" : part === output ? "/workspace/output" : part)];
   }
 }
 
