@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { DiagramService } from "./diagrams/service";
 import { diagramProvider } from "./diagrams/provider";
-import { diagramPrompt, diagramSchema } from "./diagrams/scene";
+import { diagramSchema } from "./diagrams/scene";
 import { renderDrawio, renderPptx, renderSvg } from "./diagrams/render";
 import { stat } from "node:fs/promises";
 import { extname, join } from "node:path";
@@ -103,7 +103,9 @@ export interface ApplicationOptions {
   texPackages?: TexPackageProvider;
 }
 
-function providerFor(_configuration: AgentProviderConfiguration): AgentProvider | undefined { return undefined; }
+import { apiAgentProvider, operationPrompt, structuredProvider } from "./agent/structured-provider";
+
+function providerFor(configuration: AgentProviderConfiguration): AgentProvider | undefined { return apiAgentProvider(configuration); }
 
 interface AgentSettingsInput {
   harness?: "claude" | "codex";
@@ -158,14 +160,9 @@ function harnessProvider(runs: HarnessRunService, kind: "codex" | "claude", cwd:
     const adapter = runs.adapter(kind);
     if (!adapter) throw new ApiError(503, "harness_unavailable", `Harness '${kind}' is unavailable`);
     const session = await adapter.createSession({ cwd, title: `FastWrite ${method}` });
-    const schema = method === "generateDiagram" ? JSON.stringify(diagramSchema) : method === "planAgentTask" ? '{"steps":[string],"affectedFiles":[string],"risks":[string],"validation":[string]}' : method === "generateAgentTask" ? '{"files":[{"path":string,"content":string,"rationale":string}]}' : method === "planDraft" ? '{"outline":[{"path":string,"title":string,"purpose":string}]}' : method === "generateDraft" ? '{"files":[{"path":string,"content":string,"rationale":string}]}' : method === "revise" ? '{"replacement":string,"rationale":string}' : method === "complete" ? '{"suggestion":string}' : '{"result":object}';
-    const scoped = typeof input === "object" && input !== null && "scope" in input && (input as { scope?: { type?: string; section?: unknown } }).scope?.type === "section";
-    const responseLanguage = typeof input === "object" && input !== null && "responseLanguage" in input ? (input as { responseLanguage?: string }).responseLanguage : undefined;
-    const languageRule = responseLanguage === "zh-CN" ? "Respond to the user-facing explanation in Simplified Chinese; do not translate or change manuscript text unless the task explicitly requests it." : responseLanguage === "en-US" ? "Respond to the user-facing explanation in English; do not change manuscript text language unless the task explicitly requests it." : "Use the user's language for explanations when clear, while preserving the manuscript language requested by the task.";
-    const outputRule = scoped ? "For section-scoped execution, return only the requested section replacement in the target file; preserve every line outside the section and never return a whole-file rewrite." : "For file generation, content must be complete compilable LaTeX prose for the requested paper, with abstract, introduction, threat model, method, evaluation plan, and limitations as applicable.";
-    const content = method === "generateDiagram" ? `${diagramPrompt}\nSchema: ${schema}\nInput: ${JSON.stringify(input)}` : `You are a structured academic writing engine. Execute operation '${method}'. Return ONLY one valid JSON object matching this exact schema: ${schema}. Do not echo the prompt. ${languageRule} ${outputRule} Never emit TODO, FIXME, placeholder brackets, template markers, or empty sections; if evidence is missing, state a concrete evaluation plan without claiming results. Input:\n${JSON.stringify(input)}`;
+    const content = operationPrompt(method, input);
     const chunks: string[] = [];
-    for await (const event of runs.send({ kind, session, content, ...(method === "generateDiagram" ? { model: "gpt-6-astra" } : model ? { model } : {}), ...(signal ? { signal } : {}) })) { if (event.type === "assistant.delta") chunks.push(event.text); if (event.type === "run.failed") throw new Error(event.error); }
+    for await (const event of runs.send({ kind, session, content, ...(model ? { model } : {}), ...(signal ? { signal } : {}) })) { if (event.type === "assistant.delta") chunks.push(event.text); if (event.type === "run.failed") throw new Error(event.error); }
     const text = chunks.join("").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
     try { return JSON.parse(text); } catch {
       const candidates: string[] = []; let depth = 0; let start = -1; let quoted = false; let escaped = false;
@@ -175,7 +172,7 @@ function harnessProvider(runs: HarnessRunService, kind: "codex" | "claude", cwd:
       throw new ApiError(502, truncated ? "harness_response_truncated" : "harness_response_invalid", `Harness returned ${truncated ? "truncated" : "invalid"} JSON for ${method}`);
     }
   };
-  return new Proxy({} as AgentProvider, { get: (_target, property) => property === "fileGenerationConcurrency" ? () => 1 : (input: unknown, signal?: AbortSignal) => request(String(property), input, signal) });
+  return structuredProvider(request);
 }
 
 export async function createApplication(dataDirectory = config.dataDirectory, options: ApplicationOptions = {}) {
@@ -188,7 +185,6 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const texPackages = options.texPackages ?? new TexPackageService(dataDirectory);
   await texPackages.initialize();
   const defaultProvider = options.agentProvider;
-  const configuredProviders = defaultProvider ? { completion: defaultProvider, agent: defaultProvider, revise: defaultProvider, review: defaultProvider, memory: defaultProvider } : undefined;
   let runtimeConfiguration: AgentProviderConfiguration | undefined;
   let runtimeProvider: AgentProvider | undefined;
   const configureAgent = (input: AgentSettingsInput) => {
@@ -199,8 +195,8 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
       try { new URL(baseURL); } catch { throw new ApiError(400, "agent_base_url_invalid", "Base URL must be a valid absolute URL"); }
     }
     if (input.wireAPI !== undefined && input.wireAPI !== "chat" && input.wireAPI !== "responses") throw new ApiError(400, "agent_wire_api_invalid", "Wire API must be 'chat' or 'responses'");
-    runtimeConfiguration = { apiKey, ...(baseURL ? { baseURL } : {}), ...(boundedSetting(input.model, 256) ? { model: boundedSetting(input.model, 256) } : {}), wireAPI: input.wireAPI ?? (baseURL ? "chat" : "responses") };
     if (input.harness && input.harness !== config.harness) throw new ApiError(400, "harness_runtime_switch_unsupported", "Restart the server to switch Harness implementations");
+    runtimeConfiguration = { apiKey, ...(baseURL ? { baseURL } : {}), ...(boundedSetting(input.model, 256) ? { model: boundedSetting(input.model, 256) } : {}), wireAPI: input.wireAPI ?? (baseURL ? "chat" : "responses") };
     runtimeProvider = providerFor(runtimeConfiguration);
   };
   const skillRegistry = new SkillRegistry(config.skillsDirectory);
@@ -211,7 +207,9 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   for (const server of defaultMcpServers()) mcpRegistry.register(server);
   const harnessRuns = new HarnessRunService(harnessRegistry, database);
   const harnessProviderInstance = harnessProvider(harnessRuns, config.harness, process.cwd(), config.harnessModel);
-  const providers = configuredProviders ?? { completion: harnessProviderInstance, agent: harnessProviderInstance, revise: harnessProviderInstance, review: harnessProviderInstance, memory: harnessProviderInstance };
+  const environmentProvider = providerFor(config.agentProviders.agent);
+  const activeProvider = runtimeAgentProvider(() => runtimeProvider ?? defaultProvider ?? environmentProvider ?? harnessProviderInstance);
+  const providers = { completion: activeProvider, agent: activeProvider, revise: activeProvider, review: activeProvider, memory: activeProvider };
   const harnessSessions = new HarnessSessionService(database);
   const latexCompiler = new LatexCompileService(dataDirectory, workspaces);
   const mcpTools = new McpToolService(mcpRegistry, workspaces, latexCompiler, database);
@@ -230,10 +228,13 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   await diagrams.initialize();
   const services: Services = { diagrams, database, workspaces, uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools };
   const routes = buildRoutes(services, {
-    status: () => {
+    status: async () => {
       const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
       const discovered = discoverHarnessConfiguration(config.harness);
-      return { configured: Boolean(runtimeConfiguration ?? runtimeProvider ?? providers.agent) || discovered.configured, harness: config.harness, source: runtimeConfiguration || runtimeProvider ? "runtime" : providers.agent ? "environment" : "none", ...(activeConfiguration.baseURL ? { baseURL: activeConfiguration.baseURL } : discovered.baseURL ? { baseURL: discovered.baseURL } : {}), ...(activeConfiguration.model ? { model: activeConfiguration.model } : discovered.model ? { model: discovered.model } : {}), wireAPI: activeConfiguration.wireAPI ?? (activeConfiguration.baseURL ? "chat" : "responses") };
+      const apiConfigured = Boolean(runtimeProvider ?? defaultProvider ?? environmentProvider);
+      const cliStatus = apiConfigured ? undefined : await harnessRegistry.get(config.harness)?.getStatus();
+      const configured = apiConfigured || (discovered.configured && cliStatus?.state === "ready");
+      return { configured, harness: config.harness, transport: apiConfigured ? "api" : "cli", source: runtimeProvider ? "runtime" : environmentProvider || defaultProvider ? "environment" : configured ? "user-config" : "none", ...(activeConfiguration.baseURL ? { baseURL: activeConfiguration.baseURL } : discovered.baseURL ? { baseURL: discovered.baseURL } : {}), ...(activeConfiguration.model ? { model: activeConfiguration.model } : discovered.model ? { model: discovered.model } : {}), wireAPI: activeConfiguration.wireAPI ?? (activeConfiguration.baseURL ? "chat" : "responses") };
     },
     configure: configureAgent
   });
@@ -255,7 +256,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
 }
 
-function buildRoutes({ diagrams, database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void }): Route[] {
+function buildRoutes({ diagrams, database, workspaces, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools }: Services, agentSettings: { status: () => Promise<{ configured: boolean; source: string; baseURL?: string; model?: string; wireAPI: AgentWireApi }>; configure: (input: AgentSettingsInput) => void }): Route[] {
   const collaborationDocuments = new Map<string, { document: Y.Doc; version: number }>();
   const presence = new Map<string, Map<string, { clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>();
   return [
@@ -273,8 +274,8 @@ function buildRoutes({ diagrams, database, workspaces, uploads, github, githubSy
       if(format==='pptx')return new Response(await renderPptx(record.scene),{headers:{'content-type':'application/vnd.openxmlformats-officedocument.presentationml.presentation','content-disposition':'attachment; filename="diagram.pptx"'}});
       throw new ApiError(400,'diagram_format_invalid','支持 SVG、draw.io 和 PPTX');
     }),
-    route("GET", "/api/harness-settings", async () => json(agentSettings.status())),
-    route("PUT", "/api/harness-settings", async (request) => { agentSettings.configure(await readJson<AgentSettingsInput>(request)); return json(agentSettings.status()); }),
+    route("GET", "/api/harness-settings", async () => json(await agentSettings.status())),
+    route("PUT", "/api/harness-settings", async (request) => { agentSettings.configure(await readJson<AgentSettingsInput>(request)); return json(await agentSettings.status()); }),
     route("GET", "/api/venues", async () => json(await skillRegistry.catalog())),
     route("GET", "/api/skills/workflows", async () => json((await skillRegistry.workflowCatalog()).map(({ instructions: _instructions, ...descriptor }) => descriptor))),
     route("GET", "/api/agent-skills", async () => json(await skillRegistry.taskCatalog())),
@@ -531,7 +532,8 @@ function buildRoutes({ diagrams, database, workspaces, uploads, github, githubSy
     }),
     route("GET", "/api/projects/:projectId/reviews", async (_request, params) => json(reviews.list(required(params, "projectId")))),
     route("POST", "/api/projects/:projectId/reviews", async (request, params) => {
-      const body = await readJson<{ sourceOnly?: boolean; pageText?: string[] }>(request);
+      const body = await readJson<{ sourceOnly?: boolean; pageText?: string[]; projectVersion?: number }>(request);
+      if (body.pageText?.length && (body.sourceOnly === true || body.projectVersion !== workspaces.getProject(required(params, "projectId")).version)) throw new ApiError(409, "review_pdf_stale", "PDF text must belong to the current compiled project version.");
       if (body.pageText !== undefined && (!Array.isArray(body.pageText) || body.pageText.some((item) => typeof item !== "string") || body.pageText.length > 20 || body.pageText.reduce((total, item) => total + item.length, 0) > 200_000)) throw new ApiError(400, "review_pdf_preview_invalid", "PDF preview text exceeds the bounded review input limits");
       return json(await reviews.run(required(params, "projectId"), body.sourceOnly === true, request.signal, body.pageText ?? []), 201);
     }),

@@ -1,6 +1,6 @@
 # FastWrite
 
-需要 [Bun](https://bun.sh/) 1.3+ 和 Git。
+需要 [Bun](https://bun.sh/) 1.3+、Git、tar，以及运行服务器的机器上可执行的 LaTeX 工具链。推荐安装 TeX Live 或 MiKTeX，并将 `latexmk`、`pdflatex`、`bibtex` 加入 PATH。浏览器不再包含 WASM 编译器。
 
 ## 开发运行
 
@@ -11,7 +11,9 @@ bun run dev
 
 打开 <http://localhost:3002>（Vite 前端代理 API）。
 
-浏览器 WASM 编译器会在编译时自动识别缺少的 TeX 包，由 FastWrite Server 从兼容的 TeX Live/CTAN 源按需下载；下载结果会在服务端和浏览器中缓存，不需要预先同步 `local-packages`。
+PDF 由服务器本地 LaTeX 编译器生成。Ubuntu/Debian 可先安装 `sudo apt-get install latexmk texlive-latex-extra texlive-fonts-recommended texlive-science`；Windows 可安装 MiKTeX 和 Perl（latexmk 需要），macOS 可安装 MacTeX。缺少模板依赖时，按编译日志补装对应 TeX 包。无 LaTeX 时仍可编辑和导出源码，但不能生成 PDF 或执行要求当前版本编译成功的定向复审。
+
+Review 默认附带当前成功编译版本的分页文本（最多 20 页、合计 200,000 字符）；源码审稿会明确区分。分页文本不包含图像视觉或版式信息。
 
 选定 venue 的 LaTeX 模板首次成功获取后会缓存到 `FASTWRITE_DATA_DIR/templates/`（未配置时为默认数据目录）；后续初始化直接使用本地缓存，不会重复下载。
 
@@ -45,7 +47,11 @@ bun run package:app
 
 `.github/workflows/ci.yml` 会在 push 和 pull request 时自动运行类型检查、单元测试、构建和浏览器 E2E。推送与根 `package.json` 版本一致的标签（例如 `v0.1.0`）会触发 `.github/workflows/release.yml`，在完整测试通过后创建 GitHub Release，并发布 Linux x64、Windows x64、macOS Intel 和 macOS Apple Silicon 安装包。macOS 包当前未进行 Apple Developer 签名或 notarization，首次运行可能出现 Gatekeeper 提示。
 
-在 `.env` 设置 `FASTWRITE_HARNESS=codex` 或 `claude`，并配置 `FASTWRITE_HARNESS_API_KEY`、可选的 `FASTWRITE_HARNESS_BASE_URL`、`FASTWRITE_HARNESS_MODEL`、`FASTWRITE_HARNESS_WIRE_API` 和 `FASTWRITE_HARNESS_TIMEOUT_MS`，即可为全部 AI 工作流配置统一 Harness。Project Settings 也可运行时配置这些 Harness 参数；API key 只保存在内存中且不会回传。Agent 规划、普通 AI 操作以及 `/draft`、`/continue`、`/revise` 的完整文件生成默认超时均为 300 秒，可用 `FASTWRITE_HARNESS_TIMEOUT_MS` 覆盖（最大 600 秒）。导入私有 GitHub Repository 时设置 `FASTWRITE_GITHUB_TOKEN`。
+在 `.env` 设置 `FASTWRITE_HARNESS_API_KEY`、`FASTWRITE_HARNESS_BASE_URL`、`FASTWRITE_HARNESS_MODEL` 和 `FASTWRITE_HARNESS_WIRE_API=chat`（也支持 `responses`），可直接使用兼容 API，例如 Qwen 的兼容接口。Project Settings 的运行时参数优先于环境配置，API key 只保存在内存中且不会回传；重启后恢复环境配置。配置状态表示已选择连接方式，不代表模型调用已验证成功。
+
+未提供 API key 时，使用 `FASTWRITE_HARNESS=codex` 或 `claude` 对应的已安装且独立认证的 CLI。CLI 与直接 API 是两条明确的执行路径。Agent 规划和文件生成默认超时 300 秒，可用 `FASTWRITE_HARNESS_TIMEOUT_MS` 覆盖（最大 600 秒）。导入私有 GitHub Repository 时设置 `FASTWRITE_GITHUB_TOKEN`。
+
+Qwen3 系列的 Chat Completions 调用使用 `enable_thinking=false`，避免思考过程耗尽交互式写作期限；其他模型不发送该供应商参数。
 
 验证 `.env` 中的真实 LLM 配置：
 

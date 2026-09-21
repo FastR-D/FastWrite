@@ -13,7 +13,7 @@ import "react-pdf/dist/Page/TextLayer.css";
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export type CompileState = "idle" | "loading" | "compiling" | "success" | "error";
-export interface CompileStateReport { state: CompileState; compiledVersion: number | null; renderedPages?: number; failure?: CompileFailureContext }
+export interface CompileStateReport { state: CompileState; compiledVersion: number | null; renderedPages?: number; failure?: CompileFailureContext; pageText?: string[] }
 
 export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceLocation, compileRequest, onCompileState, onFixWithAgent, onSyncToSource }: { projectId: string; projectVersion: number; mainDocument: string; tree: WorkspaceTreeNode[]; sourceLocation: SourceLocation | null; compileRequest: number; onCompileState: (report: CompileStateReport) => void; onFixWithAgent: (failure: CompileFailureContext) => void; onSyncToSource: (location: SourceLocation) => void }) {
   const paneRef = useRef<HTMLElement>(null);
@@ -38,6 +38,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [syncTex, setSyncTex] = useState<SyncTexDocument | null>(null);
   const [compiledVersion, setCompiledVersion] = useState<number | null>(null);
+  const [pageText, setPageText] = useState<string[]>([]);
   const [lastAttemptedVersion, setLastAttemptedVersion] = useState<number | null>(null);
   const [syncHighlight, setSyncHighlight] = useState<PdfLocation | null>(null);
   const [compiledWorkspacePaths, setCompiledWorkspacePaths] = useState<string[]>([]);
@@ -113,11 +114,12 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
       if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
       pdfUrlRef.current = nextUrl;
       setPdfUrl(nextUrl);
-      setCompiledVersion(projectVersion);
+      await api.compileResults.record(projectId, { projectVersion: result.projectVersion ?? projectVersion, status: "success", summary: "Compiled successfully with local LaTeX" });
+      setPageText(result.pageText ?? []);
+      setCompiledVersion(result.projectVersion ?? projectVersion);
       setState("success");
       setResourcePercent(null);
       setProgress("Compiled successfully");
-      void api.compileResults.record(projectId, { projectVersion, status: "success", summary: "Compiled successfully with local LaTeX" }).catch(() => undefined);
     } catch (error) {
       if ((error as DOMException).name === "AbortError") {
         if (abortRef.current === controller) {
@@ -151,7 +153,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
     };
   }, [compile, lastAttemptedVersion, projectVersion]);
 
-  useEffect(() => { onCompileState({ state, compiledVersion, ...(pageCount > 0 ? { renderedPages: pageCount } : {}), ...(failure ? { failure } : {}) }); }, [compiledVersion, failure, onCompileState, pageCount, state]);
+  useEffect(() => { onCompileState({ state, compiledVersion, pageText, ...(pageCount > 0 ? { renderedPages: pageCount } : {}), ...(failure ? { failure } : {}) }); }, [compiledVersion, failure, onCompileState, pageCount, pageText, state]);
 
   useEffect(() => {
     if (compileRequest === compileRequestRef.current) return;
