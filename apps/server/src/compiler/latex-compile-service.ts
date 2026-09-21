@@ -16,6 +16,7 @@ export interface ServerCompileResult {
   pdfBase64?: string;
   syncTexData?: string;
   workspacePaths: string[];
+  pageText?: string[];
 }
 
 /** Runs the host TeX toolchain in a disposable copy of a managed workspace. */
@@ -52,11 +53,29 @@ export class LatexCompileService {
       const pdf = pdfPath ? await readFile(pdfPath).catch(() => null) : null;
       if (!pdf) return { ...identity, success: false, engine: "server", log, error: "LaTeX completed without producing a PDF.", workspacePaths: await listWorkspacePaths(source) };
       const syncTexData = syncPath ? await readFile(syncPath).then((data) => promisify(gunzip)(data).then((value) => value.toString("utf8"))).catch(() => undefined) : undefined;
-      return { ...identity, success: true, engine: "server", log, pdfBase64: pdf.toString("base64"), ...(syncTexData ? { syncTexData } : {}), workspacePaths: await listWorkspacePaths(source) };
+      const pageText = await extractReviewPageText(pdf);
+      return { ...identity, success: true, engine: "server", log, pdfBase64: pdf.toString("base64"), pageText, ...(syncTexData ? { syncTexData } : {}), workspacePaths: await listWorkspacePaths(source) };
     } finally {
       await rm(temporary, { recursive: true, force: true }).catch(() => undefined);
     }
   }
+}
+
+export async function extractReviewPageText(pdf: Uint8Array): Promise<string[]> {
+  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const document = await getDocument({ data: new Uint8Array(pdf), useSystemFonts: true, isEvalSupported: false }).promise;
+  try {
+    const pages: string[] = [];
+    let remaining = 200_000;
+    for (let number = 1; number <= Math.min(20, document.numPages) && remaining > 0; number++) {
+      const page = await document.getPage(number);
+      const content = await page.getTextContent();
+      const text = content.items.map((item) => "str" in item ? item.str : "").join(" ").slice(0, Math.min(20_000, remaining));
+      pages.push(text); remaining -= text.length;
+      page.cleanup();
+    }
+    return pages;
+  } finally { await document.destroy(); }
 }
 
 async function findOutputFile(root: string, filename: string): Promise<string | null> {

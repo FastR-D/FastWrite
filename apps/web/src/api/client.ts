@@ -277,7 +277,7 @@ export const api = {
   },
   reviews: {
     list: (projectId: string, signal?: AbortSignal) => request<ReviewReport[]>(`/api/projects/${projectId}/reviews`, signal ? { signal } : undefined),
-    run: (projectId: string, sourceOnly: boolean, signal?: AbortSignal) => request<ReviewResponse>(`/api/projects/${projectId}/reviews`, jsonInit("POST", { sourceOnly }, signal)),
+    run: (projectId: string, sourceOnly: boolean, signal?: AbortSignal, preview?: { pageText: string[]; projectVersion: number }) => request<ReviewResponse>(`/api/projects/${projectId}/reviews`, jsonInit("POST", { sourceOnly, ...(!sourceOnly ? preview : {}) }, signal)),
     updateIssue: (projectId: string, issueId: string, body: { status?: ReviewIssueStatus; priority?: number; reason?: string }) => request<ReviewIssue>(`/api/projects/${projectId}/review-issues/${issueId}`, jsonInit("PATCH", body)),
     createIssue: (projectId: string, body: Pick<ReviewIssue, "category" | "severity" | "title" | "rationale" | "impact" | "suggestion"> & { reportId?: string }) => request<ReviewIssue>(`/api/projects/${projectId}/review-issues`, jsonInit("POST", body)),
     mergeIssues: (projectId: string, masterId: string, duplicateIds: string[], reason?: string) => request<ReviewIssue>(`/api/projects/${projectId}/review-issues/${masterId}/merge`, jsonInit("POST", { duplicateIds, ...(reason ? { reason } : {}) }))
@@ -309,7 +309,7 @@ export const api = {
     record: (projectId: string, body: { projectVersion: number; status: "success" | "error"; summary: string }) => request<CompileRecord>(`/api/projects/${projectId}/compile-results`, jsonInit("POST", body))
   },
   compiler: {
-    compileOnServer: (projectId: string, signal?: AbortSignal) => request<{ success: boolean; projectVersion: number; snapshotId: string; engine: "server"; log: string; error?: string; pdfBase64?: string; syncTexData?: string; workspacePaths: string[] }>(`/api/projects/${projectId}/compile`, { method: "POST", ...(signal ? { signal } : {}) })
+    compileOnServer: (projectId: string, signal?: AbortSignal) => request<{ success: boolean; projectVersion: number; snapshotId: string; engine: "server"; log: string; error?: string; pdfBase64?: string; syncTexData?: string; workspacePaths: string[]; pageText?: string[] }>(`/api/projects/${projectId}/compile`, { method: "POST", ...(signal ? { signal } : {}) })
   },
   completions: {
     suggest: (projectId: string, body: CompletionRequest, signal?: AbortSignal) => request<CompletionResponse>(`/api/projects/${projectId}/completions`, jsonInit("POST", body, signal))

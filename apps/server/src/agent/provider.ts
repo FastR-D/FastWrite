@@ -185,7 +185,7 @@ function responseShape(payloads: unknown[], contentType: string, byteLength: num
   return [`content-type=${contentType || "missing"}`, `bytes=${byteLength}`, eventTypes.length ? `events=${eventTypes.join(",")}` : "events=none", `parsed=${payloads.length}`, `parse-failures=${parseFailures}`, `done=${sawDone ? "yes" : "no"}`, statuses.length ? `status=${statuses.join(",")}` : "status=missing", outputTypes.length ? `output=${outputTypes.join(",")}` : "output=none"].join("; ");
 }
 
-async function compatibleResponseText(response: Response): Promise<{ content: string; shape: string }> {
+export async function compatibleResponseText(response: Response): Promise<{ content: string; shape: string }> {
   const body = await response.text();
   const contentType = response.headers.get("content-type") ?? "";
   const looksLikeSSE = contentType.toLowerCase().includes("text/event-stream") || /(?:^|\n)\s*(?:event|data):/.test(body);

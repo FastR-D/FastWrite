@@ -9,6 +9,7 @@ import { isAgentCancellation, runAgentOperation } from "./agent-operation";
 import { writingGuardMany } from "../writing/writing-guard";
 import { deriveArgumentGraph } from "../claims/argument-graph";
 import { buildAdversarialMemo } from "../claims/adversarial-memo";
+import { validateOperationOutput } from "./structured-provider";
 
 function now() { return new Date().toISOString(); }
 function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }
@@ -75,8 +76,8 @@ export class ReviewService {
       const result = await runAgentOperation<ReviewAgentOutput>(
         async (signal) => {
           const input = { documents: documents.map(({ path, content }) => ({ path, content })), outline: flattenOutline(outline).map(({ path, title, line }) => ({ path, title, line })), skill: project.skill, skillInstructions: `${workflowInstructions}\n\n${skill.instructions}`, venueInstructions: skill.venueInstructions, ...(boundedPageText.length ? { pdfPageText: boundedPageText } : {}) };
-          if (!this.agent!.reviewPass) { providerPasses.domain = { status: "completed" }; providerPasses.venue = { status: "completed" }; return this.agent!.review!(input, signal); }
-          const results = await Promise.allSettled([this.agent!.reviewPass({ ...input, pass: "domain" }, signal), this.agent!.reviewPass({ ...input, pass: "venue" }, signal)]);
+          if (!this.agent!.reviewPass) { const output = validateOperationOutput("review", await this.agent!.review!(input, signal)); providerPasses.domain = { status: "completed" }; providerPasses.venue = { status: "completed" }; return output; }
+          const results = await Promise.allSettled((["domain", "venue"] as const).map(async (pass) => validateOperationOutput("reviewPass", await this.agent!.reviewPass!({ ...input, pass }, signal)) as ReviewAgentOutput));
           providerPasses.domain = results[0]?.status === "fulfilled" ? { status: "completed" } : { status: "failed", error: results[0]?.reason instanceof Error ? results[0].reason.message : "Domain pass failed" };
           providerPasses.venue = results[1]?.status === "fulfilled" ? { status: "completed" } : { status: "failed", error: results[1]?.reason instanceof Error ? results[1].reason.message : "Venue pass failed" };
           const successful = results.filter((item): item is PromiseFulfilledResult<ReviewAgentOutput> => item.status === "fulfilled").map((item) => item.value);
