@@ -15,20 +15,20 @@ export class HarnessRunService {
     await this.database.mutate((state) => state.harnessRuns.push({ id: runId, session: input.session, status: "queued", skills: structuredClone(skills), events: [], approvals: [], createdAt: now, updatedAt: now }));
     return runId;
   }
-  async *send(input: { kind: "claude" | "codex"; session: SessionReference; content: string; model?: string; skills?: SkillInvocation[]; signal?: AbortSignal }): AsyncIterable<HarnessEvent> {
+  async *send(input: { kind: "claude" | "codex"; session: SessionReference; content: string; model?: string; skills?: SkillInvocation[]; actorUserId?: string; projectId?: string; projectVersion?: number; resolvedHarnessProfile?: HarnessRun["resolvedHarnessProfile"]; signal?: AbortSignal }): AsyncIterable<HarnessEvent> {
     const adapter = this.registry.get(input.kind);
     if (!adapter) throw new Error(`Harness '${input.kind}' is unavailable`);
     let runId: string | undefined;
     const skills = (input.skills ?? []).map((skill) => ({ ...skill, digest: skill.digest ?? createHash("sha256").update(`${skill.id}:${skill.version}:${skill.path}`).digest("hex") }));
     const queuedId = `run_${crypto.randomUUID()}`;
     const queuedAt = new Date().toISOString();
-    await this.database.mutate((state) => state.harnessRuns.push({ id: queuedId, session: input.session, status: "queued", skills: structuredClone(skills), events: [], approvals: [], createdAt: queuedAt, updatedAt: queuedAt }));
+    await this.database.mutate((state) => state.harnessRuns.push({ id: queuedId, session: input.session, status: "queued", skills: structuredClone(skills), events: [], approvals: [], ...(input.actorUserId ? { actorUserId: input.actorUserId } : {}), ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.projectVersion !== undefined ? { projectVersion: input.projectVersion } : {}), ...(input.resolvedHarnessProfile ? { resolvedHarnessProfile: structuredClone(input.resolvedHarnessProfile) } : {}), createdAt: queuedAt, updatedAt: queuedAt }));
     try { for await (const event of adapter.sendMessage(input)) {
       runId ??= event.runId;
       await this.database.mutate((state) => {
         let run = state.harnessRuns.find((item) => item.id === runId) ?? state.harnessRuns.find((item) => item.id === queuedId);
         if (run && run.id !== runId) run.id = runId!;
-        if (!run) { const now = new Date().toISOString(); run = { id: runId!, session: input.session, status: "running", skills: structuredClone(skills), events: [], approvals: [], createdAt: now, updatedAt: now }; state.harnessRuns.push(run); }
+        if (!run) { const now = new Date().toISOString(); run = { id: runId!, session: input.session, status: "running", skills: structuredClone(skills), events: [], approvals: [], ...(input.actorUserId ? { actorUserId: input.actorUserId } : {}), ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.projectVersion !== undefined ? { projectVersion: input.projectVersion } : {}), ...(input.resolvedHarnessProfile ? { resolvedHarnessProfile: structuredClone(input.resolvedHarnessProfile) } : {}), createdAt: now, updatedAt: now }; state.harnessRuns.push(run); }
         run.events.push(structuredClone(event));
         if (run.events.length > 2000) run.events.splice(0, run.events.length - 2000);
         run.updatedAt = new Date().toISOString();

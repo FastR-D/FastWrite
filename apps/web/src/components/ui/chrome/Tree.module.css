@@ -1,0 +1,66 @@
+/*
+ * The scrolling viewport. It is also the positioning root: rows are absolutely
+ * positioned inside the canvas below, which is what makes virtualisation work
+ * without a spacer element.
+ */
+.viewport {
+  position: relative;
+  overflow: auto;
+  height: 100%;
+}
+
+/* min-width, not width: a row wider than the viewport must still be able to
+   scroll horizontally rather than being clipped. */
+.canvas {
+  position: relative;
+  min-width: 100%;
+}
+
+/*
+ * One row. The wrapper element is the treeitem and carries role, selection and
+ * the virtualised position; only its contents come from the caller.
+ *
+ * Height is deliberately absent: it comes from the `rowHeight` prop as an inline
+ * style, and a second source of truth here could drift from the virtualiser.
+ */
+.row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--slate-700);
+  text-align: left;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.row:hover { background: var(--vscode-hover); }
+.row:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+
+/* Keyed off aria-selected, the state of record, so the visual and the
+   accessible state cannot disagree. */
+.row[aria-selected="true"] { background: var(--vscode-active); color: var(--text); }
+
+/* Every child keeps its intrinsic size... */
+.row > * { flex: 0 0 auto; }
+
+/* ...except the label, which takes the free space. It must come after the rule
+   above: both selectors have equal specificity, so source order decides, and
+   the label was previously losing the flex to a `> span` rule. Targeting the
+   label by class rather than `> span` is deliberate — the Icon component's
+   wrapper is also a span, and a blanket `> span { flex: 1 }` stretched every
+   tree glyph to fill the row. */
+.label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* These four must beat Icon's own colour; a CSS module does not raise
+   specificity, and `fill` is inherited into the svg. */
+.folder { color: #d18b24 !important; fill: #f7c873; }
+.tex { color: var(--blue-600) !important; }
+.image { color: #8768ba !important; }
+.text { color: #4c8b68 !important; }
+.main { margin-right: 7px; color: var(--blue-600); }

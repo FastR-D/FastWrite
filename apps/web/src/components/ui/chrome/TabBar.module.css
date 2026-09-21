@@ -1,0 +1,93 @@
+.bar {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--vscode-chrome);
+  border-bottom: 1px solid var(--vscode-border);
+}
+
+.bar::-webkit-scrollbar { display: none; }
+
+/* Simple variant: no close buttons, used for dialogs. */
+.simple { gap: 2px; padding: 4px 6px; }
+
+/*
+ * `max-width` keeps one very long file path from stretching its tab across the
+ * strip; the label truncates instead (see `.tab`).
+ */
+.item { display: inline-flex; align-items: center; flex: 0 0 auto; max-width: 300px; }
+
+/* The file name and close button share one tab surface and boundary. */
+.bar:not(.simple) .item {
+  height: 34px;
+  box-sizing: border-box;
+  border-right: 1px solid var(--vscode-border);
+  border-top: 1px solid transparent;
+}
+
+.bar:not(.simple) .item:hover { background: var(--vscode-hover); }
+.bar:not(.simple) .item:has([aria-selected="true"]) {
+  background: var(--surface);
+  border-top-color: var(--accent);
+}
+
+.bar:not(.simple) .tab { height: 100%; border: 0; background: transparent; }
+
+.tab {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--vscode-border);
+  border-top: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.tab:hover { background: var(--vscode-hover); }
+.tab:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+
+/* An active tab is the surface the editor below it uses. */
+.active {
+  background: var(--surface);
+  color: var(--vscode-foreground);
+  border-top-color: var(--accent);
+}
+
+/* An unpinned tab is italic, the VSCode preview convention. */
+.preview { font-style: italic; }
+
+.label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tab > :not(.label) { flex-shrink: 0; }
+
+.dirty { color: var(--accent); font-size: 14px; line-height: 1; }
+
+.close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-right: 6px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.item:hover .close, .item:focus-within .close, .active + .close { opacity: 1; }
+.close:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }

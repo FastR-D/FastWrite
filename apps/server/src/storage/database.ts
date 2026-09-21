@@ -1,7 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { normalizePublicationTarget, paperSkillForProfile, type AgentRun, type AgentTaskPlan, type ChangeSet, type ClaimEvidenceLink, type ClaimRelation, type CompileRecord, type DraftPlan, type FastReadBundleReceipt, type GithubSyncRun, type IssueResolution, type MetadataObservation, type PaperClaim, type PaperMemory, type PaperProject, type ProjectResearchWork, type ProjectShare, type ResearchIdentifier, type ResearchRun, type ResearchWork, type ReviewReport, type ReviewSnapshot, type ShareComment, type SourceEvidence, type UploadSession } from "@fastwrite/shared";
+import { normalizePublicationTarget, paperSkillForProfile, type AccountUser, type AgentRun, type AgentTaskPlan, type AuditEvent, type ChangeSet, type ClaimEvidenceLink, type ClaimRelation, type CommentMessage, type CommentThread, type CompileRecord, type DraftPlan, type ExternalIdentity, type FastReadBundleReceipt, type GithubSyncRun, type HarnessProfile, type Invitation, type IssueResolution, type MetadataObservation, type PaperClaim, type PaperMemory, type PaperProject, type ProjectAclRule, type ProjectMember, type ProjectResearchWork, type ProjectShare, type ResearchIdentifier, type ResearchRun, type ResearchWork, type ReviewReport, type ReviewSnapshot, type ShareComment, type SourceEvidence, type Team, type TeamGroupBinding, type TeamMember, type UploadSession } from "@fastwrite/shared";
 import type { HarnessRun, HarnessSession, McpAuditRecord } from "@fastwrite/harness-protocol";
+import type { AccessRequest, NotificationDelivery, NotificationPreference, UserNotification } from "@fastwrite/shared";
 
 export interface FileVersionRecord {
   version: number;
@@ -38,10 +39,32 @@ export interface DatabaseState {
   fastReadBundles: FastReadBundleReceipt[];
   projectShares: ProjectShare[];
   shareComments: ShareComment[];
+  users: AccountUser[];
+  externalIdentities: ExternalIdentity[];
+  localCredentials: Array<{ userId: string; passwordHash: string }>;
+  sessions: Array<{ id: string; userId: string; tokenHash: string; expiresAt: string; refreshTokenHash?: string; refreshExpiresAt?: string; familyId?: string; idpGroups?: string[]; revokedAt?: string; createdAt: string }>;
+  teams: Team[];
+  teamMembers: TeamMember[];
+  teamGroupBindings: TeamGroupBinding[];
+  projectMembers: ProjectMember[];
+  projectAclRules: ProjectAclRule[];
+  invitations: Invitation[];
+  accessRequests: AccessRequest[];
+  notifications: UserNotification[];
+  notificationPreferences: NotificationPreference[];
+  notificationDeliveries: NotificationDelivery[];
+  auditEvents: AuditEvent[];
+  harnessProfiles: HarnessProfile[];
+  encryptedSecrets: Array<{ id: string; cipherText: string; iv: string; authTag: string; fingerprint: string; createdAt: string; replacedAt?: string }>;
+  collaborationDocuments: Array<{ id: string; projectId: string; path: string; status: "active" | "archived"; fileVersion: number; createdAt: string; updatedAt: string }>;
+  yDocumentSnapshots: Array<{ documentId: string; sequence: number; update: string; createdAt: string }>;
+  yDocumentUpdates: Array<{ documentId: string; sequence: number; update: string; bytes: number; createdAt: string }>;
+  commentThreads: CommentThread[];
+  commentMessages: CommentMessage[];
 }
 
-export const CURRENT_SCHEMA_VERSION = 4;
-const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [] };
+export const CURRENT_SCHEMA_VERSION = 13;
+const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [], users: [], externalIdentities: [], sessions: [], teams: [], teamMembers: [], teamGroupBindings: [], projectMembers: [], projectAclRules: [], invitations: [], accessRequests: [], notifications: [], notificationPreferences: [], notificationDeliveries: [], auditEvents: [], harnessProfiles: [], encryptedSecrets: [], localCredentials: [], collaborationDocuments: [], yDocumentSnapshots: [], yDocumentUpdates: [], commentThreads: [], commentMessages: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
@@ -85,7 +108,8 @@ export class JsonDatabase {
         researchRuns: parsed.researchRuns ?? [],
         fastReadBundles: parsed.fastReadBundles ?? [],
         claimRelations: parsed.claimRelations ?? []
-        ,projectShares: parsed.projectShares ?? [], shareComments: parsed.shareComments ?? []
+        ,projectShares: parsed.projectShares ?? [], shareComments: parsed.shareComments ?? [],
+        users: parsed.users ?? [], externalIdentities: parsed.externalIdentities ?? [], localCredentials: parsed.localCredentials ?? [], sessions: parsed.sessions ?? [], teams: parsed.teams ?? [], teamMembers: parsed.teamMembers ?? [], teamGroupBindings: parsed.teamGroupBindings ?? [], projectMembers: parsed.projectMembers ?? [], projectAclRules: parsed.projectAclRules ?? [], invitations: parsed.invitations ?? [], accessRequests: parsed.accessRequests ?? [], notifications: parsed.notifications ?? [], notificationPreferences: parsed.notificationPreferences ?? [], notificationDeliveries: parsed.notificationDeliveries ?? [], auditEvents: parsed.auditEvents ?? [], harnessProfiles: parsed.harnessProfiles ?? [], encryptedSecrets: parsed.encryptedSecrets ?? [], collaborationDocuments: parsed.collaborationDocuments ?? [], yDocumentSnapshots: parsed.yDocumentSnapshots ?? [], yDocumentUpdates: parsed.yDocumentUpdates ?? [], commentThreads: parsed.commentThreads ?? [], commentMessages: parsed.commentMessages ?? []
       };
       this.state = migrate(migratedState);
       let migrated = false;
@@ -163,6 +187,18 @@ export class JsonDatabase {
       const shareIds = new Set(state.projectShares.filter((item) => item.projectId === projectId).map((item) => item.id));
       state.projectShares = state.projectShares.filter((item) => item.projectId !== projectId);
       state.shareComments = state.shareComments.filter((item) => item.projectId !== projectId && !shareIds.has(item.shareId));
+      state.projectMembers = state.projectMembers.filter((item) => item.projectId !== projectId);
+      state.projectAclRules = state.projectAclRules.filter((item) => item.projectId !== projectId);
+      state.invitations = state.invitations.filter((item) => item.resourceType !== "project" || item.resourceId !== projectId);
+      state.accessRequests = state.accessRequests.filter((item) => item.projectId !== projectId);
+      state.notifications = state.notifications.filter((item) => item.projectId !== projectId);
+      const documentIds = new Set(state.collaborationDocuments.filter((item) => item.projectId === projectId).map((item) => item.id));
+      state.collaborationDocuments = state.collaborationDocuments.filter((item) => item.projectId !== projectId);
+      state.yDocumentSnapshots = state.yDocumentSnapshots.filter((item) => !documentIds.has(item.documentId));
+      state.yDocumentUpdates = state.yDocumentUpdates.filter((item) => !documentIds.has(item.documentId));
+      const threadIds = new Set(state.commentThreads.filter((item) => item.projectId === projectId).map((item) => item.id));
+      state.commentThreads = state.commentThreads.filter((item) => item.projectId !== projectId);
+      state.commentMessages = state.commentMessages.filter((item) => !threadIds.has(item.threadId));
       delete state.fileVersions[projectId];
     });
   }
@@ -181,6 +217,28 @@ export class JsonDatabase {
 function migrate(state: DatabaseState): DatabaseState {
   state.projectShares ??= [];
   state.shareComments ??= [];
+  state.users ??= [];
+  state.externalIdentities ??= [];
+  state.localCredentials ??= [];
+  state.sessions ??= [];
+  state.teams ??= [];
+  state.teamMembers ??= [];
+  state.projectMembers ??= [];
+  state.projectAclRules ??= [];
+  state.invitations ??= [];
+  state.accessRequests ??= [];
+  state.notifications ??= [];
+  state.notificationPreferences ??= [];
+  state.notificationDeliveries ??= [];
+  for (const notification of state.notifications) notification.inApp ??= true;
+  state.auditEvents ??= [];
+  state.harnessProfiles ??= [];
+  state.encryptedSecrets ??= [];
+  state.collaborationDocuments ??= [];
+  state.yDocumentSnapshots ??= [];
+  state.yDocumentUpdates ??= [];
+  state.commentThreads ??= [];
+  state.commentMessages ??= [];
   if (state.schemaVersion < 2) {
     state.researchWorks ??= [];
     state.projectResearchWorks ??= [];
@@ -200,6 +258,15 @@ function migrate(state: DatabaseState): DatabaseState {
     state.claimRelations ??= [];
     state.schemaVersion = 4;
   }
+  if (state.schemaVersion < 5) state.schemaVersion = 5;
+  if (state.schemaVersion < 6) state.schemaVersion = 6;
+  if (state.schemaVersion < 7) state.schemaVersion = 7;
+  if (state.schemaVersion < 8) state.schemaVersion = 8;
+  if (state.schemaVersion < 9) state.schemaVersion = 9;
+  if (state.schemaVersion < 10) state.schemaVersion = 10;
+  if (state.schemaVersion < 11) state.schemaVersion = 11;
+  if (state.schemaVersion < 12) state.schemaVersion = 12;
+  if (state.schemaVersion < 13) { state.teamGroupBindings ??= []; state.schemaVersion = 13; }
   if (state.schemaVersion > CURRENT_SCHEMA_VERSION) throw new Error(`Unsupported database schema version ${state.schemaVersion}`);
   return state;
 }

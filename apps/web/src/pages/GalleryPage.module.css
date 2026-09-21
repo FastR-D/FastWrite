@@ -1,0 +1,13 @@
+.page { width: min(100% - 48px, 1100px); margin: 0 auto; padding: 32px 0 96px; }
+
+.header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.title { margin: 0; font-size: 20px; font-weight: 700; }
+.subtitle { color: var(--text-muted); font-size: 12px; }
+
+.section { padding: 26px 0; border-bottom: 1px solid var(--border); }
+.sectionTitle { margin: 0 0 4px; font-size: 14px; font-weight: 700; }
+.sectionNote { margin: 0 0 14px; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.column { display: flex; flex-direction: column; gap: 14px; max-width: 420px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }

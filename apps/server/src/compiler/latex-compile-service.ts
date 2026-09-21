@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
@@ -8,6 +8,8 @@ import type { WorkspaceService } from "../workspace/workspace-service";
 
 export interface ServerCompileResult {
   success: boolean;
+  projectVersion: number;
+  snapshotId: string;
   engine: "server";
   log: string;
   error?: string;
@@ -15,7 +17,6 @@ export interface ServerCompileResult {
   syncTexData?: string;
   workspacePaths: string[];
   pageText?: string[];
-  projectVersion?: number;
 }
 
 /** Runs the host TeX toolchain in a disposable copy of a managed workspace. */
@@ -23,18 +24,19 @@ export class LatexCompileService {
   constructor(private readonly dataDirectory: string, private readonly workspaces: WorkspaceService) {}
 
   async compile(projectId: string): Promise<ServerCompileResult> {
-    const project = this.workspaces.getProject(projectId);
-    const mainDocument = normalizeWorkspacePath(project.mainDocument);
+    this.workspaces.getProject(projectId);
     const executable = Bun.which("latexmk") ?? Bun.which("pdflatex");
     if (!executable) throw new ApiError(503, "latex_unavailable", "Local LaTeX compilation is unavailable: install latexmk or pdflatex on this machine.");
 
-    const root = this.workspaces.workspaceRoot(projectId);
-    const temporary = join(this.dataDirectory, "compile", crypto.randomUUID());
+    const snapshotId = crypto.randomUUID();
+    const temporary = join(this.dataDirectory, "compile", snapshotId);
     const source = join(temporary, "source");
     const output = join(temporary, "output");
     try {
       await mkdir(dirname(source), { recursive: true });
-      await cp(root, source, { recursive: true, dereference: false });
+      const snapshot = await this.workspaces.copySnapshot(projectId, source);
+      const mainDocument = normalizeWorkspacePath(snapshot.mainDocument);
+      const identity = { projectVersion: snapshot.projectVersion, snapshotId };
       await mkdir(output, { recursive: true });
       const argumentsList = executable.endsWith("latexmk") || executable.includes("latexmk")
         ? [executable, "-pdf", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${output}`, `-auxdir=${output}`, mainDocument]
@@ -45,15 +47,14 @@ export class LatexCompileService {
       clearTimeout(timeout);
       const log = [stdout, stderr].filter(Boolean).join("\n").slice(-1_000_000);
       const stem = basename(mainDocument, ".tex");
-      const pdfPath = join(output, `${stem}.pdf`);
-      const syncPath = join(output, `${stem}.synctex.gz`);
-      if (exitCode !== 0) return { success: false, engine: "server", log, error: describeLatexFailure(exitCode, log), workspacePaths: await listWorkspacePaths(source) };
-      const pdf = await readFile(pdfPath).catch(() => null);
-      if (!pdf) return { success: false, engine: "server", log, error: "LaTeX completed without producing a PDF.", workspacePaths: await listWorkspacePaths(source) };
-      const syncTexData = await readFile(syncPath).then((data) => promisify(gunzip)(data).then((value) => value.toString("utf8"))).catch(() => undefined);
-      if (this.workspaces.getProject(projectId).version !== project.version) throw new ApiError(409, "compile_stale", "The paper changed during compilation. Compile the current version again.");
+      const pdfPath = await findOutputFile(output, `${stem}.pdf`);
+      const syncPath = await findOutputFile(output, `${stem}.synctex.gz`);
+      if (exitCode !== 0) return { ...identity, success: false, engine: "server", log, error: describeLatexFailure(exitCode, log), workspacePaths: await listWorkspacePaths(source) };
+      const pdf = pdfPath ? await readFile(pdfPath).catch(() => null) : null;
+      if (!pdf) return { ...identity, success: false, engine: "server", log, error: "LaTeX completed without producing a PDF.", workspacePaths: await listWorkspacePaths(source) };
+      const syncTexData = syncPath ? await readFile(syncPath).then((data) => promisify(gunzip)(data).then((value) => value.toString("utf8"))).catch(() => undefined) : undefined;
       const pageText = await extractReviewPageText(pdf);
-      return { success: true, engine: "server", log, pdfBase64: pdf.toString("base64"), pageText, projectVersion: project.version, ...(syncTexData ? { syncTexData } : {}), workspacePaths: await listWorkspacePaths(source) };
+      return { ...identity, success: true, engine: "server", log, pdfBase64: pdf.toString("base64"), pageText, ...(syncTexData ? { syncTexData } : {}), workspacePaths: await listWorkspacePaths(source) };
     } finally {
       await rm(temporary, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -75,6 +76,12 @@ export async function extractReviewPageText(pdf: Uint8Array): Promise<string[]> 
     }
     return pages;
   } finally { await document.destroy(); }
+}
+
+async function findOutputFile(root: string, filename: string): Promise<string | null> {
+  const glob = new Bun.Glob(`**/${filename}`);
+  for await (const path of glob.scan({ cwd: root, onlyFiles: true })) return join(root, path);
+  return null;
 }
 
 function describeLatexFailure(exitCode: number, log: string): string {

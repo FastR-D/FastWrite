@@ -21,7 +21,7 @@ export interface SessionReference { harness: HarnessKind; sessionId: string; cwd
 export interface HarnessSession extends SessionReference { title?: string; createdAt: string; updatedAt: string; resumedAt?: string }
 export interface SkillInvocation { id: string; name: string; path: string; version: string; digest?: string }
 export interface HarnessApproval { id: string; runId: string; status: "pending" | "approved" | "denied"; reason: string; createdAt: string; updatedAt: string }
-export interface HarnessRun { id: string; session: SessionReference; status: HarnessRunStatus; skills: SkillInvocation[]; events: HarnessEvent[]; approvals: HarnessApproval[]; createdAt: string; updatedAt: string }
+export interface HarnessRun { id: string; session: SessionReference; status: HarnessRunStatus; skills: SkillInvocation[]; events: HarnessEvent[]; approvals: HarnessApproval[]; actorUserId?: string; projectId?: string; projectVersion?: number; resolvedHarnessProfile?: { profileId: string; version: number; fingerprint: string; sourceChain: Array<{ scope: string; profileId: string; version: number }> }; createdAt: string; updatedAt: string }
 
 export type HarnessEvent =
   | { type: "run.started"; runId: string }

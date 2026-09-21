@@ -1,5 +1,5 @@
 export const FASTWRITE_SAVE_EVENT = "fastwrite:save";
 
-export function isSaveShortcut(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey">): boolean {
-  return (event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "s";
+export function isSaveShortcut(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey"> & { isComposing?: boolean }): boolean {
+  return !event.isComposing && (event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "s";
 }

@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Check, Database, GripVertical, LoaderCircle, Maximize2, Minimize2, Pencil, RotateCcw, Send, ShieldCheck, Sparkles, Trash2, Workflow, X, Search } from "lucide-react";
 import type { ChangeSet, PaperProject, ReviewIssue, ReviseCommandId, ReviseTurn, TextSelection } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { diffWords } from "../../lib/wordDiff";
-import { Button } from "../ui/Button";
+import { Button, Dialog, Icon, IconButton, icons, QuickPick, Select, SegmentedControl, Tag, TextArea } from "../ui";
 import { ReviewDialog } from "./ReviewDialog";
 import { MemoryDialog } from "./MemoryDialog";
 import { ResearchDialog } from "./ResearchDialog";
@@ -55,11 +54,13 @@ export function AiWorkspace({ project, selection, paragraphSelection, sectionSel
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [changeSet, setChangeSet] = useState<ChangeSet | null>(null);
   const [error, setError] = useState("");
+  const [actionsOpen, setActionsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [researchOpen, setResearchOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"revise" | "agent">("revise");
   const [harnesses, setHarnesses] = useState<Array<{ status: { kind: string; state: string; version?: string; message?: string }; capabilities: Record<string, boolean> }>>([]);
+  const [harnessLoading, setHarnessLoading] = useState(true);
   const [selectedHarness, setSelectedHarness] = useState<"codex" | "claude">(() => localStorage.getItem("fastwrite.selected-harness") === "claude" ? "claude" : "codex");
   const [agentSeed, setAgentSeed] = useState<AgentTaskSeed>({});
   const [editingProposal, setEditingProposal] = useState(false);
@@ -77,7 +78,7 @@ export function AiWorkspace({ project, selection, paragraphSelection, sectionSel
   const appliedCompileRepairRef = useRef<number | null>(null);
 
   useEffect(() => () => { requestRef.current?.abort(); resizeCleanupRef.current?.(); }, []);
-  useEffect(() => { const controller = new AbortController(); void api.harness.list(controller.signal).then(setHarnesses).catch(() => setHarnesses([])); return () => controller.abort(); }, []);
+  useEffect(() => { const controller = new AbortController(); void api.harness.list(controller.signal).then(setHarnesses).catch(() => setHarnesses([])).finally(() => { if (!controller.signal.aborted) setHarnessLoading(false); }); return () => controller.abort(); }, []);
   useEffect(() => {
     if (!compileRepairRequest || appliedCompileRepairRef.current === compileRepairRequest.id) return;
     appliedCompileRepairRef.current = compileRepairRequest.id;
@@ -261,40 +262,60 @@ export function AiWorkspace({ project, selection, paragraphSelection, sectionSel
     document.addEventListener("pointerup", cleanup, { once: true });
   };
 
+  const harnessStatus = harnesses.find(item => item.status.kind === selectedHarness)?.status;
+  const harnessState = harnessStatus?.state;
+
   return (<>
     <section className={`ai-workspace${activeTab === "agent" ? " ai-workspace--agent" : ""}${fullscreen ? " ai-workspace--fullscreen" : ""}`} style={{ "--ai-workspace-height": `${height}px` } as React.CSSProperties} aria-label="AI writing workspace">
       <header className="ai-workspace__header">
-        <nav className="ai-workspace__tabs" aria-label="AI writing mode"><button className={activeTab === "revise" ? "is-active" : ""} onClick={() => setActiveTab("revise")}><Sparkles /> Revise</button><button className={activeTab === "agent" ? "is-active" : ""} onClick={() => { setAgentSeed(selection?.path ? { path: selection.path } : {}); setActiveTab("agent"); }}><Workflow /> Agent</button><div className="ai-workspace__harness-status" aria-label="Harness status">{harnesses.filter((item) => item.status.kind === "codex" || item.status.kind === "claude").map((item) => <button type="button" key={item.status.kind} className={`harness-chip harness-chip--${item.status.state}${selectedHarness === item.status.kind ? " is-selected" : ""}`} title={item.status.message ?? item.status.version} onClick={() => { const kind = item.status.kind as "codex" | "claude"; setSelectedHarness(kind); localStorage.setItem("fastwrite.selected-harness", kind); }} aria-pressed={selectedHarness === item.status.kind}><i />{item.status.kind === "codex" ? "Codex" : "Claude"}<em>{selectedHarness === item.status.kind ? "Using" : item.status.state === "ready" ? "Ready" : "Unavailable"}</em></button>)}</div></nav>
+        <div className="ai-workspace__controls">
+          <SegmentedControl
+            className="ai-workspace__mode"
+            label="AI writing mode"
+            value={activeTab}
+            onChange={(mode) => { if (mode === "agent") setAgentSeed(selection?.path ? { path: selection.path } : {}); setActiveTab(mode); }}
+            options={[
+              { value: "revise", label: "Revise", icon: <Icon name={icons.sparkle} /> },
+              { value: "agent", label: "Agent", icon: <Icon name={icons.typeHierarchy} /> }
+            ]}
+          />
+          <div className="ai-workspace__harness">
+            <Select aria-label="Agent provider" value={selectedHarness} onChange={(kind) => { setSelectedHarness(kind as "codex" | "claude"); localStorage.setItem("fastwrite.selected-harness", kind); }} options={[{ value: "codex", label: "Codex" }, { value: "claude", label: "Claude" }]} />
+            <span role="status" aria-label="Agent provider status"><Tag tone={harnessState === "ready" ? "success" : harnessState === "degraded" ? "warning" : "neutral"} title={harnessStatus?.message ?? harnessStatus?.version ?? "Agent provider availability"}>{harnessLoading ? "Checking" : harnessState === "ready" ? "Ready" : harnessState === "degraded" ? "Limited" : "Unavailable"}</Tag></span>
+          </div>
+        </div>
         <div className="ai-workspace__tools">
-          <button className="ai-header-action" onClick={() => setMemoryOpen(true)}><Database /> Memory</button>
-          <button className="ai-header-action" onClick={() => setResearchOpen(true)}><Search /> Research</button>
-          <button className="ai-header-action" onClick={() => setReviewOpen(true)}><ShieldCheck /> Review</button>
-          {activeTab === "revise" ? <button className="ai-header-action" title="Clear current conversation" onClick={clearConversation}><Trash2 /> Clear</button> : null}
-          <button className="ai-header-action" title={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={onToggleFullscreen}>{fullscreen ? <Minimize2 /> : <Maximize2 />}</button>
-          <span className="ai-skill"><Bot /> {project.skill.name}</span>
+          <IconButton label="Memory" icon={<Icon name={icons.database} />} onClick={() => setMemoryOpen(true)} />
+          <IconButton label="Research" icon={<Icon name={icons.search} />} onClick={() => setResearchOpen(true)} />
+          <IconButton label="Review" icon={<Icon name={icons.verified} />} onClick={() => setReviewOpen(true)} />
+          {activeTab === "revise" ? <IconButton label="Clear current conversation" icon={<Icon name={icons.trash} />} onClick={clearConversation} /> : null}
+          <IconButton label={fullscreen ? "Exit fullscreen" : "Fullscreen"} icon={<Icon name={fullscreen ? icons.screenNormal : icons.screenFull} />} onClick={onToggleFullscreen} />
         </div>
       </header>
       <div className={`ai-workspace__body${resizingWidth ? " is-resizing-width" : ""}`} style={fullscreen ? { width: `min(${fullscreenWidth}px, 100%)` } : undefined}>
       <div hidden={activeTab !== "revise"} className="revise-chat">
-        {selection ? <aside className="revise-context-strip"><span>{selection.path} · lines {selection.startLine}–{selection.endLine}</span><p title={selection.text}>{selection.text}</p><button type="button" title="Clear selected context" aria-label="Clear selected context" onClick={onClearSelection}><X /></button></aside> : null}
+        {selection ? <aside className="revise-context-strip"><span>{selection.path} · lines {selection.startLine}–{selection.endLine}</span><p title={selection.text}>{selection.text}</p><IconButton label="Clear selected context" icon={<Icon name={icons.close} />} onClick={onClearSelection} /></aside> : null}
         <div ref={messagesRef} className="revise-chat__messages" aria-live="polite">
-          {!selection ? <div className="revise-chat__empty"><Sparkles /><strong>Select text in the editor</strong><span>Select a sentence, use the paragraph at the cursor, or revise the current section. The selection stays active while you chat.</span>{paragraphSelection ? <Button size="small" variant="primary" onClick={() => onUseSelection(paragraphSelection)}>Use current paragraph</Button> : null}{sectionSelection ? <Button size="small" variant="secondary" onClick={() => onUseSelection(sectionSelection)}>Use current section</Button> : null}</div> : null}
+          {!selection ? <div className="revise-chat__empty"><Icon name={icons.sparkle} /><strong>Select text in the editor</strong><span>Select a sentence, use the paragraph at the cursor, or revise the current section. The selection stays active while you chat.</span>{paragraphSelection ? <Button size="small" variant="primary" onClick={() => onUseSelection(paragraphSelection)}>Use current paragraph</Button> : null}{sectionSelection ? <Button size="small" variant="secondary" onClick={() => onUseSelection(sectionSelection)}>Use current section</Button> : null}</div> : null}
           {messages.map((message, index) => <article className={`revise-message revise-message--${message.role}`} key={message.id}>
-            <span>{message.role === "assistant" ? <><Bot /> {project.skill.name}</> : "You"}</span>
+            <span>{message.role === "assistant" ? <><Icon name={icons.robot} /> {project.skill.name}</> : "You"}</span>
             {message.role === "assistant" && index === messages.length - 1 && changeSet ? <>
-              {editingProposal ? <textarea className="revision-edit-textarea" aria-label="Editable revised text" value={editedAfter} onChange={(event) => setEditedAfter(event.target.value)} spellCheck={false} autoFocus /> : <div className="revision-diff" aria-label="Proposed word-level changes">{diff.map((part, partIndex) => part.type === "delete" ? <del key={partIndex}>{part.value}</del> : part.type === "insert" ? <ins key={partIndex}>{part.value}</ins> : <span key={partIndex}>{part.value}</span>)}</div>}
+              {editingProposal ? <TextArea className="revision-edit-textarea" aria-label="Editable revised text" value={editedAfter} onChange={setEditedAfter} spellCheck={false} autoFocus /> : <div className="revision-diff" aria-label="Proposed word-level changes">{diff.map((part, partIndex) => part.type === "delete" ? <del key={partIndex}>{part.value}</del> : part.type === "insert" ? <ins key={partIndex}>{part.value}</ins> : <span key={partIndex}>{part.value}</span>)}</div>}
               {message.rationale ? <p className="revision-rationale">{message.rationale}</p> : null}
               <div className="revision-inline-actions">
-                {changeSet.status === "accepted" ? <><span className="revision-accepted"><Check /> Applied</span><Button size="small" variant="ghost" icon={<RotateCcw />} disabled={busy} onClick={() => void rollback()}>Rollback</Button></> : canDecide ? <><Button size="small" variant="ghost" icon={<X />} disabled={busy} onClick={() => void decide("reject")}>Reject</Button>{editingProposal ? <Button size="small" variant="ghost" onClick={() => { setEditedAfter(changeSet.changes[0]!.after); setEditingProposal(false); }}>Cancel edit</Button> : <Button size="small" variant="secondary" icon={<Pencil />} disabled={busy} onClick={() => setEditingProposal(true)}>Edit</Button>}<Button size="small" variant="primary" icon={<Check />} disabled={busy || (editingProposal && (!editedAfter.trim() || editedAfter === changeSet.changes[0]!.before))} onClick={() => void decide("accept")}>{editingProposal && editedAfter !== changeSet.changes[0]!.after ? "Save & accept" : "Accept"}</Button></> : null}
+                {changeSet.status === "accepted" ? <><span className="revision-accepted"><Icon name={icons.check} /> Applied</span><Button size="small" variant="ghost" icon={<Icon name={icons.discard} />} disabled={busy} onClick={() => void rollback()}>Rollback</Button></> : canDecide ? <><Button size="small" variant="ghost" icon={<Icon name={icons.close} />} disabled={busy} onClick={() => void decide("reject")}>Reject</Button>{editingProposal ? <Button size="small" variant="ghost" onClick={() => { setEditedAfter(changeSet.changes[0]!.after); setEditingProposal(false); }}>Cancel edit</Button> : <Button size="small" variant="secondary" icon={<Icon name={icons.edit} />} disabled={busy} onClick={() => setEditingProposal(true)}>Edit</Button>}<Button size="small" variant="primary" icon={<Icon name={icons.check} />} disabled={busy || (editingProposal && (!editedAfter.trim() || editedAfter === changeSet.changes[0]!.before))} onClick={() => void decide("accept")}>{editingProposal && editedAfter !== changeSet.changes[0]!.after ? "Save & accept" : "Accept"}</Button></> : null}
               </div>
             </> : <p>{message.content}</p>}
           </article>)}
-          {state === "running" ? <article className="revise-message revise-message--assistant revise-message--status"><span><Bot /> {project.skill.name}</span><p><LoaderCircle className="spin" /> Refining the current candidate…</p></article> : null}
+          {state === "running" ? <article className="revise-message revise-message--assistant revise-message--status"><span><Icon name={icons.robot} /> {project.skill.name}</span><p><Icon name={icons.loading} spin /> Refining the current candidate…</p></article> : null}
           {error ? <div className="revision-error" role="alert">{error}</div> : null}
         </div>
         <form className="revise-composer" onSubmit={(event) => { event.preventDefault(); void propose(); }}>
-          <div className="revise-shortcuts" role="group" tabIndex={0} aria-label="Revision prompt shortcuts">{SHORTCUTS.map((shortcut) => <button type="button" key={shortcut.id} disabled={!selection || busy} onClick={() => void propose(shortcut.id)}>{shortcut.label}</button>)}</div>
-          <div className="revise-composer__input"><textarea ref={inputRef} rows={2} value={instruction} onChange={(event) => setInstruction(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (selection && instruction.trim() && !busy) void propose(); } }} placeholder={selection ? "Ask for another revision…" : "Select text in the editor to start…"} disabled={!selection || busy} aria-label="Revision message" /><Button variant="primary" size="small" icon={<Send />} loading={busy} disabled={!selection || !instruction.trim() || busy} type="submit">Send</Button></div>
+          <div className="revise-shortcuts" role="group" aria-label="Revision prompt shortcuts">
+            {SHORTCUTS.slice(0, 3).map((shortcut) => <Button variant="secondary" className="revise-shortcut" key={shortcut.id} disabled={!selection || busy} onClick={() => void propose(shortcut.id)}>{shortcut.label}</Button>)}
+            <Button variant="ghost" className="revise-shortcut" icon={<Icon name={icons.ellipsis} />} disabled={!selection || busy} onClick={() => setActionsOpen(true)}>More actions</Button>
+          </div>
+          <div className="revise-composer__input"><TextArea ref={inputRef} rows={2} value={instruction} onChange={setInstruction} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (selection && instruction.trim() && !busy) void propose(); } }} placeholder={selection ? "Ask for another revision…" : "Select text in the editor to start…"} disabled={!selection || busy} aria-label="Revision message" /><Button variant="primary" size="small" icon={<Icon name={icons.send} />} loading={busy} disabled={!selection || !instruction.trim() || busy} type="submit">Send</Button></div>
           <small>Each reply refines the current candidate. The file changes only after Accept.</small>
         </form>
       </div>
@@ -304,9 +325,12 @@ export function AiWorkspace({ project, selection, paragraphSelection, sectionSel
         else if (event.key === "ArrowRight") { event.preventDefault(); updateFullscreenWidth(fullscreenWidth + 40); }
         else if (event.key === "Home") { event.preventDefault(); updateFullscreenWidth(560); }
         else if (event.key === "End") { event.preventDefault(); updateFullscreenWidth(window.innerWidth); }
-      }}><GripVertical /></div> : null}
+      }}><Icon name={icons.gripper} /></div> : null}
       </div>
     </section>
+    <Dialog open={actionsOpen} title="Revision actions" description="Choose an action for the selected text." width="small" onClose={() => setActionsOpen(false)}>
+      <QuickPick label="Revision actions" filterLabel="Find a revision action" items={SHORTCUTS.slice(3)} onSelect={(command) => { setActionsOpen(false); void propose(command as ReviseCommandId); }} />
+    </Dialog>
     <ReviewDialog open={reviewOpen} project={project} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setReviewOpen(false)} onNavigate={onNavigate} onReviseLocally={(issue) => void beginLocalRevision(issue)} onReviseWithAgent={(issueIds, objective) => { setAgentSeed({ issueIds, objective }); setReviewOpen(false); setActiveTab("agent"); }} />
     <MemoryDialog open={memoryOpen} project={project} onClose={() => setMemoryOpen(false)} onNavigate={onNavigate} onChanged={onWorkspaceChanged} />
     <ResearchDialog open={researchOpen} project={project} onClose={() => setResearchOpen(false)} onChanged={onWorkspaceChanged} onNavigate={onNavigate} />

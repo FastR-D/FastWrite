@@ -1,0 +1,52 @@
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  cursor: pointer;
+}
+
+.label.disabled { opacity: 0.5; cursor: not-allowed; }
+
+.input {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--vscode-button-background);
+}
+
+/* Icon-and-text pill used by the editor toolbar; the checkbox stays the control. */
+.pill {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  /*
+   * --text-muted, not --text-secondary, was 4.24:1 against the pill's own hover
+   * background (--slate-100) and 4.52:1 at rest — clearing AA by 0.02 before
+   * hover. --text-secondary reads as the same muted pill at 6.66:1 hover /
+   * 7.09:1 rest (dark: 8.48 / 9.48).
+   */
+  color: var(--text-secondary);
+}
+
+.pill:hover { background: var(--vscode-toolbar-hoverBackground); }
+
+/*
+ * The checkbox stays focusable but is opacity:0, so the global
+ * input:focus-visible box-shadow fires on an element nobody can see. Move the
+ * ring to the pill that stands in for it (WCAG 2.4.7).
+ */
+.pill:focus-within { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+
+.pill.on {
+  border-color: var(--vscode-button-background);
+  background: var(--vscode-list-hoverBackground);
+  color: var(--vscode-foreground);
+}
+
+.pill .input { position: absolute; opacity: 0; pointer-events: none; }
+.pillLabel { display: inline-flex; align-items: center; gap: 5px; }

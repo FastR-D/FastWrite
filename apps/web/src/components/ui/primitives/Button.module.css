@@ -1,0 +1,84 @@
+/*
+ * Ownership, per variant.
+ *
+ * vscrui's Button is a styled-component: its rules are injected at runtime under
+ * compound selectors (`.sc-hash.vscrui-button.primary`), so they outrank any
+ * single-class rule this file can write. A declaration here that duplicates one
+ * of vscrui's is therefore dead — it can never win, and it lies to the next
+ * reader. Keep this file additive for the variants vscrui owns and complete for
+ * the ones it does not.
+ *
+ *   primary / secondary  vscrui owns the appearance: background, colour, border,
+ *                        radius, padding, font-size, hover/active/focus and the
+ *                        0.4 disabled opacity. This file contributes layout
+ *                        only — display, alignment, gap, height, weight, svg size.
+ *   ghost                this file. vscrui has no text-ghost appearance; its
+ *                        `icon` appearance is an icon button (3px padding, 5px
+ *                        radius, dotted hover outline) and is wrong for a text
+ *                        ghost, so ghost renders as a plain <button>.
+ *   danger               this file. vscrui has no appearance for it.
+ *
+ * ghost and danger copy the metrics vscrui renders for primary/secondary, so all
+ * four variants are interchangeable: border-radius 2px, padding 4px 11px,
+ * font-size var(--vscode-font-size) (12px), disabled opacity 0.4. Measured with
+ * getComputedStyle on a rendered primary button, not guessed.
+ */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+/* vscrui declares no height, so density is the one thing this layer owns for
+   every variant. Density follows the workbench: 25px small, 28px medium. */
+.medium { height: 28px; }
+.small { height: 25px; }
+
+.button svg { width: 14px; height: 14px; flex: 0 0 auto; }
+
+/*
+ * The local-variant base. Everything here is a metric vscrui renders for
+ * primary/secondary, restated for the two variants vscrui cannot style.
+ */
+.ghost,
+.danger {
+  padding: 4px 11px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--vscode-foreground);
+  background: transparent;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  cursor: pointer;
+}
+
+.ghost:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground); }
+
+/*
+ * Danger reads the app-owned --fw-danger-* pair rather than the --red-* ramp:
+ * that ramp exists for accent text on dark surfaces, and its --red-600 is a
+ * light pink in dark mode (white on it is 2.35:1). The pair carries an explicit
+ * dark override so both themes clear WCAG AA.
+ */
+.danger {
+  color: var(--fw-danger-foreground);
+  background: var(--fw-danger-background);
+  border-color: var(--fw-danger-background);
+}
+.danger:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* 0.4, to match the disabled opacity vscrui applies to primary/secondary. */
+.ghost:disabled,
+.danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.spinner { animation: fw-spin 0.85s linear infinite; }
+
+@keyframes fw-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 0.01ms; animation-iteration-count: 1; }
+}

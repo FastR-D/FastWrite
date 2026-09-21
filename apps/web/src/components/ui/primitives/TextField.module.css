@@ -1,0 +1,18 @@
+.input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 4px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+.input:hover:not(:disabled):not(.invalid) { border-color: var(--slate-400); }
+.input:focus { border-color: var(--vscode-focusBorder); box-shadow: var(--focus); outline: none; }
+/* Same 2.8:1 problem as the Select placeholder; see Select.module.css. */
+.input::placeholder { color: var(--text-muted); }
+.input:disabled { opacity: 0.55; cursor: not-allowed; }
+.invalid { border-color: var(--red-600); }

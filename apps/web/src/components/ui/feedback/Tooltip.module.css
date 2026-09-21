@@ -1,0 +1,15 @@
+.tooltip {
+  position: fixed;
+  z-index: 400;
+  max-width: 260px;
+  padding: 5px 8px;
+  border: 1px solid var(--vscode-sideBarSectionHeader-border);
+  border-radius: 3px;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
+  line-height: 1.4;
+  box-shadow: var(--shadow-popover);
+  pointer-events: none;
+}

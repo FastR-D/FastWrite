@@ -20,12 +20,13 @@ export class ReviewService {
 
   private get agent(): AgentProvider | undefined { return this.provider as AgentProvider | undefined; }
 
-  async run(projectId: string, sourceOnly = false, requestSignal?: AbortSignal, pdfPageText: string[] = []): Promise<ReviewResponse> {
+  async run(projectId: string, sourceOnly = false, requestSignal?: AbortSignal, pdfPageText: string[] = [], visiblePaths?: string[]): Promise<ReviewResponse> {
     if (!this.agent?.review) throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable Review Agent");
     const project = this.workspaces.getProject(projectId);
     const compileRecord = this.database.snapshot().compileRecords.filter((record) => record.projectId === projectId && record.projectVersion === project.version && record.status === "success").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (!compileRecord && !sourceOnly) throw new ApiError(409, "compile_required", "Compile the current project version or explicitly continue with a source-only review");
-    const discoveredPaths = textPaths(await this.workspaces.tree(projectId)).filter((path) => path !== "memory.md");
+    const visible = visiblePaths ? new Set(visiblePaths) : undefined;
+    const discoveredPaths = textPaths(await this.workspaces.tree(projectId)).filter((path) => path !== "memory.md" && (!visible || visible.has(path)));
     const paths = [project.mainDocument, ...discoveredPaths.filter((path) => path !== project.mainDocument)];
     const documents: Array<{ path: string; content: string; version: number }> = [];
     let contextBytes = 0;
@@ -129,6 +130,7 @@ export class ReviewService {
         { id: "synthesis", status: "completed", issues: synthesizedIssues.map((issue) => issue.id), provider: "review-synthesis", inputBoundary: boundary }
       ], inputType: boundedPageText.length ? "pdf-preview" : "source", createdFromProjectVersion: project.version, createdAt: now() };
       const updatedRun = await this.database.mutate((state) => {
+        state.reviewSnapshots.push(snapshot);
         state.reviewReports.push(report);
         const stored = state.agentRuns.find((item) => item.id === run.id)!;
         stored.status = "completed";

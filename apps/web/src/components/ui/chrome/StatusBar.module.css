@@ -1,0 +1,17 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 24px;
+  padding: 0 12px;
+  border-top: 1px solid var(--vscode-border);
+  background: var(--vscode-chrome);
+  color: var(--text-muted);
+  font-family: var(--vscode-font-family);
+  font-size: 10px;
+}
+
+.item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+
+/* The trailing group is pushed to the right edge. */
+.spacer { margin-left: auto; }

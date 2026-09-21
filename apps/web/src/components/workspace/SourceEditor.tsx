@@ -1,123 +1,16 @@
+import type { NavigationRequest } from "../../lib/editor/navigationController";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type MutableRefObject } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import "monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution";
-import { AlertCircle, Check, CloudOff, LoaderCircle, Sparkles, Undo2 } from "lucide-react";
+import { configureMonaco } from "../../lib/editor/monaco";
+import { Button, Checkbox, Icon, icons } from "../ui";
 import type { CompletionKind, CompletionResponse, FileContentResponse, SourceLocation, TextSelection } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
+import { type DocumentRegistry } from "../../lib/editor/documentRegistry";
+import { DocumentRecoveryDialog } from "../workbench/DocumentRecoveryDialog";
 import { completionSuffix } from "./completion";
 import { currentTheme, THEME_CHANGE_EVENT } from "../../lib/theme";
-import * as Y from "yjs";
-
-type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
+type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict" | "offline";
 type CompletionMetricEvent = "suggested" | "cancelled" | "accepted" | "ignored" | "error";
-type SaveTarget = { path: string; baseVersion: number };
-
-declare global {
-  interface Window {
-    MonacoEnvironment?: { getWorker: (_moduleId: string, _label: string) => Worker };
-  }
-}
-
-let monacoConfigured = false;
-
-function configureMonaco() {
-  if (monacoConfigured) return;
-  monacoConfigured = true;
-  window.MonacoEnvironment = { getWorker: () => new EditorWorker() };
-  if (!monaco.languages.getLanguages().some((language) => language.id === "latex")) {
-    monaco.languages.register({ id: "latex", extensions: [".tex", ".sty", ".cls", ".bib"] });
-    monaco.languages.setMonarchTokensProvider("latex", {
-      tokenizer: {
-        root: [
-          [/%.*$/, "comment"],
-          [/\\(?:begin|end)(?=\{)/, "keyword.control"],
-          [/\\[a-zA-Z@]+\*?/, "keyword"],
-          [/\\./, "string.escape"],
-          [/\$\$?/, { token: "string", next: "@math" }],
-          [/[{}[\]()]/, "delimiter.bracket"],
-          [/[&_^]/, "operator"]
-        ],
-        math: [
-          [/\\[a-zA-Z@]+\*?/, "type"],
-          [/\$\$?/, { token: "string", next: "@pop" }],
-          [/[{}[\]()]/, "delimiter.bracket"],
-          [/./, "string"]
-        ]
-      }
-    });
-    monaco.languages.setLanguageConfiguration("latex", {
-      comments: { lineComment: "%" },
-      brackets: [["{", "}"], ["[", "]"], ["(", ")"]],
-      autoClosingPairs: [{ open: "{", close: "}" }, { open: "[", close: "]" }, { open: "(", close: ")" }, { open: "$", close: "$" }],
-      surroundingPairs: [{ open: "{", close: "}" }, { open: "[", close: "]" }, { open: "(", close: ")" }, { open: "$", close: "$" }]
-    });
-  }
-  monaco.editor.defineTheme("fastwrite-github", {
-    base: "vs",
-    inherit: true,
-    rules: [
-      { token: "comment", foreground: "6E7781" },
-      { token: "keyword", foreground: "CF222E" },
-      { token: "keyword.control", foreground: "8250DF", fontStyle: "bold" },
-      { token: "type", foreground: "0550AE" },
-      { token: "string", foreground: "0A3069" },
-      { token: "string.escape", foreground: "116329" },
-      { token: "operator", foreground: "8250DF" }
-    ],
-    colors: {
-      "editor.background": "#FFFFFF",
-      "editor.foreground": "#24292F",
-      "editorGutter.background": "#F6F8FA",
-      "editorLineNumber.foreground": "#8C959F",
-      "editorLineNumber.activeForeground": "#24292F",
-      "editor.lineHighlightBackground": "#F6F8FA",
-      "editor.selectionBackground": "#54AEFF66",
-      "editor.inactiveSelectionBackground": "#54AEFF4D",
-      "editorCursor.foreground": "#0969DA",
-      "editorWhitespace.foreground": "#AFB8C1",
-      "editorIndentGuide.background1": "#D8DEE4",
-      "editorBracketMatch.background": "#DDF4FF",
-      "editorBracketMatch.border": "#54AEFF"
-    }
-  });
-  monaco.editor.defineTheme("fastwrite-github-dark", {
-    base: "vs-dark",
-    inherit: true,
-    rules: [
-      { token: "comment", foreground: "8B949E" },
-      { token: "keyword", foreground: "FF7B72" },
-      { token: "keyword.control", foreground: "D2A8FF", fontStyle: "bold" },
-      { token: "type", foreground: "79C0FF" },
-      { token: "string", foreground: "A5D6FF" },
-      { token: "string.escape", foreground: "7EE787" },
-      { token: "operator", foreground: "D2A8FF" }
-    ],
-    colors: {
-      "editor.background": "#0D1117",
-      "editor.foreground": "#C9D1D9",
-      "editorGutter.background": "#0D1117",
-      "editorLineNumber.foreground": "#6E7681",
-      "editorLineNumber.activeForeground": "#C9D1D9",
-      "editor.lineHighlightBackground": "#161B22",
-      "editor.selectionBackground": "#264F78",
-      "editor.inactiveSelectionBackground": "#264F7855",
-      "editorCursor.foreground": "#58A6FF",
-      "editorWhitespace.foreground": "#30363D",
-      "editorIndentGuide.background1": "#21262D",
-      "editorBracketMatch.background": "#1F3B5B",
-      "editorBracketMatch.border": "#58A6FF"
-    }
-  });
-}
-
-function languageForPath(path: string): string {
-  const lower = path.toLowerCase();
-  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "markdown";
-  if (lower.endsWith(".tex") || lower.endsWith(".sty") || lower.endsWith(".cls") || lower.endsWith(".bib")) return "latex";
-  return "plaintext";
-}
-
 function recordCompletionMetric(event: CompletionMetricEvent, kind: CompletionKind, latencyMs = 0) {
   const key = "fastwrite.completion.metrics.v1";
   try {
@@ -135,11 +28,13 @@ function recordCompletionMetric(event: CompletionMetricEvent, kind: CompletionKi
 }
 
 interface SourceEditorProps {
+  registry: DocumentRegistry;
   projectId: string;
   document: FileContentResponse;
-  targetLine: number | null;
+  targetLine: NavigationRequest | null;
   targetSelection: TextSelection | null;
-  onSaved: (document: FileContentResponse) => void | Promise<void>;
+  onDocumentState: (path: string, dirty: boolean) => void;
+  onDirtyChange: (dirty: boolean) => void;
   onSelection: (selection: TextSelection | null) => void;
   onCursor: (location: SourceLocation) => void;
 }
@@ -148,7 +43,7 @@ export interface SourceEditorHandle {
   flush: () => Promise<void>;
 }
 
-export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ projectId, document, targetLine, targetSelection, onSaved, onSelection, onCursor }, ref) {
+export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ registry, projectId, document, targetLine, targetSelection, onSelection, onCursor, onDirtyChange, onDocumentState }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
@@ -156,23 +51,32 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   const completionDecorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   const collaboratorDecorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   const disposablesRef = useRef<monaco.IDisposable[]>([]);
-  const applyingExternalRef = useRef(false);
   const currentPathRef = useRef("");
-  const timerRef = useRef<number | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const consumedNavigationRef = useRef<NavigationRequest | null>(null);
+  const consumedSelectionRef = useRef<TextSelection | null>(null);
+  const sessionsRef = useRef(registry.entries);
+  sessionsRef.current = registry.entries;
+  const releaseModelRef = useRef<(() => void) | null>(null);
+  const activeKeyRef = useRef("");
+  const [saveEpoch, setSaveEpoch] = useState(0);
+  const onDocumentStateRef = useRef(onDocumentState);
+  onDocumentStateRef.current = onDocumentState;
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  onDirtyChangeRef.current = onDirtyChange;
   const completionTimerRef = useRef<number | null>(null);
   const completionAbortRef = useRef<AbortController | null>(null);
   const completionRef = useRef<CompletionResponse | null>(null);
   const documentRef = useRef(document);
   const onSelectionRef = useRef(onSelection);
   const onCursorRef = useRef(onCursor);
-  const contentChangeRef = useRef<(content: string) => void>(() => undefined);
+  const contentChangeRef = useRef<() => void>(() => undefined);
   const cursorRef = useRef(0);
   const shouldCompleteRef = useRef(false);
   const suppressNextCompletionRef = useRef(false);
   const versionRef = useRef(document.file.version);
-  const savedContentRef = useRef(document.content);
   const [editorReady, setEditorReady] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryCount, setRecoveryCount] = useState(0);
   const [status, setStatus] = useState<SaveStatus>("saved");
   const [message, setMessage] = useState("");
   const [completion, setCompletionState] = useState<CompletionResponse | null>(null);
@@ -181,9 +85,8 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   const [acceptedCompletion, setAcceptedCompletion] = useState<{ from: number; text: string } | null>(null);
   const [completionEnabled, setCompletionEnabled] = useState(() => localStorage.getItem("fastwrite.completion.enabled") !== "false");
   const [collaborationEnabled, setCollaborationEnabled] = useState(() => localStorage.getItem("fastwrite.collaboration.enabled") === "true");
+  const [collaborationStatus, setCollaborationStatus] = useState("Initializing collaboration");
   const [collaborators, setCollaborators] = useState<Array<{ clientId: string; name: string; color?: string; path: string; line?: number }>>([]);
-  const collaborationClientRef = useRef(localStorage.getItem("fastwrite.collaboration.client") || crypto.randomUUID());
-  const collaborationSocketRef = useRef<WebSocket | null>(null);
   const completionKind: CompletionKind = "auto";
 
   documentRef.current = document;
@@ -194,7 +97,6 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     completionRef.current = next;
     setCompletionState(next);
   };
-
   const cancelCompletion = () => {
     if (completionTimerRef.current) window.clearTimeout(completionTimerRef.current);
     completionTimerRef.current = null;
@@ -206,58 +108,19 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     setCompletionLoading(false);
   };
 
-  const save = async (content: string, propagateError = false, target: SaveTarget = { path: currentPathRef.current, baseVersion: versionRef.current }) => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    if (currentPathRef.current === target.path) setStatus("saving");
-    try {
-      const result = collaborationEnabled ? await saveCollaborative(projectId, target, content, collaborationClientRef.current, cursorRef.current) : await api.projects.saveFile(projectId, target.path, { content, baseVersion: target.baseVersion }, controller.signal);
-      if (collaborationEnabled && "presence" in result) setCollaborators(result.presence.filter((item) => item.clientId !== collaborationClientRef.current));
-      if (collaborationEnabled && collaborationSocketRef.current?.readyState === WebSocket.OPEN) collaborationSocketRef.current.send(JSON.stringify({ type: "document-updated", fileVersion: result.file.version }));
-      if (currentPathRef.current === target.path) {
-        versionRef.current = result.file.version;
-        savedContentRef.current = content;
-        setStatus("saved");
-        setMessage("");
-      }
-      await onSaved({ file: result.file, content });
-    } catch (error) {
-      if ((error as DOMException).name === "AbortError") return;
-      if (currentPathRef.current === target.path) {
-        if (error instanceof ApiClientError && error.status === 409) {
-          setStatus("conflict");
-          setMessage("This file changed elsewhere. Reopen it before saving again.");
-        } else {
-          setStatus("error");
-          setMessage(error instanceof Error ? error.message : "Save failed");
-        }
-      }
-      if (propagateError) throw error;
-    }
-  };
-
-  const flush = async () => {
-    if (timerRef.current) window.clearTimeout(timerRef.current);
-    timerRef.current = null;
-    const content = modelRef.current?.getValue();
-    if (content !== undefined && content !== savedContentRef.current) {
-      await save(content, true, { path: currentPathRef.current, baseVersion: versionRef.current });
-    }
-  };
+  const flush = () => registry.flush();
 
   useImperativeHandle(ref, () => ({ flush }));
 
-  const update = (content: string) => {
+  const update = () => {
+    onDirtyChangeRef.current(true);
+    onDocumentStateRef.current(currentPathRef.current, true);
     setStatus("dirty");
     cancelCompletion();
     setCompletion(null);
     setCompletionError("");
     shouldCompleteRef.current = !suppressNextCompletionRef.current;
     suppressNextCompletionRef.current = false;
-    if (timerRef.current) window.clearTimeout(timerRef.current);
-    const target = { path: currentPathRef.current, baseVersion: versionRef.current };
-    timerRef.current = window.setTimeout(() => void save(content, false, target), 850);
   };
   contentChangeRef.current = update;
 
@@ -299,63 +162,83 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     collaboratorDecorationsRef.current = editor.createDecorationsCollection();
     disposablesRef.current = [
       editor.onDidChangeModelContent(() => {
-        if (!applyingExternalRef.current) contentChangeRef.current(editor.getValue());
+        if (!sessionsRef.current.get(activeKeyRef.current)?.applyingExternal) contentChangeRef.current();
       }),
-      editor.onDidChangeCursorSelection(() => emitSelection(editor, decorationsRef.current, documentRef.current, versionRef.current, onSelectionRef.current, onCursorRef.current, cursorRef, completionRef, setCompletion, completionAbortRef))
+      editor.onDidChangeCursorSelection(() => { emitSelection(editor, decorationsRef.current, documentRef.current, versionRef.current, onSelectionRef.current, onCursorRef.current, cursorRef, completionRef, setCompletion, completionAbortRef); })
     ];
     setEditorReady(true);
     const updateTheme = () => monaco.editor.setTheme(currentTheme() === "dark" ? "fastwrite-github-dark" : "fastwrite-github");
     window.addEventListener(THEME_CHANGE_EVENT, updateTheme);
     return () => {
       window.removeEventListener(THEME_CHANGE_EVENT, updateTheme);
-      if (timerRef.current) window.clearTimeout(timerRef.current);
-      abortRef.current?.abort();
+
       if (completionTimerRef.current) window.clearTimeout(completionTimerRef.current);
       completionAbortRef.current?.abort();
       disposablesRef.current.forEach((item) => item.dispose());
       decorationsRef.current?.clear();
       completionDecorationsRef.current?.clear();
       collaboratorDecorationsRef.current?.clear();
+      const entry = sessionsRef.current.get(activeKeyRef.current);
+      if (entry) entry.viewState = editor.saveViewState();
       editor.setModel(null);
-      modelRef.current?.dispose();
+      releaseModelRef.current?.();
+      releaseModelRef.current = null;
+      activeKeyRef.current = "";
       editor.dispose();
       editorRef.current = null;
       modelRef.current = null;
     };
   }, []);
 
+  useEffect(() => registry.subscribe(entry => {
+    if (entry.session.key !== activeKeyRef.current) return;
+    const session = entry.session;
+    if (versionRef.current !== session.serverVersion) setSaveEpoch(value => value + 1);
+    versionRef.current = session.serverVersion;
+    setCollaborators(entry.collaboration?.peers() ?? []);
+    const provider = entry.collaboration;
+    if (provider) setCollaborationStatus(provider.error ? "Collaboration needs attention" : provider.state === "initializing" ? "Initializing collaboration" : provider.state === "offline" ? "Offline · local changes retained" : registry.dirtyEntry(entry) ? "Local changes · awaiting persistence" : provider.state === "persisted" ? "Persisted to file" : provider.state === "connecting" ? "Connecting" : "Connected");
+    setRecoveryCount(entry.recoveries.length);
+    const error = session.error ?? entry.collaboration?.error ?? entry.draftError;
+    setStatus(error ? error instanceof ApiClientError && error.status === 409 ? "conflict" : !navigator.onLine || error instanceof TypeError ? "offline" : "error" : session.saving ? "saving" : registry.dirtyEntry(entry) ? "dirty" : "saved");
+    setMessage(error instanceof Error ? error.message : entry.recoveries.length ? "Saved local drafts are available for comparison." : "");
+  }), [registry]);
+
   useEffect(() => {
     const editor = editorRef.current;
     if (!editorReady || !editor) return;
-    const pathChanged = currentPathRef.current !== document.file.path;
+    const key = JSON.stringify([projectId, document.file.path]);
+    const pathChanged = activeKeyRef.current !== key;
+    const entry = registry.open(document);
+    setCollaborationEnabled(entry.mode === "collaboration");
+    setRecoveryCount(entry.recoveries.length);
     if (pathChanged) {
+      const previous = sessionsRef.current.get(activeKeyRef.current);
+      if (previous) previous.viewState = editor.saveViewState();
+      const releasePrevious = releaseModelRef.current;
+      releaseModelRef.current = registry.acquire(entry);
+      releasePrevious?.();
       cancelCompletion();
       setCompletionError("");
-      editor.setModel(null);
-      modelRef.current?.dispose();
-      const uri = monaco.Uri.from({ scheme: "fastwrite", authority: projectId, path: `/${document.file.path}` });
-      modelRef.current = monaco.editor.createModel(document.content, languageForPath(document.file.path), uri);
-      editor.setModel(modelRef.current);
+      activeKeyRef.current = key;
       currentPathRef.current = document.file.path;
-      editor.setScrollPosition({ scrollTop: 0, scrollLeft: 0 });
+      modelRef.current = entry.model;
+      editor.setModel(entry.model);
+      if (hostRef.current) { hostRef.current.dataset.modelId = entry.model.id; hostRef.current.dataset.modelUri = entry.model.uri.toString(); }
+      if (entry.viewState) editor.restoreViewState(entry.viewState);
       decorationsRef.current?.clear();
       completionDecorationsRef.current?.clear();
       setAcceptedCompletion(null);
-    } else if (modelRef.current && modelRef.current.getValue() !== document.content) {
-      applyingExternalRef.current = true;
-      modelRef.current.setValue(document.content);
-      applyingExternalRef.current = false;
     }
     editor.updateOptions({ ariaLabel: `Source editor for ${document.file.path}` });
-    versionRef.current = document.file.version;
-    savedContentRef.current = document.content;
-    setStatus("saved");
-    setMessage("");
+    versionRef.current = entry.session.serverVersion;
+    setStatus(entry.session.error ? "error" : entry.session.saving ? "saving" : registry.dirtyEntry(entry) ? "dirty" : "saved");
+    setMessage(entry.session.error instanceof Error ? entry.session.error.message : "");
     setCompletion(null);
 
     if (!shouldCompleteRef.current || !completionEnabled) return;
     shouldCompleteRef.current = false;
-    const expected = { path: document.file.path, cursor: cursorRef.current, fileVersion: document.file.version, kind: completionKind };
+    const expected = { path: document.file.path, cursor: cursorRef.current, fileVersion: versionRef.current, kind: completionKind };
     completionTimerRef.current = window.setTimeout(async () => {
       const controller = new AbortController();
       const startedAt = performance.now();
@@ -381,30 +264,19 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
         }
       }
     }, 500);
-  }, [completionEnabled, document.content, document.file.path, document.file.version, editorReady, projectId]);
+  }, [completionEnabled, document.content, document.file.path, document.file.version, editorReady, projectId, saveEpoch, registry, collaborationEnabled]);
 
   useEffect(() => {
-    if (!collaborationEnabled || !editorReady) { setCollaborators([]); return; }
-    localStorage.setItem("fastwrite.collaboration.client", collaborationClientRef.current);
-    let active = true;
-    const poll = async () => { try { const state = await api.projects.collaboration(projectId, document.file.path); if (!active) return; setCollaborators(state.presence.filter((item) => item.clientId !== collaborationClientRef.current)); if (state.fileVersion > versionRef.current) { const remote = new Y.Doc(); Y.applyUpdate(remote, fromBase64(state.update)); const content = remote.getText("content").toString(); applyingExternalRef.current = true; modelRef.current?.setValue(content); applyingExternalRef.current = false; versionRef.current = state.fileVersion; savedContentRef.current = content; setStatus("saved"); } } catch { /* Existing save conflict UI remains authoritative. */ } };
-    void poll(); const interval = window.setInterval(() => void poll(), 3000); return () => { active = false; window.clearInterval(interval); };
-  }, [collaborationEnabled, document.file.path, editorReady, projectId]);
+    const reconnect = () => { for (const { session } of sessionsRef.current.values()) if (session.dirty) void session.flush().catch(() => undefined); };
+    window.addEventListener("online", reconnect);
+    return () => window.removeEventListener("online", reconnect);
+  }, [status]);
 
   useEffect(() => {
-    if (!collaborationEnabled || !editorReady) return;
-    const heartbeat = async () => { try { const line = modelRef.current?.getPositionAt(cursorRef.current).lineNumber; const members = await api.projects.collaborationPresence(projectId, { clientId: collaborationClientRef.current, name: localStorage.getItem("fastwrite.collaboration.name") || "Author", path: document.file.path, ...(line ? { line } : {}) }); setCollaborators(members.filter((item) => item.clientId !== collaborationClientRef.current)); } catch { /* Presence is best-effort. */ } };
-    void heartbeat(); const interval = window.setInterval(() => void heartbeat(), 12_000); return () => window.clearInterval(interval);
-  }, [collaborationEnabled, document.file.path, editorReady, projectId]);
-
-  useEffect(() => {
-    if (!collaborationEnabled || !editorReady) return;
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${protocol}//${window.location.host}/api/collaboration/socket?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(document.file.path)}&clientId=${encodeURIComponent(collaborationClientRef.current)}`);
-    collaborationSocketRef.current = socket;
-    socket.onmessage = (event) => { try { const message = JSON.parse(String(event.data)) as { type?: string }; if (message.type === "document-updated" || message.type === "presence") void api.projects.collaboration(projectId, document.file.path).then((state) => { setCollaborators(state.presence.filter((item) => item.clientId !== collaborationClientRef.current)); if (message.type === "document-updated" && state.fileVersion > versionRef.current) { const remote = new Y.Doc(); Y.applyUpdate(remote, fromBase64(state.update)); const content = remote.getText("content").toString(); applyingExternalRef.current = true; modelRef.current?.setValue(content); applyingExternalRef.current = false; versionRef.current = state.fileVersion; savedContentRef.current = content; } }); } catch { /* Ignore malformed collaboration broadcasts. */ } };
-    return () => { if (collaborationSocketRef.current === socket) collaborationSocketRef.current = null; socket.close(); };
-  }, [collaborationEnabled, document.file.path, editorReady, projectId]);
+    const entry = registry.get(document.file.path), editor = editorRef.current;
+    if (!editorReady || !editor || !entry?.collaboration) return;
+    return entry.collaboration.attachEditor(editor);
+  }, [registry, document.file.path, editorReady, collaborationEnabled]);
 
   useEffect(() => {
     const model = modelRef.current; const decorations = collaboratorDecorationsRef.current;
@@ -438,21 +310,23 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   useEffect(() => {
     const editor = editorRef.current;
     const model = modelRef.current;
-    if (!editor || !model || !targetLine || currentPathRef.current !== document.file.path) return;
-    const safeLine = Math.min(Math.max(1, targetLine), model.getLineCount());
+    if (!editor || !model || !targetLine || targetLine.projectId !== projectId || targetLine.path !== currentPathRef.current || consumedNavigationRef.current === targetLine) return;
+    consumedNavigationRef.current = targetLine;
+    const safeLine = Math.min(Math.max(1, targetLine.line), model.getLineCount());
     editor.setPosition({ lineNumber: safeLine, column: 1 });
     editor.revealLineInCenter(safeLine);
     editor.focus();
-  }, [document.file.path, editorReady, targetLine]);
+  }, [projectId, document.file.path, editorReady, targetLine]);
 
   useEffect(() => {
     const editor = editorRef.current;
     const model = modelRef.current;
-    if (!editor || !model || !targetSelection || targetSelection.path !== document.file.path) return;
+    if (!editor || !model || !targetSelection || targetSelection.path !== currentPathRef.current || consumedSelectionRef.current === targetSelection) return;
     const from = Math.max(0, Math.min(targetSelection.from, model.getValueLength()));
     const to = Math.max(from, Math.min(targetSelection.to, model.getValueLength()));
     const range = rangeFromOffsets(model, from, to);
-    if (model.getValueInRange(range) !== targetSelection.text) return;
+    if (model.getValueInRange(range) !== targetSelection.text || targetSelection.fileVersion !== versionRef.current) return;
+    consumedSelectionRef.current = targetSelection;
     editor.setSelection(range);
     editor.revealRangeInCenter(range);
     showPersistentSelection(decorationsRef.current, range);
@@ -510,25 +384,31 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
 
   return (
     <div className="source-editor" onKeyDownCapture={(event) => {
+      if (event.nativeEvent.isComposing) return;
       if (event.key === "Tab" && completionRef.current) { event.preventDefault(); event.stopPropagation(); acceptCompletion(); }
       if (event.key === "Escape" && completionRef.current) { event.preventDefault(); event.stopPropagation(); ignoreCompletion(); }
+
     }}>
       <div className="editor-toolbar">
         <div className="editor-toolbar__file"><span>{document.file.name}</span><code>{document.file.path}</code></div>
         <div className="editor-toolbar__actions">
-          <label className={`completion-switch${completionEnabled ? " is-on" : ""}`} title={completionError || "Skill-guided writing completion"}>
-            <input id="completion-enabled" name="completion-enabled" type="checkbox" checked={completionEnabled} onChange={(event) => changeCompletionEnabled(event.target.checked)} />
-            {completionLoading ? <LoaderCircle className="spin" /> : <Sparkles />}
-            <span>Complete</span>
-          </label>
-        <label className={`completion-switch${collaborationEnabled ? " is-on" : ""}`} title="Synchronize this file through Yjs collaboration"><input id="collaboration-enabled" name="collaboration-enabled" type="checkbox" checked={collaborationEnabled} onChange={(event) => { setCollaborationEnabled(event.target.checked); localStorage.setItem("fastwrite.collaboration.enabled", String(event.target.checked)); }} /><span>Collaborate{collaborators.length ? ` · ${collaborators.length}` : ""}</span></label>
-          {acceptedCompletion ? <button className="editor-undo-completion" type="button" onClick={undoCompletion}><Undo2 /> Undo completion</button> : null}
+          <Checkbox id="completion-enabled" name="completion-enabled" variant="pill" icon={completionLoading ? <Icon name={icons.loading} spin /> : <Icon name={icons.sparkle} />} checked={completionEnabled} onChange={changeCompletionEnabled} title={completionError || "Skill-guided writing completion"}>
+            Complete
+          </Checkbox>
+        <Checkbox id="collaboration-enabled" name="collaboration-enabled" variant="pill" checked={collaborationEnabled} onChange={(enabled) => {
+          const entry = registry.get(document.file.path);
+          if (entry) void registry.setCollaboration(entry, enabled).then(() => { setCollaborationEnabled(enabled); localStorage.setItem("fastwrite.collaboration.enabled", String(enabled)); }).catch(error => { setStatus("error"); setMessage(error instanceof Error ? error.message : "Could not switch synchronization mode"); });
+        }} title="Synchronize this file through Yjs collaboration">Collaborate{collaborators.length ? ` · ${collaborators.length}` : ""}</Checkbox>
+          {acceptedCompletion ? <Button variant="ghost" className="editor-undo-completion" type="button" onClick={undoCompletion} icon={<Icon name={icons.discard} />}>Undo completion</Button> : null}
+          {collaborationEnabled ? <span className="collaboration-status" role="status">{collaborationStatus}</span> : null}
+          <Button variant="secondary" type="button" onClick={() => { cancelCompletion(); setCompletion(null); setRecoveryOpen(true); }}>Compare / recover{recoveryCount ? ` (${recoveryCount})` : ""}</Button>
           <SaveIndicator status={status} />
         </div>
       </div>
       <div ref={hostRef} className="monaco-editor-host" />
+      {recoveryOpen && registry.get(document.file.path) ? <DocumentRecoveryDialog registry={registry} entry={registry.get(document.file.path)!} onClose={() => setRecoveryOpen(false)} /> : null}
       {completion ? <span className="sr-only" role="status">Writing suggestion available. Press Tab to accept or Escape to ignore.</span> : null}
-      {message ? <div className={`editor-message editor-message--${status}`} role="alert"><AlertCircle /> {message}</div> : null}
+      {message ? <div className={`editor-message editor-message--${status}`} role="alert"><Icon name={icons.info} /> {message}</div> : null}
     </div>
   );
 });
@@ -552,7 +432,7 @@ function emitSelection(
   cursorRef.current = cursor;
   completionAbortRef.current?.abort();
   if (completionRef.current && completionRef.current.cursor !== cursor) setCompletion(null);
-  onCursor({ path: document.file.path, line: selection.positionLineNumber });
+  onCursor({ path: document.file.path, line: selection.positionLineNumber, column: selection.positionColumn });
   if (selection.isEmpty()) {
     decorations?.clear();
     onSelection(null);
@@ -579,18 +459,7 @@ function rangeFromOffsets(model: monaco.editor.ITextModel, from: number, to: num
 
 function SaveIndicator({ status }: { status: SaveStatus }) {
   const content = {
-    saved: [<Check key="icon" />, "Saved"], dirty: [<CloudOff key="icon" />, "Unsaved"], saving: [<LoaderCircle key="icon" className="spin" />, "Saving"], error: [<AlertCircle key="icon" />, "Save failed"], conflict: [<AlertCircle key="icon" />, "Conflict"]
+    saved: [<Icon key="icon" name={icons.check} />, "Saved"], dirty: [<Icon key="icon" name={icons.circleFilled} />, "Unsaved"], saving: [<Icon key="icon" name={icons.loading} spin />, "Saving"], error: [<Icon key="icon" name={icons.info} />, "Save failed"], conflict: [<Icon key="icon" name={icons.info} />, "Conflict"], offline: [<Icon key="icon" name={icons.circleFilled} />, "Offline - queued"]
   }[status];
   return <span className={`save-indicator save-indicator--${status}`}>{content}</span>;
 }
-
-async function saveCollaborative(projectId: string, target: SaveTarget, content: string, clientId: string, cursor: number) {
-  const state = await api.projects.collaboration(projectId, target.path);
-  if (state.fileVersion !== target.baseVersion) throw new ApiClientError(409, "collaboration_version_conflict", "This file changed elsewhere. Reload it before saving again.");
-  const document = new Y.Doc(); Y.applyUpdate(document, fromBase64(state.update)); const text = document.getText("content"); text.delete(0, text.length); text.insert(0, content);
-  const result = await api.projects.collaborationUpdate(projectId, { path: target.path, update: toBase64(Y.encodeStateAsUpdate(document)), baseVersion: target.baseVersion, clientId, name: localStorage.getItem("fastwrite.collaboration.name") || "Author", line: modelLineFromOffset(content, cursor) });
-  return { file: { path: target.path, name: target.path.split("/").pop() ?? target.path, kind: "text" as const, size: new Blob([content]).size, version: result.fileVersion, updatedAt: new Date().toISOString() }, presence: result.presence };
-}
-function modelLineFromOffset(content: string, offset: number): number { return content.slice(0, Math.max(0, offset)).split("\n").length; }
-function toBase64(update: Uint8Array): string { let value = ""; for (const byte of update) value += String.fromCharCode(byte); return btoa(value); }
-function fromBase64(value: string): Uint8Array { return Uint8Array.from(atob(value), (character) => character.charCodeAt(0)); }

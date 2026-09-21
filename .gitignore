@@ -7,6 +7,7 @@ app-bin/
 .DS_Store
 .playwright-cli/
 .env
+references/
 
 # Tool and test caches
 **/.vite/
@@ -23,3 +24,8 @@ apps/web/public/bundles/
 # Local sample papers
 sample-papers/
 output/
+
+# Superpowers brainstorming mockups
+.superpowers/
+/docs/superpowers
+/evalution

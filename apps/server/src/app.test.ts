@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, ClaimEvidenceLink, CompletionResponse, ComplianceReport, FastReadBundleReceipt, FileContentResponse, PaperClaim, PaperMemory, PaperProject, ProjectResearchWorkDetails, ResearchWork, ReviseResponse, SaveFileResponse, SourceEvidence, UploadSession, WorkspaceTreeNode } from "@fastwrite/shared";
+import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, ClaimEvidenceLink, CompletionResponse, ComplianceReport, FastReadBundleReceipt, FileContentResponse, PaperClaim, PaperMemory, PaperProject, ProjectResearchWorkDetails, ResearchWork, ReviseResponse, SaveFileResponse, SourceEvidence, UploadSession, WorkingStatus, WorkspaceTreeNode } from "@fastwrite/shared";
 import type { AgentProvider, AgentTaskPlanOutput, CompletionAgentInput, DraftGeneratedFile, ReviseAgentInput } from "./agent/provider";
 import { createApplication, mimeType } from "./app";
+import type { IdentityProvider } from "./auth/identity-provider";
+import type { MailTransport } from "./notifications/mail-delivery-service";
 import * as Y from "yjs";
 
 const temporaryDirectories: string[] = [];
@@ -13,14 +15,467 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function testApplication(agentProvider?: AgentProvider) {
+async function testApplication(agentProvider?: AgentProvider, features?: { serverAuth?: boolean }, oidcProvider?: IdentityProvider, casProvider?: IdentityProvider, mailTransport?: MailTransport) {
   const directory = await mkdtemp(join(tmpdir(), "fastwrite-test-"));
   temporaryDirectories.push(directory);
-  const app = await createApplication(directory, { ...(agentProvider ? { agentProvider } : {}) });
+  const app = await createApplication(directory, { ...(agentProvider ? { agentProvider } : {}), ...(features ? { features } : {}), ...(oidcProvider ? { oidcProvider } : {}), ...(casProvider ? { casProvider } : {}), ...(mailTransport ? { mailTransport } : {}) });
   return (path: string, init?: RequestInit) => app(new Request(`http://fastwrite.test${path}`, init));
 }
 
 describe("workspace API", () => {
+  test("sets baseline browser security headers", async () => {
+    const request = await testApplication();
+    const response = await request("/api/health");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(response.headers.get("content-security-policy")).toContain("style-src 'self' 'unsafe-inline'");
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'self';");
+    expect(response.headers.get("x-request-id")).toMatch(/^req_/);
+  });
+
+  test("serves the single-page client for invitation links", async () => {
+    const request = await testApplication();
+    const response = await request("/projects?invite=one-time-token");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+  });
+
+  test("registers local accounts, creates a personal workspace, and accepts scoped invitations", async () => {
+    const request = await testApplication();
+    const ownerResponse = await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@example.test", password: "correct-horse-battery-staple", displayName: "Owner" }) });
+    expect(ownerResponse.status).toBe(201);
+    const originalRefreshCookie = ownerResponse.headers.get("set-cookie")?.split(";", 1)[0];
+    expect(originalRefreshCookie).toContain("fastwrite.refresh=");
+    expect((await request("/api/auth/refresh", { method: "POST", headers: { cookie: originalRefreshCookie!, origin: "https://untrusted.example" } })).status).toBe(403);
+    const owner = await ownerResponse.json() as { user: { id: string; emailNormalized: string }; token: string };
+    expect(JSON.stringify(owner)).not.toContain("password");
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const personal = await request("/api/teams", { headers: ownerHeaders });
+    expect(personal.status).toBe(200);
+    expect(await personal.json()).toEqual(expect.arrayContaining([expect.objectContaining({ personalUserId: owner.user.id })]));
+    const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Invited paper" }) })).json() as PaperProject;
+    expect((await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "owner-transfer@example.test", role: "owner" }) })).status).toBe(400);
+    const customExpiry = new Date(Date.now() + 2 * 86400_000).toISOString();
+    const invitationResponse = await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "editor@example.test", role: "editor", expiresAt: customExpiry, message: "Please review the methods section." }) });
+    expect(invitationResponse.status).toBe(201);
+    const invitation = await invitationResponse.json() as { token: string; invitation: { id: string; tokenHash?: string; expiresAt: string; message?: string } };
+    expect(invitation.invitation.tokenHash).toBeUndefined();
+    expect(invitation.invitation.message).toBe("Please review the methods section.");
+    expect(Date.parse(invitation.invitation.expiresAt)).toBeGreaterThan(Date.now() + 47 * 3_600_000);
+    expect((await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "bad-expiry@example.test", role: "viewer", expiresAt: new Date(Date.now() + 5_000).toISOString() }) })).status).toBe(400);
+    const listed = await request(`/api/projects/${project.id}/invitations`, { headers: ownerHeaders });
+    expect(listed.status).toBe(200);
+    expect(JSON.stringify(await listed.json())).not.toContain("tokenHash");
+    const editor = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const resentResponse = await request(`/api/invitations/${invitation.invitation.id}/resend`, { method: "POST", headers: ownerHeaders });
+    expect(resentResponse.status).toBe(200);
+    const resent = await resentResponse.json() as { token: string; invitation: { id: string; tokenHash?: string; message?: string } };
+    expect(resent.token).not.toBe(invitation.token);
+    expect(resent.invitation.id).not.toBe(invitation.invitation.id);
+    expect(resent.invitation.tokenHash).toBeUndefined();
+    expect(resent.invitation.message).toBe("Please review the methods section.");
+    const revoked = await request(`/api/invitations/${invitation.token}/accept`, { method: "POST", headers: { authorization: `Bearer ${editor.token}` } });
+    expect(revoked.status).toBe(404);
+    const accepted = await request(`/api/invitations/${resent.token}/accept`, { method: "POST", headers: { authorization: `Bearer ${editor.token}` } });
+    expect(accepted.status).toBe(200);
+    const members = await request(`/api/projects/${project.id}/members`, { headers: ownerHeaders });
+    expect(await members.json()).toMatchObject({ canManage: true, members: expect.arrayContaining([expect.objectContaining({ userId: editor.user.id, role: "editor", user: expect.objectContaining({ emailNormalized: "editor@example.test" }) })]) });
+    expect((await request(`/api/projects/${project.id}/members/${editor.user.id}`, { method: "PATCH", headers: ownerHeaders, body: JSON.stringify({ role: "commenter" }) })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/members/${editor.user.id}`, { method: "DELETE", headers: ownerHeaders })).status).toBe(204);
+    const withdrawn = await (await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "withdrawn@example.test", role: "viewer" }) })).json() as { invitation: { id: string } };
+    expect((await request(`/api/invitations/${withdrawn.invitation.id}`, { method: "DELETE", headers: ownerHeaders })).status).toBe(204);
+    expect((await request(`/api/invitations/${withdrawn.invitation.id}/resend`, { method: "POST", headers: ownerHeaders })).status).toBe(409);
+    for (let count = 0; count < 3; count += 1) expect((await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "rate-limit@example.test", role: "viewer" }) })).status).toBe(201);
+    expect((await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "rate-limit@example.test", role: "viewer" }) })).status).toBe(429);
+    const refreshed = await request("/api/auth/refresh", { method: "POST", headers: { cookie: originalRefreshCookie! } });
+    expect(refreshed.status).toBe(200);
+    const rotated = await refreshed.json() as { token: string };
+    expect((await request("/api/auth/refresh", { method: "POST", headers: { cookie: originalRefreshCookie! } })).status).toBe(401);
+    expect((await request("/api/auth/me", { headers: { authorization: `Bearer ${rotated.token}` } })).status).toBe(401);
+  });
+
+  test("creates and reuses an account through the configured OIDC identity port", async () => {
+    const provider: IdentityProvider = {
+      beginLogin: async () => ({ kind: "redirect", url: "https://idp.example.test/authorize?state=opaque", binding: "opaque" }),
+      finishLogin: async () => ({ issuer: "https://idp.example.test", subject: "stable-subject-42", email: "oidc.user@example.test", displayName: "OIDC User", groups: ["researchers"], emailVerified: true }),
+      loginReturnTo: (state) => state === "opaque" ? "/projects?view=recent" : "/",
+      logout: async () => undefined
+    };
+    const request = await testApplication(undefined, { serverAuth: true }, provider);
+    expect(await (await request("/api/auth/providers")).json()).toEqual({ local: true, oidc: true, cas: false });
+    const start = await request("/api/auth/oidc/login?returnTo=/projects?view=recent");
+    expect(start.status).toBe(302);
+    expect(start.headers.get("location")).toBe("https://idp.example.test/authorize?state=opaque");
+    const loginCookie = start.headers.get("set-cookie")?.split(";", 1)[0];
+    expect((await request("/api/auth/oidc/callback?code=code&state=opaque")).status).toBe(403);
+    const callback = await request("/api/auth/oidc/callback?code=code&state=opaque", { headers: { cookie: loginCookie! } });
+    expect(callback.status).toBe(302);
+    expect(callback.headers.get("location")).toBe("/projects?view=recent&oidc=complete");
+    const refreshCookie = callback.headers.get("set-cookie")?.split(";", 1)[0];
+    expect(refreshCookie).toContain("fastwrite.refresh=");
+    const refreshed = await request("/api/auth/refresh", { method: "POST", headers: { cookie: refreshCookie! } });
+    const session = await refreshed.json() as { user: { id: string; emailNormalized: string }; token: string };
+    expect(session.user.emailNormalized).toBe("oidc.user@example.test");
+    expect((await request("/api/auth/me", { headers: { authorization: `Bearer ${session.token}` } })).status).toBe(200);
+    const secondStart = await request("/api/auth/oidc/login");
+    const secondLoginCookie = secondStart.headers.get("set-cookie")?.split(";", 1)[0];
+    const secondCallback = await request("/api/auth/oidc/callback?code=second&state=opaque", { headers: { cookie: secondLoginCookie! } });
+    const secondCookie = secondCallback.headers.get("set-cookie")?.split(";", 1)[0];
+    const second = await (await request("/api/auth/refresh", { method: "POST", headers: { cookie: secondCookie! } })).json() as { user: { id: string } };
+    expect(second.user.id).toBe(session.user.id);
+  });
+
+  test("applies issuer-qualified IdP group ACL rules to refreshed external sessions", async () => {
+    const provider: IdentityProvider = {
+      beginLogin: async () => ({ kind: "redirect", url: "https://idp.example.test/authorize?state=group-state", binding: "group-state" }),
+      finishLogin: async () => ({ issuer: "https://idp.example.test/", subject: "group-user", email: "group.user@example.test", groups: ["researchers", "researchers", ""], emailVerified: true }),
+      logout: async () => undefined
+    };
+    const request = await testApplication(undefined, { serverAuth: true }, provider);
+    const bootstrap = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "group-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const ownerHeaders = { authorization: `Bearer ${bootstrap.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Group ACL" }) })).json() as PaperProject;
+    const start = await request("/api/auth/oidc/login");
+    const loginCookie = start.headers.get("set-cookie")?.split(";", 1)[0];
+    const callback = await request("/api/auth/oidc/callback?code=code&state=group-state", { headers: { cookie: loginCookie! } });
+    const externalRefreshCookie = callback.headers.get("set-cookie")?.split(";", 1)[0];
+    const externalRefresh = await request("/api/auth/refresh", { method: "POST", headers: { cookie: externalRefreshCookie! } });
+    const rotatedRefreshCookie = externalRefresh.headers.get("set-cookie")?.split(";", 1)[0];
+    const external = await externalRefresh.json() as { token: string; user: { id: string } };
+    const externalHeaders = { authorization: `Bearer ${external.token}`, "content-type": "application/json" };
+    const invitation = await (await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "group.user@example.test", role: "viewer" }) })).json() as { token: string };
+    expect((await request(`/api/invitations/${invitation.token}/accept`, { method: "POST", headers: externalHeaders })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: externalHeaders, body: JSON.stringify({ path: "team/notes.tex", content: "before allow" }) })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/acl/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ pathPrefix: "team", subjectType: "idp_group", subjectId: "https://idp.example.test:researchers", action: "edit", effect: "allow" }) })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: externalHeaders, body: JSON.stringify({ path: "team/notes.tex", content: "group allow" }) })).status).toBe(201);
+    expect((await request(`/api/projects/${project.id}/acl/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ pathPrefix: "team", subjectType: "idp_group", subjectId: "https://idp.example.test:researchers", action: "read", effect: "deny" }) })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/file?path=team/notes.tex`, { headers: externalHeaders })).status).toBe(403);
+    const refreshed = await request("/api/auth/refresh", { method: "POST", headers: { cookie: rotatedRefreshCookie! } });
+    expect(refreshed.status).toBe(200);
+    const rotated = await refreshed.json() as { token: string };
+    expect((await request(`/api/projects/${project.id}/file?path=team/notes.tex`, { headers: { authorization: `Bearer ${rotated.token}` } })).status).toBe(403);
+  });
+
+  test("syncs an external identity group into an owner-configured team binding", async () => {
+    const provider: IdentityProvider = { beginLogin: async () => ({ kind: "redirect", url: "https://idp.example.test/authorize", binding: "team-group-state" }), finishLogin: async () => ({ issuer: "https://idp.example.test", subject: "team-group-user", email: "team-group@example.test", groups: ["lab-members", "lab-admin"], emailVerified: true }), logout: async () => undefined };
+    const request = await testApplication(undefined, { serverAuth: true }, provider);
+    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-group-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const team = await (await request("/api/teams", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Mapped Lab" }) })).json() as { id: string };
+    expect((await request(`/api/teams/${team.id}/group-bindings/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ idpGroup: "https://idp.example.test:lab-members", role: "member" }) })).status).toBe(200);
+    const adminBinding = await (await request(`/api/teams/${team.id}/group-bindings/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ idpGroup: "https://idp.example.test:lab-admin", role: "admin" }) })).json() as { id: string };
+    expect(await (await request(`/api/teams/${team.id}/group-bindings/preview`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ groups: ["https://idp.example.test:lab-members", "https://idp.example.test:other"] }) })).json()).toEqual([expect.objectContaining({ idpGroup: "https://idp.example.test:lab-members", role: "member" })]);
+    const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Mapped Project", teamId: team.id }) })).json() as PaperProject;
+    const start = await request("/api/auth/oidc/login"); const cookie = start.headers.get("set-cookie")?.split(";", 1)[0];
+    const callback = await request("/api/auth/oidc/callback?code=code&state=team-group-state", { headers: { cookie: cookie! } });
+    const refreshCookie = callback.headers.get("set-cookie")?.split(";", 1)[0];
+    const member = await (await request("/api/auth/refresh", { method: "POST", headers: { cookie: refreshCookie! } })).json() as { token: string };
+    const memberHeaders = { authorization: `Bearer ${member.token}` };
+    expect(await (await request("/api/teams", { headers: memberHeaders })).json()).toEqual(expect.arrayContaining([expect.objectContaining({ id: team.id })]));
+    expect((await request(`/api/projects/${project.id}`, { headers: memberHeaders })).status).toBe(200);
+    const memberIdentity = await (await request("/api/auth/me", { headers: memberHeaders })).json() as { id: string };
+    expect(await (await request(`/api/teams/${team.id}/members`, { headers: ownerHeaders })).json()).toMatchObject({ members: expect.arrayContaining([expect.objectContaining({ userId: memberIdentity.id, role: "admin" })]) });
+    expect((await request(`/api/teams/${team.id}/group-bindings/${adminBinding.id}`, { method: "DELETE", headers: ownerHeaders })).status).toBe(204);
+    expect(await (await request(`/api/teams/${team.id}/members`, { headers: ownerHeaders })).json()).toMatchObject({ members: expect.arrayContaining([expect.objectContaining({ userId: memberIdentity.id, role: "member" })]) });
+    expect((await request(`/api/teams/${team.id}/members/${memberIdentity.id}`, { method: "PATCH", headers: ownerHeaders, body: JSON.stringify({ role: "admin" }) })).status).toBe(200);
+    const roster = await (await request(`/api/teams/${team.id}/members`, { headers: ownerHeaders })).json() as { members: Array<{ userId: string; role: string; idpGroupBindingIds?: string[] }> };
+    const converted = roster.members.find((item) => item.userId === memberIdentity.id);
+    expect(converted).toMatchObject({ userId: memberIdentity.id, role: "admin" });
+    expect(converted?.idpGroupBindingIds).toBeUndefined();
+  });
+
+  test("searches only readable project files without exposing denied paths", async () => {
+    const request = await testApplication(undefined, { serverAuth: true });
+    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "search-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const editor = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "search-editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const editorHeaders = { authorization: `Bearer ${editor.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Search ACL" }) })).json() as PaperProject;
+    const invitation = await (await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "search-editor@example.test", role: "editor" }) })).json() as { token: string };
+    expect((await request(`/api/invitations/${invitation.token}/accept`, { method: "POST", headers: editorHeaders })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ path: "public/notes.tex", content: "First line\nunique needle appears here" }) })).status).toBe(201);
+    expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ path: "restricted/results.tex", content: "unique needle must remain private" }) })).status).toBe(201);
+    expect((await request(`/api/projects/${project.id}/acl/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ pathPrefix: "restricted", subjectType: "user", subjectId: editor.user.id, action: "read", effect: "deny" }) })).status).toBe(200);
+    expect(await (await request(`/api/projects/${project.id}/access-decision?path=restricted/results.tex&action=project%3Aread`, { headers: editorHeaders })).json()).toMatchObject({ allowed: false, reasonCode: "acl_deny", policyVersion: 1, role: "editor" });
+    expect(await (await request(`/api/projects/${project.id}/access-decision?path=public/notes.tex&action=project%3Aread`, { headers: editorHeaders })).json()).toMatchObject({ allowed: true, reasonCode: "project_role", policyVersion: 1, role: "editor" });
+    const search = await request(`/api/projects/${project.id}/search?query=${encodeURIComponent("unique needle")}`, { headers: editorHeaders });
+    expect(search.status).toBe(200);
+    expect(await search.json()).toEqual({ query: "unique needle", matches: [{ path: "public/notes.tex", line: 2, excerpt: "unique needle appears here" }], truncated: false });
+    expect((await request(`/api/projects/${project.id}/search?query=`, { headers: editorHeaders })).status).toBe(400);
+  });
+
+  test("creates an account through the configured CAS identity port", async () => {
+    const provider: IdentityProvider = {
+      beginLogin: async () => ({ kind: "redirect", url: "https://cas.example.test/login?service=https%3A%2F%2Ffastwrite.example.test%2Fapi%2Fauth%2Fcas%2Fcallback", binding: "cas-state" }),
+      finishLogin: async ({ ticket }) => { if (ticket !== "ST-123") throw new Error("unexpected CAS ticket"); return { issuer: "https://cas.example.test", subject: "campus-1001", email: "campus.user@example.test", username: "campus-user", groups: ["physics"], emailVerified: true }; },
+      logout: async () => undefined
+    };
+    const request = await testApplication(undefined, { serverAuth: true }, undefined, provider);
+    const start = await request("/api/auth/cas/login");
+    expect(start.status).toBe(302);
+    expect(start.headers.get("location")).toContain("cas.example.test/login");
+    const loginCookie = start.headers.get("set-cookie")?.split(";", 1)[0];
+    const callback = await request("/api/auth/cas/callback?ticket=ST-123&state=cas-state", { headers: { cookie: loginCookie! } });
+    expect(callback.status).toBe(302);
+    expect(callback.headers.get("location")).toBe("/?cas=complete");
+    const refreshCookie = callback.headers.get("set-cookie")?.split(";", 1)[0];
+    const session = await (await request("/api/auth/refresh", { method: "POST", headers: { cookie: refreshCookie! } })).json() as { user: { emailNormalized: string } };
+    expect(session.user.emailNormalized).toBe("campus.user@example.test");
+  });
+
+  test("limits administrator account controls to audited metadata and revokes sessions", async () => {
+    const request = await testApplication(undefined, { serverAuth: true });
+    const admin = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const user = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "managed-user@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const adminHeaders = { authorization: `Bearer ${admin.token}`, "content-type": "application/json" };
+    const userHeaders = { authorization: `Bearer ${user.token}`, "content-type": "application/json" };
+    expect((await request("/api/admin/users", { headers: userHeaders })).status).toBe(403);
+    const health = await request("/api/admin/health", { headers: adminHeaders });
+    expect(await health.json()).toMatchObject({ users: 2, activeSessions: 2 });
+    const users = await request("/api/admin/users", { headers: adminHeaders });
+    const listedUsers = await users.json() as Array<{ id: string; activeSessionCount: number }>;
+    expect(listedUsers).toEqual(expect.arrayContaining([expect.objectContaining({ id: user.user.id, activeSessionCount: 1 })]));
+    expect(JSON.stringify(listedUsers)).not.toContain("password");
+    expect((await request(`/api/admin/users/${user.user.id}/platform-role`, { method: "PATCH", headers: adminHeaders, body: JSON.stringify({ role: "support_auditor", reason: "Grant read-only operations audit access." }) })).status).toBe(200);
+    expect((await request("/api/admin/health", { headers: userHeaders })).status).toBe(200);
+    expect((await request("/api/admin/users", { headers: userHeaders })).status).toBe(200);
+    expect((await request("/api/admin/audit-events", { headers: userHeaders })).status).toBe(200);
+    expect(await (await request("/api/admin/identity-providers", { headers: userHeaders })).json()).toEqual({ oidc: { configured: false }, cas: { configured: false }, local: { configured: true } });
+    expect((await request(`/api/admin/users/${admin.user.id}/sessions/revoke`, { method: "POST", headers: userHeaders, body: JSON.stringify({ reason: "Support auditors must remain read-only." }) })).status).toBe(403);
+    expect((await request(`/api/admin/users/${user.user.id}/platform-role`, { method: "PATCH", headers: userHeaders, body: JSON.stringify({ role: "user", reason: "Support auditors must remain read-only." }) })).status).toBe(403);
+    expect((await request(`/api/admin/users/${admin.user.id}/platform-role`, { method: "PATCH", headers: adminHeaders, body: JSON.stringify({ role: "user", reason: "Verify the final administrator protection." }) })).status).toBe(409);
+    expect((await request(`/api/admin/users/${user.user.id}/disable`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ reason: "short" }) })).status).toBe(400);
+    expect((await request(`/api/admin/users/${admin.user.id}/disable`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ reason: "Prevent accidental administrator lockout." }) })).status).toBe(409);
+    expect((await request(`/api/admin/users/${user.user.id}/disable`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ reason: "Account requested closure through the research office." }) })).status).toBe(204);
+    expect((await request("/api/auth/me", { headers: userHeaders })).status).toBe(401);
+    const audits = await request("/api/admin/audit-events?limit=10", { headers: adminHeaders });
+    expect(await audits.json()).toEqual(expect.arrayContaining([expect.objectContaining({ action: "user.disable", resourceId: user.user.id, metadata: { reason: "Account requested closure through the research office." } })]));
+  });
+
+  test("enforces commenter permissions when server authentication is enabled", async () => {
+    const sentMail: Array<{ to: string; subject: string; text: string }> = [];
+    const request = await testApplication(undefined, { serverAuth: true }, undefined, undefined, { send: async (message) => { sentMail.push(message); } });
+    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "strict-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Strict permissions" }) })).json() as PaperProject;
+    const created = await request(`/api/projects/${project.id}/files`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ path: "paper.tex", content: "Hello world" }) });
+    expect(created.status).toBe(201);
+    const editorInvitation = await (await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "strict-editor@example.test", role: "editor" }) })).json() as { token: string };
+    const editor = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "strict-editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    expect((await request(`/api/invitations/${editorInvitation.token}/accept`, { method: "POST", headers: { authorization: `Bearer ${editor.token}` } })).status).toBe(200);
+    const editorHeaders = { authorization: `Bearer ${editor.token}`, "content-type": "application/json" };
+    expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ path: "restricted/raw-results.tex", content: "\\section{Secret Results}\nOur restricted method improves accuracy by ten percent." }) })).status).toBe(201);
+    const existingRoom = await (await request("/api/collaboration/tokens", { method: "POST", headers: editorHeaders, body: JSON.stringify({ projectId: project.id, path: "restricted/raw-results.tex" }) })).json() as { token: string };
+    const aclRule = await request(`/api/projects/${project.id}/acl/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ pathPrefix: "restricted", subjectType: "user", subjectId: editor.user.id, action: "read", effect: "deny" }) });
+    expect(aclRule.status).toBe(200);
+    const restrictedClaims = await (await request(`/api/projects/${project.id}/claim-scans`, { method: "POST", headers: ownerHeaders })).json() as PaperClaim[];
+    expect(restrictedClaims).toHaveLength(1);
+    expect((await request(`/api/projects/${project.id}/file?path=restricted/raw-results.tex`, { headers: editorHeaders })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/collaboration?path=restricted/raw-results.tex`, { headers: editorHeaders })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/collaboration`, { method: "POST", headers: editorHeaders, body: JSON.stringify({ path: "restricted/raw-results.tex", update: "AA==", baseVersion: 1 }) })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/collaboration/persist`, { method: "POST", headers: editorHeaders, body: JSON.stringify({ path: "restricted/raw-results.tex", documentId: "denied", update: "AA==" }) })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/collaboration/presence`, { method: "POST", headers: editorHeaders, body: JSON.stringify({ clientId: "denied-editor", path: "restricted/raw-results.tex" }) })).status).toBe(403);
+    expect((await request(`/api/collaboration/room-access?token=${encodeURIComponent(existingRoom.token)}`)).status).toBe(403);
+    expect((await request("/api/collaboration/tokens", { method: "POST", headers: editorHeaders, body: JSON.stringify({ projectId: project.id, path: "restricted/raw-results.tex" }) })).status).toBe(403);
+    const editorTree = await request(`/api/projects/${project.id}/files`, { headers: editorHeaders });
+    expect(JSON.stringify(await editorTree.json())).not.toContain("restricted");
+    expect(JSON.stringify(await (await request(`/api/projects/${project.id}/outline`, { headers: editorHeaders })).json())).not.toContain("Secret Results");
+    expect(JSON.stringify(await (await request(`/api/projects/${project.id}/claims`, { headers: editorHeaders })).json())).not.toContain("restricted method");
+    expect((await request(`/api/projects/${project.id}/claims/${restrictedClaims[0]!.id}`, { method: "PATCH", headers: editorHeaders, body: JSON.stringify({ reviewStatus: "unsupported" }) })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/comments`, { method: "POST", headers: editorHeaders, body: JSON.stringify({ path: "restricted/raw-results.tex", from: 0, to: 9, body: "Cannot discuss this restricted result." }) })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/file?path=restricted/raw-results.tex`, { headers: ownerHeaders })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}`, { method: "DELETE", headers: { authorization: `Bearer ${editor.token}` } })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}`, { method: "PATCH", headers: { authorization: `Bearer ${editor.token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "Editor rename" }) })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/shares`, { method: "POST", headers: { authorization: `Bearer ${editor.token}`, "content-type": "application/json" }, body: JSON.stringify({ permission: "read" }) })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/audit`, { headers: { authorization: `Bearer ${editor.token}` } })).status).toBe(403);
+    const audit = await request(`/api/projects/${project.id}/audit`, { headers: ownerHeaders });
+    expect((await audit.json() as Array<{ action: string }>).some((event) => event.action === "project.create")).toBe(true);
+    const invitation = await (await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "commenter@example.test", role: "commenter" }) })).json() as { token: string };
+    const commenter = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "commenter@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    expect((await request(`/api/invitations/${invitation.token}/accept`, { method: "POST", headers: { authorization: `Bearer ${commenter.token}` } })).status).toBe(200);
+    const commenterHeaders = { authorization: `Bearer ${commenter.token}`, "content-type": "application/json" };
+    expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ path: "reviews/reviewer-notes.tex", content: "Initial reviewer notes" }) })).status).toBe(201);
+    expect((await request(`/api/projects/${project.id}/acl/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ pathPrefix: "reviews/reviewer-notes.tex", subjectType: "user", subjectId: commenter.user.id, action: "edit", effect: "allow" }) })).status).toBe(200);
+    const reviewerNotes = await (await request(`/api/projects/${project.id}/file?path=reviews/reviewer-notes.tex`, { headers: ownerHeaders })).json() as FileContentResponse;
+    expect((await request(`/api/projects/${project.id}/file?path=reviews/reviewer-notes.tex`, { method: "PUT", headers: commenterHeaders, body: JSON.stringify({ content: "Reviewer edits this delegated note", baseVersion: reviewerNotes.file.version }) })).status).toBe(200);
+    const comment = await request(`/api/projects/${project.id}/comments`, { method: "POST", headers: commenterHeaders, body: JSON.stringify({ path: "paper.tex", from: 0, to: 5, body: `Please clarify this opening. @[Owner](${owner.user.id})` }) });
+    expect(comment.status).toBe(201);
+    const commentResult = await comment.json() as { id: string; messages: Array<{ mentionedUserIds?: string[] }> };
+    expect(commentResult).toMatchObject({ messages: [expect.objectContaining({ mentionedUserIds: [owner.user.id] })] });
+    const notifications = await request("/api/notifications", { headers: ownerHeaders });
+    expect(await notifications.json()).toEqual(expect.arrayContaining([expect.objectContaining({ type: "mention", projectId: project.id })]));
+    const preferences = await request("/api/notification-preferences", { headers: ownerHeaders });
+    expect(await preferences.json()).toEqual(expect.arrayContaining([expect.objectContaining({ type: "mention", inApp: true, email: false })]));
+    expect((await request("/api/notification-preferences/mention", { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ inApp: false, email: true }) })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/comments/${commentResult.id}/messages`, { method: "POST", headers: commenterHeaders, body: JSON.stringify({ body: `A further note for @[Owner](${owner.user.id})` }) })).status).toBe(201);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sentMail).toEqual([{ to: "strict-owner@example.test", subject: "FastWrite: You were mentioned in a comment", text: "You have a new FastWrite notification. Sign in to view it." }]);
+    const afterPreference = await request("/api/notifications", { headers: ownerHeaders });
+    expect((await afterPreference.json() as Array<{ type: string }>).filter((item) => item.type === "mention")).toHaveLength(1);
+    expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: commenterHeaders, body: JSON.stringify({ path: "blocked.tex", content: "No permission" }) })).status).toBe(403);
+  });
+
+  test("filters denied paths from Review context and rejects Revise selections before provider access", async () => {
+    let reviewedPaths: string[] = [];
+    let reviseCalls = 0;
+    let planCalls = 0;
+    const provider: AgentProvider = {
+      async revise(input) { reviseCalls += 1; return { replacement: input.selection.text, rationale: "unused" }; },
+      async planAgentTask() { planCalls += 1; return { steps: ["Inspect manuscript"], affectedFiles: ["main.tex"], risks: [], validation: [] }; },
+      async review(input) {
+        reviewedPaths = input.documents.map((document) => document.path);
+        const evidencePath = input.documents.find((document) => document.path === "restricted/findings.tex")?.path ?? "main.tex";
+        return { overallAssessment: "No concerns.", recommendation: "accept", strengths: [], weaknesses: [], nextSteps: [], issues: [{ category: "clarity", severity: "minor", title: "Clarify scope", rationale: "The current wording needs context.", impact: "Readers may misinterpret the scope.", suggestion: "Clarify the scope.", evidence: [{ path: evidencePath, section: null, line: null, excerpt: "finding", inferred: false }] }] };
+      }
+    };
+    const request = await testApplication(provider, { serverAuth: true });
+    await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "review-acl-bootstrap@example.test", password: "correct-horse-battery-staple" }) });
+    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "review-acl-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const reviewer = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "review-acl-editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const reviewerHeaders = { authorization: `Bearer ${reviewer.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Review ACL" }) })).json() as PaperProject;
+    const invitation = await (await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "review-acl-editor@example.test", role: "editor" }) })).json() as { token: string };
+    expect((await request(`/api/invitations/${invitation.token}/accept`, { method: "POST", headers: { authorization: `Bearer ${reviewer.token}` } })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ path: "restricted/findings.tex", content: "Restricted finding" }) })).status).toBe(201);
+    await request(`/api/projects/${project.id}/history/checkpoint`, { method: "POST", headers: ownerHeaders });
+    const checkpoint = (await (await request(`/api/projects/${project.id}/history?limit=1`, { headers: ownerHeaders })).json() as Array<{ oid: string }>)[0]!;
+    expect((await request(`/api/projects/${project.id}/acl/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ pathPrefix: "restricted", subjectType: "user", subjectId: reviewer.user.id, action: "run_ai", effect: "deny" }) })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/acl/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ pathPrefix: "restricted", subjectType: "user", subjectId: reviewer.user.id, action: "read", effect: "deny" }) })).status).toBe(200);
+
+    expect((await request(`/api/projects/${project.id}/reviews`, { method: "POST", headers: reviewerHeaders, body: JSON.stringify({ sourceOnly: true }) })).status).toBe(201);
+    expect(reviewedPaths).toContain("main.tex");
+    expect(reviewedPaths).not.toContain("restricted/findings.tex");
+    const ownerReview = await (await request(`/api/projects/${project.id}/reviews`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ sourceOnly: true }) })).json() as { report: { issues: Array<{ id: string }> } };
+    const reviewerReports = await (await request(`/api/projects/${project.id}/reviews`, { headers: reviewerHeaders })).json() as Array<{ snapshotId: string }>;
+    expect(reviewerReports).toHaveLength(1);
+    expect((await request(`/api/projects/${project.id}/review-issues/${ownerReview.report.issues[0]!.id}`, { method: "PATCH", headers: reviewerHeaders, body: JSON.stringify({ status: "dismissed" }) })).status).toBe(403);
+
+    const restricted = await (await request(`/api/projects/${project.id}/file?path=restricted/findings.tex`, { headers: ownerHeaders })).json() as FileContentResponse;
+    const revise = await request(`/api/projects/${project.id}/revisions`, { method: "POST", headers: reviewerHeaders, body: JSON.stringify({ command: "academic-polish", selection: { path: "restricted/findings.tex", text: restricted.content, from: 0, to: restricted.content.length, startLine: 1, endLine: 1, fileVersion: restricted.file.version } }) });
+    expect(revise.status).toBe(403);
+    expect(reviseCalls).toBe(0);
+    expect((await request(`/api/projects/${project.id}/agent-tasks`, { method: "POST", headers: reviewerHeaders, body: JSON.stringify({ objective: "Check the manuscript", scope: { type: "project" } }) })).status).toBe(403);
+    expect(planCalls).toBe(0);
+    expect((await request(`/api/projects/${project.id}/compile`, { method: "POST", headers: reviewerHeaders })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/export`, { headers: reviewerHeaders })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/history/${checkpoint.oid}/file?path=restricted/findings.tex`, { headers: reviewerHeaders })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/history/${checkpoint.oid}/side?path=restricted/findings.tex`, { headers: reviewerHeaders })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/history/${checkpoint.oid}/tree`, { headers: reviewerHeaders })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/history/${checkpoint.oid}`, { headers: reviewerHeaders })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/history-compare?baseRef=empty&targetRef=${checkpoint.oid}&path=restricted/findings.tex`, { headers: reviewerHeaders })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/history-page?path=restricted/findings.tex`, { headers: reviewerHeaders })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/completions`, { method: "POST", headers: reviewerHeaders, body: JSON.stringify({ path: "restricted/findings.tex", cursor: 0, fileVersion: 1, kind: "auto" }) })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/mcp/call`, { method: "POST", headers: reviewerHeaders, body: JSON.stringify({ name: "workspace.search", input: { query: "finding" } }) })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/mcp/call`, { method: "POST", headers: reviewerHeaders, body: JSON.stringify({ name: "latex.compile", input: {} }) })).status).toBe(403);
+    expect((await request(`/api/projects/${project.id}/acl/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ pathPrefix: "restricted", subjectType: "user", subjectId: owner.user.id, action: "read", effect: "deny" }) })).status).toBe(200);
+    expect((await request(`/api/projects/${project.id}/github-sync`, { method: "POST", headers: ownerHeaders })).status).toBe(403);
+  });
+
+  test("routes authenticated project access requests to an owner for approval", async () => {
+    const request = await testApplication(undefined, { serverAuth: true });
+    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "access-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const requester = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "access-requester@example.test", password: "correct-horse-battery-staple", displayName: "External reviewer" }) })).json() as { token: string; user: { id: string } };
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const requesterHeaders = { authorization: `Bearer ${requester.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Access request paper" }) })).json() as PaperProject;
+    const accessInfo = await request(`/api/access-requests/${project.id}`, { headers: requesterHeaders });
+    expect(await accessInfo.json()).toEqual({ id: project.id, name: "Access request paper" });
+    const created = await request(`/api/projects/${project.id}/access-requests`, { method: "POST", headers: requesterHeaders, body: JSON.stringify({ role: "editor", message: "I will check the experimental section." }) });
+    expect(created.status).toBe(201);
+    const accessRequest = await created.json() as { id: string; requestedRole: string };
+    expect(accessRequest.requestedRole).toBe("editor");
+    const pending = await request(`/api/projects/${project.id}/access-requests`, { headers: ownerHeaders });
+    expect((await pending.json() as Array<{ requester: { id: string; displayName: string; emailNormalized: string } }>)[0]?.requester).toEqual({ id: requester.user.id, displayName: "External reviewer", emailNormalized: "access-requester@example.test" });
+    const notifications = await request("/api/notifications", { headers: ownerHeaders });
+    expect(await notifications.json()).toEqual(expect.arrayContaining([expect.objectContaining({ type: "access_request", projectId: project.id, accessRequestId: accessRequest.id })]));
+    expect((await request(`/api/projects/${project.id}/access-requests/${accessRequest.id}/decision`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ approved: true }) })).status).toBe(200);
+    const members = await request(`/api/projects/${project.id}/members`, { headers: requesterHeaders });
+    expect(await members.json()).toMatchObject({ members: expect.arrayContaining([expect.objectContaining({ userId: requester.user.id, role: "editor" })]) });
+  });
+
+  test("creates a team-owned project and records an audited ownership transfer", async () => {
+    const request = await testApplication();
+    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const headers = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const team = await (await request("/api/teams", { method: "POST", headers, body: JSON.stringify({ name: "Paper lab" }) })).json() as { id: string };
+    const project = await (await request("/api/projects", { method: "POST", headers, body: JSON.stringify({ name: "Team paper", teamId: team.id }) })).json() as PaperProject;
+    expect(project.id).toEqual(expect.any(String));
+    const transferred = await request(`/api/projects/${project.id}/transfer`, { method: "POST", headers, body: JSON.stringify({ personalOwnerUserId: owner.user.id }) });
+    expect(transferred.status).toBe(200);
+    expect(await transferred.json()).toMatchObject({ personalOwnerUserId: owner.user.id, visibility: "private" });
+  });
+
+  test("lets a team owner manage members and pending invitations", async () => {
+    const request = await testApplication(undefined, { serverAuth: true });
+    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-governance-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const member = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-governance-member@example.test", password: "correct-horse-battery-staple", displayName: "Lab member" }) })).json() as { token: string; user: { id: string } };
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const team = await (await request("/api/teams", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Governance lab" }) })).json() as { id: string };
+    const expiry = new Date(Date.now() + 3 * 86400_000).toISOString();
+    const invitationResponse = await request(`/api/teams/${team.id}/invitations`, {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify({
+        email: "team-governance-member@example.test",
+        role: "member",
+        expiresAt: expiry,
+        message: "Please coordinate the reproducibility appendix.",
+      }),
+    });
+    expect(invitationResponse.status).toBe(201);
+    const invitation = await invitationResponse.json() as { token: string; invitation: { expiresAt: string; message?: string; tokenHash?: string } };
+    expect(invitation.invitation.message).toBe("Please coordinate the reproducibility appendix.");
+    expect(invitation.invitation.tokenHash).toBeUndefined();
+    expect(Date.parse(invitation.invitation.expiresAt)).toBeGreaterThan(Date.now() + 71 * 3_600_000);
+    expect((await request(`/api/teams/${team.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "bad-team-expiry@example.test", role: "member", expiresAt: new Date(Date.now() + 5_000).toISOString() }) })).status).toBe(400);
+    const pendingInvitations = await request(`/api/teams/${team.id}/invitations`, { headers: ownerHeaders });
+    const pendingInvitationsBody = await pendingInvitations.json() as Array<{ message?: string; tokenHash?: string }>;
+    expect(pendingInvitationsBody).toEqual(expect.arrayContaining([expect.objectContaining({ message: "Please coordinate the reproducibility appendix." })]));
+    expect(JSON.stringify(pendingInvitationsBody)).not.toContain("tokenHash");
+    expect((await request(`/api/invitations/${invitation.token}/accept`, { method: "POST", headers: { authorization: `Bearer ${member.token}` } })).status).toBe(200);
+    const roster = await request(`/api/teams/${team.id}/members`, { headers: ownerHeaders });
+    const rosterBody = await roster.json() as { canManage: boolean; members: Array<{ userId: string; role: string; user: { displayName: string } }> };
+    expect(rosterBody.canManage).toBe(true);
+    expect(rosterBody.members.some((item) => item.userId === member.user.id && item.role === "member" && item.user.displayName === "Lab member")).toBe(true);
+    expect((await request(`/api/teams/${team.id}/members/${member.user.id}`, { method: "PATCH", headers: ownerHeaders, body: JSON.stringify({ role: "admin" }) })).status).toBe(200);
+    const adminRoster = await request(`/api/teams/${team.id}/members`, { headers: { authorization: `Bearer ${member.token}` } });
+    expect(await adminRoster.json()).toMatchObject({ canManage: false, canManageInvitations: true });
+    expect((await request(`/api/teams/${team.id}/members/${member.user.id}`, { method: "DELETE", headers: ownerHeaders })).status).toBe(204);
+    const pending = await (await request(`/api/teams/${team.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "pending-team@example.test", role: "member" }) })).json() as { invitation: { id: string } };
+    expect((await request(`/api/invitations/${pending.invitation.id}`, { method: "DELETE", headers: ownerHeaders })).status).toBe(204);
+  });
+
+  test("stores scoped Harness secrets without returning them and resolves a versioned profile", async () => {
+    const request = await testApplication();
+    const registered = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "admin@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const headers = { authorization: `Bearer ${registered.token}`, "content-type": "application/json" };
+    const response = await request("/api/harness/profiles", { method: "POST", headers, body: JSON.stringify({ scope: "system", name: "System Codex", provider: "codex", model: "gpt-test", wireApi: "responses", allowedTools: ["workspace.read"], maxConcurrentRuns: 2, apiKey: "secret-never-returned" }) });
+    expect(response.status).toBe(201);
+    expect(JSON.stringify(await response.json())).not.toContain("secret-never-returned");
+    const effective = await request("/api/harness/effective", { headers });
+    expect(effective.status).toBe(200);
+    const resolved = await effective.json() as { fingerprint: string; hasSecret: boolean; sourceChain: unknown[] };
+    expect(resolved).toMatchObject({ hasSecret: true, fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(resolved.sourceChain).toHaveLength(1);
+  });
+
+  test("applies team Harness policy before allowing a personal profile for a team project", async () => {
+    const request = await testApplication();
+    const registered = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "policy@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const headers = { authorization: `Bearer ${registered.token}`, "content-type": "application/json" };
+    const team = await (await request("/api/teams", { method: "POST", headers, body: JSON.stringify({ name: "Policy lab" }) })).json() as { id: string };
+    const project = await (await request("/api/projects", { method: "POST", headers, body: JSON.stringify({ name: "Policy paper", teamId: team.id }) })).json() as PaperProject;
+    const teamProfile = await (await request("/api/harness/profiles", { method: "POST", headers, body: JSON.stringify({ scope: "team", teamId: team.id, name: "Team profile", provider: "codex", wireApi: "responses", allowedTools: ["workspace.read"], maxConcurrentRuns: 1 }) })).json() as { id: string };
+    const personalProfile = await (await request("/api/harness/profiles", { method: "POST", headers, body: JSON.stringify({ scope: "user", name: "Personal profile", provider: "codex", wireApi: "responses", allowedTools: ["workspace.read"], maxConcurrentRuns: 1 }) })).json() as { id: string };
+    const defaultResolved = await (await request(`/api/harness/effective?projectId=${project.id}`, { headers })).json() as { profileId: string };
+    expect(defaultResolved.profileId).toBe(teamProfile.id);
+    const policy = await request(`/api/teams/${team.id}/harness-policy`, { method: "PATCH", headers, body: JSON.stringify({ personalHarness: true, allowedProviders: ["codex"] }) });
+    expect(policy.status).toBe(200);
+    const personalResolved = await (await request(`/api/harness/effective?projectId=${project.id}`, { headers })).json() as { profileId: string };
+    expect(personalResolved.profileId).toBe(personalProfile.id);
+  });
+
   test("reports configured Harness capabilities and rejects unknown Harnesses", async () => {
     const request = await testApplication();
     const response = await request("/api/harnesses");
@@ -105,6 +560,42 @@ describe("workspace API", () => {
     expect(history[0]).toMatchObject({ oid: expect.any(String), message: expect.any(String), createdAt: expect.any(String) });
   });
 
+  test("history endpoints expose real changes, immutable identities, trees and missing-file metadata", async () => {
+    const request = await testApplication();
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "History API", mainDocument: "main.tex" }) })).json() as PaperProject;
+    const root = `/api/projects/${project.id}`;
+    const history = await (await request(`${root}/history`)).json() as Array<{ oid: string }>;
+    const initial = history[0]!.oid;
+    const opened = await (await request(`${root}/file?path=main.tex`)).json() as FileContentResponse;
+    await request(`${root}/file?path=main.tex`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "new content\n", baseVersion: opened.file.version }) });
+    await request(`${root}/history/checkpoint`, { method: "POST" });
+    const page = await (await request(`${root}/history-page?limit=1`)).json() as { commits: Array<{ oid: string; parentOids: string[] }>; nextCursor: string };
+    const latest = page.commits[0]!.oid;
+    expect(page.commits[0]!.parentOids).toEqual([initial]);
+    const summary = await (await request(`${root}/history/${latest}`)).json() as { paths: string[]; files: Array<{ path: string; status: string }> };
+    expect(summary.paths).toEqual(["main.tex"]);
+    expect(summary.files[0]).toMatchObject({ path: "main.tex", status: "M" });
+    const tree = await (await request(`${root}/history/${initial}/tree`)).json() as Array<{ path: string }>;
+    expect(tree.map(file => file.path)).toContain("main.tex");
+    const missing = await request(`${root}/history/${initial}/side?path=not-there.tex`);
+    expect(missing.status).toBe(200);
+    expect(await missing.json()).toMatchObject({ ref: initial, path: "not-there.tex", exists: false });
+    expect((await request(`${root}/history/${initial}/file?path=not-there.tex`)).status).toBe(404);
+    expect((await request(`${root}/history/${"0".repeat(40)}`)).status).toBe(404);
+    const comparison = await (await request(`${root}/history-compare?baseRef=${initial}&targetRef=${latest}&path=main.tex`)).json();
+    expect(comparison).toMatchObject({ original: { ref: initial, content: opened.content }, modified: { ref: latest, content: "new content\n" } });
+    const next = await (await request(`${root}/history-page?limit=1&cursor=${encodeURIComponent(page.nextCursor)}`)).json() as { commits: Array<{ oid: string }> };
+    expect(next.commits[0]!.oid).toBe(initial);
+    const current = await (await request(root)).json() as PaperProject;
+    const restore = (expectedVersion: number) => request(`${root}/history/${initial}/restore`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ paths: ["main.tex"], expectedVersion }) });
+    expect((await restore(current.version - 1)).status).toBe(409);
+    expect(((await (await request(`${root}/file?path=main.tex`)).json()) as FileContentResponse).content).toBe("new content\n");
+    const restored = await restore(current.version);
+    expect(restored.status).toBe(200);
+    expect(await restored.json()).toMatchObject({ oid: expect.any(String), restored: ["main.tex"] });
+    expect(((await (await request(`${root}/file?path=main.tex`)).json()) as FileContentResponse).content).toBe(opened.content);
+  });
+
   test("creates revocable read-only and comment share links without exposing stored tokens", async () => {
     const request = await testApplication();
     const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Shared paper", mainDocument: "main.tex", venue: "sp" }) })).json() as PaperProject;
@@ -133,6 +624,114 @@ describe("workspace API", () => {
     expect(merged.presence).toContainEqual(expect.objectContaining({ name: "Author" }));
     const file = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
     expect(file.content).toContain("collaborative edit");
+  });
+
+  test("persists the requested CRDT snapshot before acknowledging despite delayed or duplicate transport", async () => {
+    const request = await testApplication();
+    const headers = { "content-type": "application/json" };
+    const project = await (await request("/api/projects", { method: "POST", headers, body: JSON.stringify({ name: "CRDT persistence barrier" }) })).json() as PaperProject;
+    const initial = await (await request(`/api/projects/${project.id}/collaboration?path=main.tex`)).json() as { documentId: string; update: string };
+    const left = new Y.Doc(), right = new Y.Doc();
+    for (const doc of [left, right]) Y.applyUpdate(doc, Buffer.from(initial.update, "base64"));
+    left.getText("content").insert(0, "% left edit\n");
+    right.getText("content").insert(0, "% right edit\n");
+    const persist = (doc: Y.Doc, documentId = initial.documentId) => request(`/api/projects/${project.id}/collaboration/persist`, { method: "POST", headers, body: JSON.stringify({ path: "main.tex", documentId, update: Buffer.from(Y.encodeStateAsUpdate(doc)).toString("base64") }) });
+    // Neither edit has arrived over WS. Each HTTP request must carry its own barrier.
+    const results = await Promise.all([persist(left), persist(right)]);
+    expect(results.map(result => result.status)).toEqual([200, 200]);
+    const last = await results[1]!.json() as { update: string; content: string; fileVersion: number };
+    Y.applyUpdate(left, Buffer.from(last.update, "base64"));
+    expect(left.getText("content").toString()).toContain("% left edit");
+    expect(left.getText("content").toString()).toContain("% right edit");
+    const file = await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    expect(file.content).toBe(last.content);
+    expect(file.file.version).toBe(last.fileVersion);
+    // A delayed duplicate from either transport must not insert the text twice.
+    const duplicate = await (await persist(left)).json() as { content: string; fileVersion: number };
+    expect(duplicate.content).toBe(file.content);
+    expect(duplicate.fileVersion).toBe(file.file.version);
+    left.getText("content").delete(0, 1);
+    const deleted = await (await persist(left)).json() as { content: string };
+    expect(deleted.content).toBe(left.getText("content").toString());
+    expect((await persist(right, "replaced-document")).status).toBe(409);
+    expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toBe(deleted.content);
+    const incomplete = new Y.Doc();
+    incomplete.getText("content").insert(0, "dependency");
+    const vector = Y.encodeStateVector(incomplete);
+    incomplete.getText("content").insert(10, "late");
+    const invalid = await request(`/api/projects/${project.id}/collaboration/persist`, { method: "POST", headers, body: JSON.stringify({ path: "main.tex", documentId: initial.documentId, update: Buffer.from(Y.encodeStateAsUpdate(incomplete, vector)).toString("base64") }) });
+    expect(invalid.status).toBe(409);
+    expect((await invalid.json() as { error: { code: string } }).error.code).toBe("collaboration_update_incomplete");
+    expect((await request(`/api/projects/${project.id}/collaboration/persist`, { method: "POST", headers, body: JSON.stringify({ path: "main.tex", documentId: initial.documentId, update: "not-an-update" }) })).status).toBe(400);
+    expect((await (await request(`/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse).content).toBe(deleted.content);
+    incomplete.destroy();
+    left.destroy(); right.destroy();
+  });
+
+  test("restores persisted Yjs updates after an application restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "fastwrite-collaboration-restart-"));
+    temporaryDirectories.push(directory);
+    const first = await createApplication(directory);
+    const request = (app: Awaited<ReturnType<typeof createApplication>>, path: string, init?: RequestInit) => app(new Request(`http://fastwrite.test${path}`, init));
+    const project = await (await request(first, "/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Persistent CRDT" }) })).json() as PaperProject;
+    const initial = await (await request(first, `/api/projects/${project.id}/collaboration?path=main.tex`)).json() as { fileVersion: number; update: string; documentId: string };
+    const ydoc = new Y.Doc(); Y.applyUpdate(ydoc, Buffer.from(initial.update, "base64")); ydoc.getText("content").insert(ydoc.getText("content").length, "\n% survives restart");
+    expect((await request(first, `/api/projects/${project.id}/collaboration`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "main.tex", baseVersion: initial.fileVersion, update: Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString("base64") }) })).status).toBe(200);
+    ydoc.getText("content").insert(0, "% barrier survives restart\n");
+    expect((await request(first, `/api/projects/${project.id}/collaboration/persist`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "main.tex", documentId: initial.documentId, update: Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString("base64") }) })).status).toBe(200);
+    const second = await createApplication(directory);
+    const restored = await (await request(second, `/api/projects/${project.id}/collaboration?path=main.tex`)).json() as { documentId: string; update: string };
+    const rehydrated = new Y.Doc(); Y.applyUpdate(rehydrated, Buffer.from(restored.update, "base64"));
+    expect(restored.documentId).toBe(initial.documentId);
+    expect(rehydrated.getText("content").toString()).toContain("survives restart");
+    expect(rehydrated.getText("content").toString()).toContain("% barrier survives restart");
+    const disk = await (await request(second, `/api/projects/${project.id}/file?path=main.tex`)).json() as FileContentResponse;
+    expect(disk.content).toBe(rehydrated.getText("content").toString());
+  });
+
+  test("anchors account comments with Yjs relative positions across edits", async () => {
+    const request = await testApplication();
+    const account = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "comments@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const headers = { authorization: `Bearer ${account.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", { method: "POST", headers, body: JSON.stringify({ name: "Comment anchors" }) })).json() as PaperProject;
+    const opened = await (await request(`/api/projects/${project.id}/collaboration?path=main.tex`, { headers })).json() as { fileVersion: number; update: string };
+    const original = new Y.Doc(); Y.applyUpdate(original, Buffer.from(opened.update, "base64")); const marker = original.getText("content").toString().indexOf("Introduction");
+    const created = await request(`/api/projects/${project.id}/comments`, { method: "POST", headers, body: JSON.stringify({ path: "main.tex", from: marker, to: marker + "Introduction".length, body: "Clarify this section." }) });
+    expect(created.status).toBe(201);
+    const modified = new Y.Doc(); Y.applyUpdate(modified, Buffer.from(opened.update, "base64")); modified.getText("content").insert(0, "% earlier text\n");
+    expect((await request(`/api/projects/${project.id}/collaboration`, { method: "POST", headers, body: JSON.stringify({ path: "main.tex", baseVersion: opened.fileVersion, update: Buffer.from(Y.encodeStateAsUpdate(modified)).toString("base64") }) })).status).toBe(200);
+    const threads = await (await request(`/api/projects/${project.id}/comments`, { headers })).json() as Array<{ anchorStatus: string; from: number; to: number; quote: string; messages: unknown[] }>;
+    expect(threads).toEqual([expect.objectContaining({ anchorStatus: "attached", quote: "Introduction", from: marker + "% earlier text\n".length, messages: expect.arrayContaining([expect.objectContaining({ body: "Clarify this section." })]) })]);
+  });
+
+  test("issues collaboration access only to an authenticated project editor", async () => {
+    const request = await testApplication();
+    const account = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "collaboration-access@example.test", password: "correct-horse-battery-staple", displayName: "Trusted editor" }) })).json() as { token: string; user: { id: string } };
+    const headers = { authorization: `Bearer ${account.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", { method: "POST", headers, body: JSON.stringify({ name: "Access-controlled room" }) })).json() as PaperProject;
+    expect((await request(`/api/collaboration/access?projectId=${project.id}&path=main.tex`)).status).toBe(401);
+    const granted = await request(`/api/collaboration/access?projectId=${project.id}&path=main.tex`, { headers });
+    expect(granted.status).toBe(200);
+    expect(await granted.json()).toMatchObject({ projectId: project.id, path: "main.tex", displayName: "Trusted editor", color: expect.stringMatching(/^#/) });
+    const room = await request("/api/collaboration/tokens", { method: "POST", headers, body: JSON.stringify({ projectId: project.id, path: "main.tex" }) });
+    expect(room.status).toBe(200);
+    const grant = await room.json() as { token: string; expiresAt: string; scope: string };
+    expect(grant.token).toEqual(expect.any(String));
+    expect(grant.scope).toBe("write");
+    expect(Date.parse(grant.expiresAt)).toBeGreaterThan(Date.now() + 4 * 60_000);
+    const roomAccess = await request(`/api/collaboration/room-access?token=${encodeURIComponent(grant.token)}`);
+    expect(roomAccess.status).toBe(200);
+    expect(await roomAccess.json()).toMatchObject({ projectId: project.id, path: "main.tex", scope: "write", userId: account.user.id });
+    const roomState = await request("/api/collaboration/room-state", { headers: { "x-fastwrite-room-token": grant.token } });
+    expect(roomState.status).toBe(200);
+    const state = await roomState.json() as { update: string };
+    const ydoc = new Y.Doc(); Y.applyUpdate(ydoc, Buffer.from(state.update, "base64")); ydoc.getText("content").insert(ydoc.getText("content").length, "\n% room update");
+    const roomUpdate = await request("/api/collaboration/room-update", { method: "POST", headers: { "content-type": "application/json", "x-fastwrite-room-token": grant.token }, body: JSON.stringify({ update: Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString("base64") }) });
+    expect(roomUpdate.status).toBe(200);
+    const persisted = await request(`/api/projects/${project.id}/collaboration?path=main.tex`, { headers });
+    const restored = new Y.Doc(); Y.applyUpdate(restored, Buffer.from((await persisted.json() as { update: string }).update, "base64"));
+    expect(restored.getText("content").toString()).toContain("% room update");
+    expect((await request("/api/collaboration/room-access?token=not-a-room-token")).status).toBe(401);
   });
 
   test("rejects an unsupported runtime Agent wire API", async () => {
@@ -1531,5 +2130,66 @@ describe("workspace API", () => {
     expect(receipts[0]).toMatchObject({ bundleId, status: "failed" });
     expect(receipts[0]!.error).toContain("SHA-256");
     expect(await (await request(`/api/projects/${project.id}/research-works`)).json()).toHaveLength(0);
+  });
+
+  test("working status, stage, unstage and commit move a file through the index", async () => {
+    const request = await testApplication();
+    const registered = await request("/api/auth/register", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "git-owner@example.test", password: "correct-horse-battery-staple", displayName: "Owner" })
+    });
+    const owner = await registered.json() as { token: string };
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", {
+      method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Index integration" })
+    })).json() as PaperProject;
+    const base = `/api/projects/${project.id}`;
+
+    // Commit a baseline, then change the file again so there is something unstaged.
+    const opened = await (await request(`${base}/file?path=main.tex`, { headers: ownerHeaders })).json() as FileContentResponse;
+    await request(`${base}/file?path=main.tex`, {
+      method: "PUT", headers: ownerHeaders,
+      body: JSON.stringify({ content: "% first\n", baseVersion: opened.file.version })
+    });
+    await request(`${base}/history/checkpoint`, { method: "POST", headers: ownerHeaders });
+
+    const after = await (await request(`${base}/file?path=main.tex`, { headers: ownerHeaders })).json() as FileContentResponse;
+    await request(`${base}/file?path=main.tex`, {
+      method: "PUT", headers: ownerHeaders,
+      body: JSON.stringify({ content: "% second\n", baseVersion: after.file.version })
+    });
+
+    const before = await (await request(`${base}/history/working-status`, { headers: ownerHeaders })).json() as WorkingStatus;
+    expect(before.files.find((file) => file.path === "main.tex")).toMatchObject({ unstaged: "M", staged: null });
+
+    expect((await request(`${base}/history/stage`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ paths: ["main.tex"] }) })).status).toBe(204);
+    const staged = await (await request(`${base}/history/working-status`, { headers: ownerHeaders })).json() as WorkingStatus;
+    expect(staged.files.find((file) => file.path === "main.tex")).toMatchObject({ staged: "M", unstaged: null });
+
+    expect((await request(`${base}/history/unstage`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ paths: ["main.tex"] }) })).status).toBe(204);
+    expect((await request(`${base}/history/stage`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ paths: ["main.tex"] }) })).status).toBe(204);
+    expect((await request(`${base}/history/commit`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ message: "Edit main" }) })).status).toBe(201);
+
+    const cleared = await (await request(`${base}/history/working-status`, { headers: ownerHeaders })).json() as WorkingStatus;
+    expect(cleared.files.find((file) => file.path === "main.tex")).toBeUndefined();
+  });
+
+  test("stage refuses an empty path list and commit refuses an empty message", async () => {
+    const request = await testApplication();
+    const registered = await request("/api/auth/register", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "empty-guard@example.test", password: "correct-horse-battery-staple", displayName: "Owner" })
+    });
+    const owner = await registered.json() as { token: string };
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
+    const project = await (await request("/api/projects", {
+      method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Guards" })
+    })).json() as PaperProject;
+    const base = `/api/projects/${project.id}`;
+
+    expect((await request(`${base}/history/stage`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ paths: [] }) })).status).toBe(400);
+    expect((await request(`${base}/history/commit`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ message: "  " }) })).status).toBe(400);
+    // A body without the JSON content-type must be rejected before it reaches git.
+    expect((await request(`${base}/history/stage`, { method: "POST", headers: { authorization: ownerHeaders.authorization }, body: "{}" })).status).toBe(415);
   });
 });

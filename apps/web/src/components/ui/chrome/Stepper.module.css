@@ -1,0 +1,137 @@
+/*
+ * Three layouts, one vocabulary.
+ *
+ * The call sites this replaces disagreed about everything — status words
+ * (is-completed/is-running/is-failed against is-complete/is-current/is-error),
+ * whether a step had a secondary line, whether an unfinished step showed a
+ * number — so the caller normalises its own words to complete/current/error/
+ * pending and picks a layout. The status classes below are shared by all three
+ * variants; only the track differs.
+ */
+
+/* Shared row pieces. */
+.marker { flex: 0 0 auto; display: grid; place-items: center; }
+.label { min-width: 0; }
+.detail { font-size: 8px; text-transform: uppercase; }
+.value { flex: 0 0 auto; }
+
+/*
+ * Pending is the resting state every variant already paints, so there is no
+ * rule to add — but the class is emitted like the other three, so a row's
+ * status is legible in the DOM alone and the four stay distinguishable.
+ */
+.pending { color: var(--text-muted); }
+
+/* `list` — one card per step, stacked (AgentTaskDialog). */
+.list {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  list-style: none;
+  text-align: left;
+}
+
+.list .row {
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--slate-100);
+  color: var(--text-muted);
+}
+
+.list .row:last-child { border-bottom: 0; }
+.list .row svg { width: 11px; height: 11px; }
+.list .marker { width: 18px; height: 18px; border: 1px solid var(--slate-300); border-radius: 50%; }
+/* The shorthand resets the weight <strong> would otherwise carry — these labels
+   are monospace machine names, not emphasis. */
+.list .label { margin: 0; overflow: hidden; color: inherit; font: 9px/1.4 "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+.list .complete { color: var(--green-600); }
+.list .current { color: var(--blue-700); background: var(--blue-50); }
+.list .error { color: var(--red-600); background: var(--red-50); }
+
+/* `grid` — equal-width columns that wrap (ReviewDialog, DraftDialog). */
+.grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.grid .row {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 1px 5px;
+  padding: 7px 8px;
+  border: 1px solid var(--slate-200);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.grid .row svg { width: 12px; height: 12px; }
+/* The marker spans both lines so a detail line sits beside the glyph rather
+   than under it. */
+.grid .marker { grid-row: 1 / 3; }
+.grid .label { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+
+.grid .complete { border-color: #b8dfc7; color: var(--green-600); }
+.grid .current { border-color: var(--blue-200); background: var(--blue-50); color: var(--blue-700); }
+.grid .error { border-color: #efb5b5; background: var(--red-50); color: var(--red-600); }
+
+/* A numbered step needs a container for its number; a bare glyph does not. */
+.grid.numbered .marker { width: 20px; height: 20px; border: 1px solid var(--slate-300); border-radius: 50%; background: var(--surface); font-size: 8px; }
+.grid.numbered .complete .marker { border-color: #9bd6b5; background: var(--green-50); }
+.grid.numbered .current .marker { border-color: var(--blue-400); background: var(--blue-50); }
+.grid.numbered .error .marker { border-color: #eba7a7; background: var(--red-50); }
+
+/* A rule from one step to the next; `right` keeps it clear of the marker. */
+.grid.connectors .row:not(:last-child)::after { content: ""; position: absolute; top: 10px; right: 8px; width: calc(100% - 64px); height: 1px; background: var(--slate-200); }
+
+/* `chain` — inline glyph, label and count, for a legend (ResearchDialog). */
+.chain {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chain .row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  /* The page's translucent hairline, inlined rather than borrowed from a
+     --research-* token this component has no business knowing about. */
+  border: 1px solid rgba(120, 135, 160, .22);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.chain .row svg { width: 15px; height: 15px; }
+.chain .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chain .value { min-width: 22px; padding: 2px 5px; border-radius: 999px; background: var(--slate-100); color: var(--text); text-align: center; }
+
+.chain .complete { border-color: rgba(21, 128, 61, .3); color: var(--green-600); }
+.chain .complete .value { background: var(--green-50); color: var(--green-600); }

@@ -1,10 +1,8 @@
 import { useMemo, useRef, useState } from "react";
-import { FileArchive, FolderOpen, Github, UploadCloud } from "lucide-react";
 import type { PaperProject, PublicationTarget, TargetVenue, UploadManifestEntry } from "@fastwrite/shared";
 import { isIgnoredWorkspacePath, WRITING_PROFILES } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
-import { Button } from "../ui/Button";
-import { Dialog } from "../ui/Dialog";
+import { Button, Dialog, Field, FileField, Icon, icons, Select, TabBar, TextField } from "../ui";
 import { PublicationTargetFields } from "../ui/PublicationTargetFields";
 
 interface SelectedEntry extends UploadManifestEntry {
@@ -94,9 +92,8 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     inputRef.current?.click();
   };
 
-  const readFallbackFiles = async (fileList: FileList | null) => {
-    if (!fileList?.length) return;
-    const selectedFiles = Array.from(fileList);
+  const readFallbackFiles = async (selectedFiles: File[]) => {
+    if (!selectedFiles.length) return;
     const rootName = selectedFiles[0]?.webkitRelativePath.split("/")[0] || "Imported paper";
     const entries: SelectedEntry[] = selectedFiles.map((file) => ({
       path: file.webkitRelativePath.split("/").slice(1).join("/") || file.name,
@@ -204,7 +201,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
           <>
             <Button variant="ghost" onClick={close}>Cancel</Button>
             {(stage === "preview" || source === "github" || stage === "error") && (
-              <Button variant="primary" icon={<UploadCloud />} disabled={!canSubmit} onClick={runImport}>
+              <Button variant="primary" icon={<Icon name={icons.cloudUpload} />} disabled={!canSubmit} onClick={runImport}>
                 Import paper
               </Button>
             )}
@@ -212,18 +209,25 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
         )
       }
     >
-      <div className="source-tabs" role="tablist" aria-label="Import source">
-        <button className={source === "local" ? "is-active" : ""} role="tab" aria-selected={source === "local"} onClick={() => { setSource("local"); setStage(selection ? "preview" : "source"); setMessage(""); }}>
-          <FolderOpen aria-hidden="true" /> Local directory
-        </button>
-        <button className={source === "github" ? "is-active" : ""} role="tab" aria-selected={source === "github"} onClick={() => { setSource("github"); setStage("source"); setMessage(""); }}>
-          <Github aria-hidden="true" /> GitHub repository
-        </button>
-      </div>
+      <TabBar
+        className="source-tabs"
+        label="Import source"
+        activeId={source}
+        onSelect={(id) => {
+          const next = id as Source;
+          setSource(next);
+          setStage(next === "local" ? (selection ? "preview" : "source") : "source");
+          setMessage("");
+        }}
+        tabs={[
+          { id: "local", label: "Local directory", icon: <Icon name={icons.folderOpened} aria-hidden /> },
+          { id: "github", label: "GitHub repository", icon: <Icon name={icons.github} aria-hidden /> }
+        ]}
+      />
 
       {stage === "importing" ? (
         <div className="import-progress" aria-live="polite">
-          <div className="import-progress__icon"><UploadCloud /></div>
+          <div className="import-progress__icon"><Icon name={icons.cloudUpload} /></div>
           <h3>Importing your paper</h3>
           <p>{message}</p>
           <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
@@ -233,12 +237,12 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
         <>
           {!selection ? (
             <div className="directory-picker">
-              <button className="directory-dropzone" onClick={pickDirectory}>
-                <span className="directory-dropzone__icon"><FolderOpen /></span>
+              <Button variant="ghost" className="directory-dropzone" onClick={pickDirectory}>
+                <span className="directory-dropzone__icon"><Icon name={icons.folderOpened} /></span>
                 <strong>Choose paper directory</strong>
                 <span>LaTeX sources, bibliography, figures and style files are copied into FastWrite.</span>
-              </button>
-              <button className="directory-picker__fallback" onClick={() => inputRef.current?.click()}>Use browser folder upload</button>
+              </Button>
+              <Button variant="ghost" className="directory-picker__fallback" onClick={() => inputRef.current?.click()}>Use browser folder upload</Button>
             </div>
           ) : (
             <ImportPreview
@@ -257,33 +261,29 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
               onChooseAgain={pickDirectory}
             />
           )}
-          <input ref={inputRef} className="visually-hidden" type="file" multiple {...{ webkitdirectory: "" }} onChange={(event) => void readFallbackFiles(event.target.files)} />
+          <FileField inputRef={inputRef} hidden directory multiple label="Paper directory" onSelect={(selected) => void readFallbackFiles(selected)} />
         </>
       ) : (
         <div className="github-form">
-          <label className="field">
-            <span>Repository URL</span>
-            <input value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="https://github.com/owner/paper" autoFocus />
-          </label>
+          <Field label="Repository URL">
+            <TextField value={repository} onChange={setRepository} placeholder="https://github.com/owner/paper" autoFocus />
+          </Field>
           <div className="form-grid">
-            <label className="field">
-              <span>Branch, tag or commit <small>optional</small></span>
-              <input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="Default branch" />
-            </label>
-            <label className="field">
-              <span>Project name <small>optional</small></span>
-              <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Repository name" />
-            </label>
+            <Field label={<>Branch, tag or commit <small>optional</small></>}>
+              <TextField value={reference} onChange={setReference} placeholder="Default branch" />
+            </Field>
+            <Field label={<>Project name <small>optional</small></>}>
+              <TextField value={projectName} onChange={setProjectName} placeholder="Repository name" />
+            </Field>
           </div>
           <div className="form-grid">
-            <label className="field">
-              <span>Main document <small>auto-detect if empty</small></span>
-              <input value={mainDocument} onChange={(event) => setMainDocument(event.target.value)} placeholder="main.tex" />
-            </label>
+            <Field label={<>Main document <small>auto-detect if empty</small></>}>
+              <TextField value={mainDocument} onChange={setMainDocument} placeholder="main.tex" />
+            </Field>
             <VenueField value={venue} onChange={(value) => { setVenue(value); setPublicationTarget(undefined); }} />
           </div>
           <PublicationTargetFields profile={venue} value={publicationTarget} onChange={setPublicationTarget} />
-          <div className="import-note"><FileArchive /> The resolved commit is recorded with the imported project.</div>
+          <div className="import-note"><Icon name={icons.fileZip} /> The resolved commit is recorded with the imported project.</div>
         </div>
       )}
       {message && stage !== "importing" ? <div className="form-error" role="alert">{message}</div> : null}
@@ -309,20 +309,16 @@ function ImportPreview(props: {
   return (
     <div className="import-preview">
       <div className="import-summary">
-        <div><FolderOpen /><span><strong>{props.selection.name}</strong><small>{props.fileCount} files · {formatBytes(props.totalBytes)}</small></span></div>
+        <div><Icon name={icons.folderOpened} /><span><strong>{props.selection.name}</strong><small>{props.fileCount} files · {formatBytes(props.totalBytes)}</small></span></div>
         <Button variant="ghost" size="small" onClick={props.onChooseAgain}>Choose again</Button>
       </div>
       <div className="form-grid">
-        <label className="field">
-          <span>Project name</span>
-          <input value={props.projectName} onChange={(event) => props.onName(event.target.value)} />
-        </label>
-        <label className="field">
-          <span>Main document</span>
-          <select value={props.mainDocument} onChange={(event) => props.onMain(event.target.value)}>
-            {props.mainCandidates.map((path) => <option key={path} value={path}>{path}</option>)}
-          </select>
-        </label>
+        <Field label="Project name">
+          <TextField value={props.projectName} onChange={props.onName} />
+        </Field>
+        <Field label="Main document">
+          <Select aria-label="Main document" value={props.mainDocument} onChange={props.onMain} options={props.mainCandidates.map((path) => ({ value: path, label: path }))} />
+        </Field>
       </div>
       <VenueField value={props.venue} onChange={props.onVenue} />
       <PublicationTargetFields profile={props.venue} value={props.publicationTarget} onChange={props.onPublicationTarget} />
@@ -342,13 +338,9 @@ function ImportPreview(props: {
 
 function VenueField({ value, onChange }: { value: TargetVenue; onChange: (value: TargetVenue) => void }) {
   return (
-    <label className="field">
-      <span>Research domain</span>
-      <select value={value} onChange={(event) => onChange(event.target.value as TargetVenue)}>
-        {WRITING_PROFILES.map((profile) => <option key={profile.value} value={profile.value}>{profile.label}</option>)}
-      </select>
-      <small>The selected domain and publication target guide structure, language, revision, and review.</small>
-    </label>
+    <Field label="Research domain" hint="The selected domain and publication target guide structure, language, revision, and review.">
+      <Select aria-label="Research domain" value={value} onChange={(next) => onChange(next as TargetVenue)} options={WRITING_PROFILES.map((profile) => ({ value: profile.value, label: profile.label }))} />
+    </Field>
   );
 }
 

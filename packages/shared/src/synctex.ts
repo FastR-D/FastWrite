@@ -30,6 +30,7 @@ export interface SyncTexParseOptions {
 export interface SourceLocation {
   path: string;
   line: number;
+  column?: number;
 }
 
 export interface PdfLocation {

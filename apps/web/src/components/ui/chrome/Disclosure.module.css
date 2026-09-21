@@ -1,0 +1,37 @@
+.disclosure {
+  border: 1px solid var(--vscode-sideBarSectionHeader-border);
+  border-radius: 4px;
+  background: var(--vscode-editor-background);
+  overflow: hidden;
+}
+
+.disclosure[open] { background: var(--vscode-keybindingTable-rowsBackground); }
+
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
+  font-weight: 600;
+  list-style: none;
+}
+
+/* Hide the default triangle: the chevron below replaces it and rotates. */
+.summary::-webkit-details-marker { display: none; }
+.summary::marker { content: ""; }
+
+.summary:hover { background: var(--vscode-toolbar-hoverBackground); }
+.summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+
+.chevron { flex: 0 0 auto; transition: transform 120ms ease; }
+.disclosure[open] .chevron { transform: rotate(90deg); }
+
+.body { padding: 4px 10px 10px; font-family: var(--vscode-font-family); font-size: 11px; line-height: 1.5; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron { transition: none; }
+}

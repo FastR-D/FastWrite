@@ -1,0 +1,114 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 24, 38, 0.54);
+  backdrop-filter: blur(2px);
+}
+
+.dialog {
+  position: relative;
+  width: min(100%, 560px);
+  max-height: min(760px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(16, 29, 47, 0.22);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: var(--shadow-popover);
+  animation: dialog-in 150ms ease-out;
+}
+
+.small { width: min(100%, 420px); }
+.large { width: min(100%, 760px); }
+.wide { width: min(100%, 1060px); }
+.fullscreen { width: calc(100vw - 32px); height: calc(100vh - 32px); max-height: none; border-radius: 8px; }
+
+/*
+ * The default width lives on `.dialog` itself, so there is deliberately no
+ * `.medium` rule. The component therefore must not index into the module with
+ * the width name unconditionally: `styles["medium"]` is `undefined`, and
+ * interpolating that produces `class="undefined"`, which silently drops the
+ * variant styling instead of failing. See the class-name construction below.
+ */
+
+.header {
+  min-height: 68px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 17px 18px 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.header h2 { margin: 0; font-size: 16px; letter-spacing: -0.01em; }
+.header p { margin: 4px 0 0; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+
+.headerActions { display: flex; align-items: center; gap: 3px; }
+
+.body { min-height: 0; overflow: auto; padding: 20px; }
+
+.footer {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--slate-50);
+}
+
+.widthHandle {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  color: var(--slate-400);
+}
+
+.widthHandle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--blue-50);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.widthHandle:hover::before,
+.widthHandle:focus-visible::before { opacity: 0.75; }
+
+.widthHandle svg { position: relative; width: 10px; height: 18px; }
+
+.fullscreen .body { flex: 1; }
+
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.99); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog { animation: none; }
+}
+
+/* Narrow screens: the page-level media rule this replaces was a single-class
+   selector, so moving it here (rather than leaving it in styles.css) is what
+   keeps it winning — the module stylesheet is appended to <head> after
+   index.css, which flips a specificity tie in the module's favour. */
+@media (max-width: 760px) {
+  .backdrop { padding: 8px; }
+  .fullscreen { width: calc(100vw - 16px); height: calc(100vh - 16px); }
+}

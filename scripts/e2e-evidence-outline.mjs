@@ -1,0 +1,67 @@
+import { chromium } from '@playwright/test';
+import assert from 'node:assert/strict';
+const base = process.env.FASTWRITE_E2E_URL ?? 'http://127.0.0.1:3223';
+const browser = await chromium.launch({ channel: process.env.FASTWRITE_E2E_CHANNEL ?? 'chrome', headless: true });
+const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+await context.addInitScript(() => { localStorage.setItem('fastwrite.completion.enabled', 'false'); localStorage.setItem('fastwrite.collaboration.enabled', 'false'); localStorage.setItem('fastwrite.outline-mode', 'project'); });
+const page = await context.newPage(), errors = [];
+page.on('pageerror', error => errors.push(error.stack));
+const until = async (predicate, label) => { const end = Date.now() + 15000; while (!(await predicate())) { assert.ok(Date.now() < end, label); await page.waitForTimeout(40); } };
+/*
+ * The evidence filters are library Select components now, not native <select>.
+ * Playwright's selectOption() only works on a real <select>, so each becomes a
+ * click to open the listbox, then a click on the option.
+ */
+async function choose(scope, label, option) {
+  await scope.getByRole('combobox', { name: label }).click();
+  await scope.getByRole('option', { name: option, exact: true }).click();
+}
+
+try {
+  const project = await (await context.request.post(`${base}/api/projects`, { data: { name: 'Evidence and outline regression' } })).json();
+  const root = `${base}/api/projects/${project.id}`;
+  const first = await (await context.request.get(`${root}/file?path=main.tex`)).json();
+  const content = `\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nIntro text.\n\\section{Results}\nOur method improves accuracy by 12%.\n\\subsection{Analysis}\nDetails.\n\\end{document}\n`;
+  assert.ok((await context.request.put(`${root}/file?path=main.tex`, { data: { content, baseVersion: first.file.version } })).ok());
+  const scan = await context.request.post(`${root}/claim-scans`); assert.ok(scan.ok()); const claims = await scan.json();
+  const claim = claims.find(item => item.normalizedText.includes('improves accuracy')); assert.ok(claim);
+  await page.goto(`${base}/projects/${project.id}`);
+  const source = page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true }); await source.waitFor();
+  const nav = page.getByRole('navigation', { name: 'Workspace views' });
+  await nav.getByRole('button', { name: 'Evidence', exact: true }).click();
+  const evidence = page.locator('#sidebar-evidence');
+  await evidence.locator('.claim-ledger-item').filter({ hasText: 'improves accuracy' }).waitFor();
+  const allClaims = await evidence.locator('.claim-ledger-item').count();
+  await choose(evidence, 'Evidence status', 'Needs review');
+  await choose(evidence, 'Evidence source', 'main.tex');
+  await page.waitForTimeout(150);
+  assert.ok(await evidence.locator('.claim-ledger-item').count() <= allClaims, 'status filter narrows or preserves claim results');
+  await choose(evidence, 'Evidence status', 'All');
+  await choose(evidence, 'Evidence source', 'All files');
+  await evidence.locator('.claim-ledger-item').filter({ hasText: 'improves accuracy' }).waitFor();
+  await nav.getByRole('button', { name: 'Outline', exact: true }).click();
+  await page.getByText('Saved workspace version', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Results', exact: true }).click();
+  await until(async () => (await page.locator('.workbench-status').innerText()).includes('Ln 5'), 'saved outline uses exact heading line');
+  await page.getByRole('button', { name: 'Current document', exact: true }).click();
+  await page.getByText('Current buffer · local parse', { exact: true }).waitFor();
+  await source.focus(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('\\section{Local unsaved}\n');
+  await page.getByRole('button', { name: 'Local unsaved', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Project structure', exact: true }).click();
+  await page.locator('.outline-tree').getByRole('button', { name: 'Local unsaved', exact: true }).waitFor({ state: 'detached' });
+  await nav.getByRole('button', { name: 'Evidence', exact: true }).click();
+  const claimButton = page.locator('.claim-ledger-item').filter({ hasText: 'improves accuracy' }); await claimButton.waitFor();
+  const shifted = `% SERVER_PREFIX\n${content}`;
+  const current = await (await context.request.get(`${root}/file?path=main.tex`)).json();
+  assert.ok((await context.request.put(`${root}/file?path=main.tex`, { data: { content: shifted, baseVersion: current.file.version } })).ok());
+  // The stale anchor must reanchor and select the exact claim, not jump to line 1.
+  await claimButton.click();
+  await until(async () => (await page.locator('.workbench-status').innerText()).includes('Ln 6'), 'claim reanchor navigates to shifted exact text');
+  await until(async () => (await page.locator('.monaco-editor .selected-text').count()) > 0, 'claim text receives Monaco selection');
+  const refreshed = await (await context.request.get(`${root}/claims`)).json();
+  const updated = refreshed.find(item => item.id === claim.id);
+  assert.equal(updated.anchorStatus, 'reanchored');
+  assert.equal(updated.anchor.fileVersion, (await (await context.request.get(`${root}/file?path=main.tex`)).json()).file.version);
+  assert.deepEqual(errors, []);
+  console.log(JSON.stringify({ result: 'pass', projectId: project.id, claimId: claim.id, cases: ['project outline saved semantics', 'current buffer outline', 'outline cursor navigation', 'versioned claim reanchor and selection'] }));
+} finally { await browser.close(); }

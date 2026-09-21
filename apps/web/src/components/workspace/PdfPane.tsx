@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { AlertTriangle, CheckCircle2, Download, FileOutput, LoaderCircle, LocateFixed, Maximize2, Minimize2, OctagonX, RotateCw, Scan, Search, Wrench, X, ZoomIn, ZoomOut } from "lucide-react";
-import { parseLatexDiagnostics, parseSyncTex, pdfToSource, sourceToPdf, type PdfLocation, type SourceLocation, type SyncTexDocument, type WorkspaceTreeNode } from "@fastwrite/shared";
-import { Button, IconButton } from "../ui/Button";
+import { parseLatexDiagnostics, parseSyncTex, pdfToSource, sourceToPdf, type LatexDiagnostic, type PdfLocation, type SourceLocation, type SyncTexDocument, type WorkspaceTreeNode } from "@fastwrite/shared";
+/*
+ * Every IconButton here comes from the library, and the toolbar's dark-strip
+ * metrics reach them through `.pdf-toolbar__controls button` in styles.css —
+ * a descendant selector outranks the component's own hashed rule.
+ */
+import { Button, Icon, IconButton, TextField, icons } from "../ui";
 import { api } from "../../api/client";
 import { fitPdfPageScale, MAX_PDF_SCALE, MIN_PDF_SCALE } from "./pdfScale";
 import { compilerLogExcerpt, shouldAutoCompile, type CompileFailureContext } from "./compileRepair";
@@ -13,9 +17,11 @@ import "react-pdf/dist/Page/TextLayer.css";
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export type CompileState = "idle" | "loading" | "compiling" | "success" | "error";
-export interface CompileStateReport { state: CompileState; compiledVersion: number | null; renderedPages?: number; failure?: CompileFailureContext; pageText?: string[] }
+export interface CompileStateReport { state: CompileState; compiledVersion: number | null; renderedPages?: number; failure?: CompileFailureContext; diagnostics: LatexDiagnostic[]; log: string; progress: string; pageText?: string[] }
 
-export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceLocation, compileRequest, onCompileState, onFixWithAgent, onSyncToSource }: { projectId: string; projectVersion: number; mainDocument: string; tree: WorkspaceTreeNode[]; sourceLocation: SourceLocation | null; compileRequest: number; onCompileState: (report: CompileStateReport) => void; onFixWithAgent: (failure: CompileFailureContext) => void; onSyncToSource: (location: SourceLocation) => void }) {
+export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile, mainDocument, tree, sourceLocation, compileRequest, onCompileState, onFixWithAgent, onSyncToSource }: { projectId: string; projectVersion: number; buffersDirty: boolean; beforeCompile: () => Promise<void>; mainDocument: string; tree: WorkspaceTreeNode[]; sourceLocation: SourceLocation | null; compileRequest: number; onCompileState: (report: CompileStateReport) => void; onFixWithAgent: (failure: CompileFailureContext) => void; onSyncToSource: (location: SourceLocation) => void }) {
+  const beforeCompileRef = useRef(beforeCompile);
+  beforeCompileRef.current = beforeCompile;
   const paneRef = useRef<HTMLElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef(new Map<number, HTMLDivElement>());
@@ -27,6 +33,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
   const pdfUrlRef = useRef<string | null>(null);
   const pageDimensions = useRef(new Map<number, { width: number; height: number }>());
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState("");
   const [pageCount, setPageCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [scale, setScale] = useState(1);
@@ -35,7 +42,6 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
   const [progress, setProgress] = useState("Ready to compile");
   const [resourcePercent, setResourcePercent] = useState<number | null>(null);
   const [log, setLog] = useState("");
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [syncTex, setSyncTex] = useState<SyncTexDocument | null>(null);
   const [compiledVersion, setCompiledVersion] = useState<number | null>(null);
   const [pageText, setPageText] = useState<string[]>([]);
@@ -54,7 +60,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
     diagnostics: visibleDiagnostics.map(({ severity, message, path, line }) => ({ severity, message, ...(path ? { path } : {}), ...(line ? { line } : {}) })),
     logExcerpt: compilerLogExcerpt(log || progress)
   } : undefined, [log, mainDocument, progress, state, visibleDiagnostics]);
-  const activeSyncTex = compiledVersion === projectVersion ? syncTex : null;
+  const activeSyncTex = !buffersDirty && compiledVersion === projectVersion ? syncTex : null;
   const downloadPdf = useCallback(() => {
     if (!pdfUrl) return;
     const link = document.createElement("a"); link.href = pdfUrl;
@@ -88,7 +94,10 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
     setProgress("Preparing workspace snapshot…");
     setResourcePercent(null);
     setLog("");
+    setPdfError("");
     try {
+      await beforeCompileRef.current();
+      if (controller.signal.aborted) return;
       const result = await api.compiler.compileOnServer(projectId, controller.signal).then((server) => ({ ...server, pdf: server.pdfBase64 ? base64ToBytes(server.pdfBase64) : undefined }));
       if (controller.signal.aborted) {
         if (abortRef.current === controller) {
@@ -99,6 +108,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
         return;
       }
       runningRef.current = false;
+      setLastAttemptedVersion(result.projectVersion);
       setLog(result.log);
       setCompiledWorkspacePaths(result.workspacePaths);
       setSyncTex(typeof result.syncTexData === "string" ? parseSyncTex(result.syncTexData, { mainDocument, workspacePaths: result.workspacePaths }) : null);
@@ -106,21 +116,24 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
         setState("error");
         setResourcePercent(null);
         setProgress(result.error || "Compilation failed");
-        setDiagnosticsOpen(true);
-        void api.compileResults.record(projectId, { projectVersion, status: "error", summary: result.error || "Compilation failed" }).catch(() => undefined);
+        void api.compileResults.record(projectId, { projectVersion: result.projectVersion, status: "error", summary: result.error || "Compilation failed" }).catch(() => undefined);
         return;
       }
       const nextUrl = URL.createObjectURL(new Blob([new Uint8Array(result.pdf)], { type: "application/pdf" }));
       if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
       pdfUrlRef.current = nextUrl;
       setPdfUrl(nextUrl);
-      await api.compileResults.record(projectId, { projectVersion: result.projectVersion ?? projectVersion, status: "success", summary: "Compiled successfully with local LaTeX" });
+      setPageCount(0);
+      pageDimensions.current.clear();
+      await api.compileResults.record(projectId, { projectVersion: result.projectVersion, status: "success", summary: "Compiled successfully with local LaTeX" });
+      if (controller.signal.aborted || abortRef.current !== controller) return;
       setPageText(result.pageText ?? []);
-      setCompiledVersion(result.projectVersion ?? projectVersion);
+      setCompiledVersion(result.projectVersion);
       setState("success");
       setResourcePercent(null);
       setProgress("Compiled successfully");
     } catch (error) {
+      if (abortRef.current !== controller) return;
       if ((error as DOMException).name === "AbortError") {
         if (abortRef.current === controller) {
           setState(pdfUrlRef.current ? "success" : "idle");
@@ -133,8 +146,7 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
       setState("error");
       setResourcePercent(null);
       setProgress(error instanceof Error ? error.message : "Compilation failed");
-      setDiagnosticsOpen(true);
-      void api.compileResults.record(projectId, { projectVersion, status: "error", summary: error instanceof Error ? error.message : "Compilation failed" }).catch(() => undefined);
+
     }
   }, [mainDocument, projectId, projectVersion]);
 
@@ -144,16 +156,16 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
   }, [compile]);
 
   useEffect(() => {
-    if (!shouldAutoCompile(hasCompiledRef.current, lastAttemptedVersion, projectVersion)) return;
+    if (buffersDirty || !shouldAutoCompile(hasCompiledRef.current, lastAttemptedVersion, projectVersion)) return;
     if (autoCompileTimerRef.current) window.clearTimeout(autoCompileTimerRef.current);
     setProgress("Saved changes · waiting to recompile…");
     autoCompileTimerRef.current = window.setTimeout(() => void compile(), 1_200);
     return () => {
       if (autoCompileTimerRef.current) window.clearTimeout(autoCompileTimerRef.current);
     };
-  }, [compile, lastAttemptedVersion, projectVersion]);
+  }, [buffersDirty, compile, lastAttemptedVersion, projectVersion]);
 
-  useEffect(() => { onCompileState({ state, compiledVersion, pageText, ...(pageCount > 0 ? { renderedPages: pageCount } : {}), ...(failure ? { failure } : {}) }); }, [compiledVersion, failure, onCompileState, pageCount, pageText, state]);
+  useEffect(() => { onCompileState({ state, compiledVersion, pageText, diagnostics: visibleDiagnostics, log, progress, ...(pageCount > 0 ? { renderedPages: pageCount } : {}), ...(failure ? { failure } : {}) }); }, [compiledVersion, failure, log, onCompileState, pageCount, pageText, progress, state, visibleDiagnostics]);
 
   useEffect(() => {
     if (compileRequest === compileRequestRef.current) return;
@@ -226,27 +238,27 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
   return (
     <section ref={paneRef} className="pdf-pane" aria-label="PDF preview">
       <header className="pdf-toolbar">
-        <div className="pdf-toolbar__title"><FileOutput /><span>PDF Preview</span></div>
+        <div className="pdf-toolbar__title"><Icon name={icons.filePdf} /><span>PDF Preview</span></div>
         <div className="pdf-toolbar__controls" aria-label="PDF controls">
-          {pageCount > 0 ? <><input id="pdf-current-page" name="pdf-current-page" className="pdf-page-input" aria-label="Current PDF page" value={currentPage} onChange={(event) => scrollToPage(Number(event.target.value))} /><span className="pdf-page-count">/ {pageCount}</span><span className="toolbar-separator" /></> : null}
-          <IconButton label="Zoom out" icon={<ZoomOut />} disabled={!pdfUrl || scale <= MIN_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.max(MIN_PDF_SCALE, value - .1)); }} />
+          {pageCount > 0 ? <><TextField id="pdf-current-page" name="pdf-current-page" className="pdf-page-input" aria-label="Current PDF page" value={String(currentPage)} onChange={(value) => scrollToPage(Number(value))} /><span className="pdf-page-count">/ {pageCount}</span><span className="toolbar-separator" /></> : null}
+          <IconButton label="Zoom out" icon={<Icon name={icons.zoomOut} />} disabled={!pdfUrl || scale <= MIN_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.max(MIN_PDF_SCALE, value - .1)); }} />
           <span className="pdf-toolbar__zoom">{Math.round(scale * 100)}%</span>
-          <IconButton label="Zoom in" icon={<ZoomIn />} disabled={!pdfUrl || scale >= MAX_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.min(MAX_PDF_SCALE, value + .1)); }} />
+          <IconButton label="Zoom in" icon={<Icon name={icons.zoomIn} />} disabled={!pdfUrl || scale >= MAX_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.min(MAX_PDF_SCALE, value + .1)); }} />
           <span className="toolbar-separator" />
-          <IconButton label="Fit PDF page to panel" icon={<Scan />} disabled={!pdfUrl} onClick={() => { setFitToPanel(true); window.requestAnimationFrame(applyFitToPanel); }} />
-          <IconButton label="Download PDF" icon={<Download />} disabled={!pdfUrl} onClick={downloadPdf} />
-          <IconButton label="Locate editor selection in PDF" icon={<LocateFixed />} disabled={!activeSyncTex || !sourceLocation || pageCount === 0} onClick={locateSource} />
-          <IconButton label={fullscreen ? "Exit PDF fullscreen" : "Enter PDF fullscreen"} icon={fullscreen ? <Minimize2 /> : <Maximize2 />} onClick={toggleFullscreen} />
-          <IconButton label="Search PDF" icon={<Search />} disabled />
+          <IconButton label="Fit PDF page to panel" icon={<Icon name={icons.arrowBoth} />} disabled={!pdfUrl} onClick={() => { setFitToPanel(true); window.requestAnimationFrame(applyFitToPanel); }} />
+          <IconButton label="Download PDF" icon={<Icon name={icons.cloudDownload} />} disabled={!pdfUrl} onClick={downloadPdf} />
+          <IconButton label="Locate editor selection in PDF" icon={<Icon name={icons.target} />} disabled={!activeSyncTex || !sourceLocation || pageCount === 0} onClick={locateSource} />
+          <IconButton label={fullscreen ? "Exit PDF fullscreen" : "Enter PDF fullscreen"} icon={fullscreen ? <Icon name={icons.screenNormal} /> : <Icon name={icons.screenFull} />} onClick={toggleFullscreen} />
+          <IconButton label="Search PDF" icon={<Icon name={icons.search} />} disabled />
         </div>
       </header>
       <div className={`compile-strip compile-strip--${state}`} aria-live="polite">
         {resourcePercent !== null ? <div className="compile-strip__meter" role="progressbar" aria-label="Compiler resource loading" aria-valuemin={0} aria-valuemax={100} aria-valuenow={resourcePercent} style={{ width: `${resourcePercent}%` }} /> : null}
         <CompileStatusIcon state={state} />
-        <span>{progress}</span>
-        {failure ? <button className="compile-fix-agent" onClick={() => onFixWithAgent(failure)}><Wrench />Fix with Agent</button> : null}
-        {isRunning ? <button onClick={cancel}>Cancel</button> : <button onClick={() => void compile()}>{pdfUrl ? "Recompile" : "Compile"}</button>}
-        {log ? <button onClick={() => setDiagnosticsOpen((value) => !value)}>{diagnosticLabel}</button> : null}
+        <span>{buffersDirty ? "Unsaved changes · PDF mapping is stale" : progress}</span>
+        {failure ? <Button variant="ghost" className="compile-fix-agent" icon={<Icon name={icons.tools} />} onClick={() => onFixWithAgent(failure)}>Fix with Agent</Button> : null}
+        {isRunning ? <Button variant="ghost" onClick={cancel}>Cancel</Button> : <Button variant="ghost" onClick={() => void compile()}>{buffersDirty ? "Save and compile" : pdfUrl ? "Recompile" : "Compile"}</Button>}
+        {log ? <span className="compile-strip__diagnostics">{diagnosticLabel}</span> : null}
       </div>
       <div ref={containerRef} className={`pdf-canvas ${pdfUrl ? "" : "pdf-canvas--empty"}`} role="region" aria-label="PDF preview" tabIndex={0} onScroll={(event) => {
         const top = event.currentTarget.scrollTop;
@@ -259,7 +271,14 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
         setCurrentPage(closest);
       }}>
         {pdfUrl ? (
-          <Document file={pdfUrl} loading={<PdfLoading label="Loading PDF…" />} error={<PdfError label="The compiled PDF could not be displayed." />} onLoadSuccess={({ numPages }) => { setPageCount(numPages); setCurrentPage(1); }}>
+          <Document
+            file={pdfUrl}
+            loading={<PdfLoading label="Loading PDF…" />}
+            error={<PdfError label={pdfError || "The compiled PDF could not be displayed."} />}
+            onLoadSuccess={({ numPages }) => { setPdfError(""); setPageCount(numPages); setCurrentPage(1); }}
+            onLoadError={(error) => { const message = error instanceof Error ? error.message : String(error); setPdfError(message); setProgress(`PDF preview failed: ${message}`); setLog((current) => current ? `${current}\n\nPDF preview error: ${message}` : `PDF preview error: ${message}`); }}
+            onSourceError={(error) => { const message = error instanceof Error ? error.message : String(error); setPdfError(message); setProgress(`PDF source failed: ${message}`); }}
+          >
             {Array.from({ length: pageCount }, (_, index) => index + 1).map((page) => (
               <div className="pdf-page" key={page} title={activeSyncTex ? "Double-click to open source" : undefined} onDoubleClick={(event) => locatePdfPoint(event, page)} ref={(element) => { if (element) pageRefs.current.set(page, element); else pageRefs.current.delete(page); }}>
                 <Page pageNumber={page} scale={scale} renderTextLayer renderAnnotationLayer onLoadSuccess={(loadedPage) => { const viewport = loadedPage.getViewport({ scale: 1 }); pageDimensions.current.set(page, { width: viewport.width, height: viewport.height }); if (page === 1 && fitToPanel) window.requestAnimationFrame(applyFitToPanel); }} />
@@ -269,26 +288,25 @@ export function PdfPane({ projectId, projectVersion, mainDocument, tree, sourceL
           </Document>
         ) : (
           <div className="pdf-empty">
-            <span className={`pdf-empty__icon ${state === "error" ? "pdf-empty__icon--error" : ""}`}>{state === "error" ? <OctagonX /> : <FileOutput />}</span>
+            <span className={`pdf-empty__icon ${state === "error" ? "pdf-empty__icon--error" : ""}`}>{state === "error" ? <Icon name={icons.error} /> : <Icon name={icons.filePdf} />}</span>
             <h3>{state === "error" ? "Compilation failed" : "Compile your paper"}</h3>
             <p>{state === "error" ? progress : <><code>{mainDocument}</code> will compile with the local LaTeX toolchain.</>}</p>
-            <Button variant="primary" icon={<RotateCw />} loading={isRunning} onClick={() => void compile()}>{isRunning ? "Compiling" : "Compile PDF"}</Button>
+            <Button variant="primary" icon={<Icon name={icons.refresh} />} loading={isRunning} onClick={() => void compile()}>{isRunning ? "Compiling" : "Compile PDF"}</Button>
           </div>
         )}
       </div>
-      {diagnosticsOpen ? <aside className="pdf-diagnostics"><header><div>{state === "error" ? <OctagonX /> : <FileOutput />}<span>{visibleDiagnostics.length > 0 ? "LaTeX diagnostics" : "Compilation log"}</span></div><IconButton label="Close compilation log" icon={<X />} onClick={() => setDiagnosticsOpen(false)} /></header>{visibleDiagnostics.length > 0 ? <div className="diagnostic-list">{visibleDiagnostics.map((diagnostic) => <button key={diagnostic.id} className={`diagnostic-row diagnostic-row--${diagnostic.severity}`} disabled={!diagnostic.path || !diagnostic.line} onClick={() => diagnostic.path && diagnostic.line && onSyncToSource({ path: diagnostic.path, line: diagnostic.line })}><AlertTriangle /><span><strong>{diagnostic.message}</strong>{diagnostic.path ? <code>{diagnostic.path}{diagnostic.line ? `:${diagnostic.line}` : ""}</code> : null}</span></button>)}</div> : null}<details className="compile-log-details" open={visibleDiagnostics.length === 0}><summary>Raw compiler log</summary><pre>{log || progress}</pre></details></aside> : null}
     </section>
   );
 }
 
-function PdfLoading({ label }: { label: string }) { return <div className="pdf-document-state"><RotateCw className="spin" /><span>{label}</span></div>; }
-function PdfError({ label }: { label: string }) { return <div className="pdf-document-state pdf-document-state--error"><OctagonX /><span>{label}</span></div>; }
+function PdfLoading({ label }: { label: string }) { return <div className="pdf-document-state"><Icon name={icons.refresh} spin /><span>{label}</span></div>; }
+function PdfError({ label }: { label: string }) { return <div className="pdf-document-state pdf-document-state--error"><Icon name={icons.error} /><span>{label}</span></div>; }
 
 function CompileStatusIcon({ state }: { state: CompileState }) {
-  if (state === "error") return <OctagonX className="compile-status-icon compile-status-icon--error" aria-label="Compilation error" />;
-  if (state === "success") return <CheckCircle2 className="compile-status-icon" aria-hidden="true" />;
-  if (state === "loading" || state === "compiling") return <LoaderCircle className="compile-status-icon spin" aria-hidden="true" />;
-  return <FileOutput className="compile-status-icon" aria-hidden="true" />;
+  if (state === "error") return <Icon name={icons.error} className="compile-status-icon compile-status-icon--error" aria-label="Compilation error" />;
+  if (state === "success") return <Icon name={icons.passFilled} className="compile-status-icon" />;
+  if (state === "loading" || state === "compiling") return <Icon name={icons.loading} className="compile-status-icon" spin />;
+  return <Icon name={icons.filePdf} className="compile-status-icon" />;
 }
 
 function flattenWorkspacePaths(nodes: WorkspaceTreeNode[]): string[] {

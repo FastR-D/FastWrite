@@ -1,0 +1,57 @@
+.wrapper { display: flex; flex-direction: column; gap: 10px; }
+
+/*
+ * The filter matches the shared text-input look rather than the browser
+ * default, so it does not read as a different kind of control than a TextField
+ * sitting in the same dialog.
+ */
+.filter {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 4px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+.filter:focus { border-color: var(--vscode-focusBorder); box-shadow: var(--focus); outline: none; }
+.filter::placeholder { color: var(--text-muted); }
+
+/*
+ * Moved from styles.css. The `.list .row` scoping is load-bearing: the row
+ * metrics are what keep a dense list readable.
+ */
+.list { max-height: 360px; overflow: auto; display: flex; flex-direction: column; }
+
+.list .row {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  height: auto;
+  text-align: left;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  border-radius: 0;
+  justify-content: flex-start;
+  cursor: pointer;
+}
+
+/*
+ * The highlight is declared twice on purpose: once off the attribute, which is
+ * the state of record, and once off the class. The class rule exists so the
+ * module actually declares `.active` — interpolating an undeclared module name
+ * yields the string "undefined" and leaks class="undefined" into the DOM.
+ */
+.list button[aria-selected="true"], .list .row.active { background: var(--vscode-hover); color: var(--accent); }
+
+.label { display: block; }
+.detail { display: block; margin-top: 2px; color: var(--text-muted); font-size: 11px; }
+
+.empty { margin: 0; padding: 12px 8px; color: var(--text-muted); font-size: 12px; }
