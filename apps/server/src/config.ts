@@ -18,6 +18,11 @@ const oidcRedirectUri = process.env.FASTWRITE_OIDC_REDIRECT_URI?.trim();
 const oidcClientSecret = process.env.FASTWRITE_OIDC_CLIENT_SECRET?.trim();
 const casServerUrl = process.env.FASTWRITE_CAS_SERVER_URL?.trim();
 const casServiceUrl = process.env.FASTWRITE_CAS_SERVICE_URL?.trim();
+const fastcasIssuer = process.env.FASTWRITE_FASTCAS_ISSUER?.trim();
+const fastcasClientId = process.env.FASTWRITE_FASTCAS_CLIENT_ID?.trim();
+const fastcasSecret = process.env.FASTWRITE_FASTCAS_CLIENT_SECRET?.trim();
+const fastcasRedirect = process.env.FASTWRITE_FASTCAS_REDIRECT_URI?.trim();
+if ([fastcasIssuer, fastcasClientId, fastcasSecret, fastcasRedirect].some(Boolean) && ![fastcasIssuer, fastcasClientId, fastcasSecret, fastcasRedirect].every(Boolean)) throw new Error("Set all four FASTWRITE_FASTCAS connection variables or leave all unset");
 const smtpUrl = process.env.FASTWRITE_SMTP_URL?.trim();
 const mailFrom = process.env.FASTWRITE_MAIL_FROM?.trim();
 const mailWebhookSecret = process.env.FASTWRITE_MAIL_WEBHOOK_SECRET?.trim();
@@ -124,6 +129,7 @@ export const config = {
   postgresUrl,
   oidc: oidcIssuer && oidcClientId && oidcRedirectUri ? { issuer: oidcIssuer, clientId: oidcClientId, redirectUri: oidcRedirectUri, ...(oidcClientSecret ? { clientSecret: oidcClientSecret } : {}) } satisfies OidcConfiguration : undefined,
   cas: casServerUrl && casServiceUrl ? { serverUrl: casServerUrl, serviceUrl: casServiceUrl } satisfies CasConfiguration : undefined,
+  fastcas: fastcasIssuer && fastcasClientId && fastcasSecret && fastcasRedirect ? { issuer: fastcasIssuer, clientId: fastcasClientId, clientSecret: fastcasSecret, redirectUri: fastcasRedirect, allowLoopbackHTTP: process.env.FASTWRITE_FASTCAS_LOOPBACK_HTTP === "true", allowRegistration: process.env.FASTWRITE_FASTCAS_ALLOW_SIGNUP === "true" } : undefined,
   mail: smtpUrl && mailFrom ? { smtpUrl, from: mailFrom, ...(mailWebhookSecret ? { webhookSecret: mailWebhookSecret } : {}) } satisfies MailConfiguration : undefined,
   objectStore: objectStoreBucket && objectStoreEndpoint && objectStoreAccessKey && objectStoreSecretKey ? { bucket: objectStoreBucket, endpoint: objectStoreEndpoint, region: objectStoreRegion, accessKey: objectStoreAccessKey, secretKey: objectStoreSecretKey } : undefined,
   bootstrapAdmin: { email: bootstrapAdminEmail, password: bootstrapAdminPassword },

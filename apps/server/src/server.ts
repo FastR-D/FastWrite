@@ -1,4 +1,4 @@
-import { createApplication } from "./app";
+import { createApplication, type ApplicationFetch } from "./app";
 import { config } from "./config";
 import type { Server, ServerWebSocket } from "bun";
 import { harnessEventBus } from "./agent/harness-event-bus";
@@ -23,7 +23,7 @@ export async function startServer() {
   return server;
 }
 
-export function createServerOptions(fetch: (request: Request) => Promise<Response>) {
+export function createServerOptions(fetch: ((request: Request) => Promise<Response>) & Pick<Partial<ApplicationFetch>, "onAuthChange">) {
   const rooms = new Map<string, Set<ServerWebSocket<CollaborationSocketData>>>();
   const harnessUnsubscribers = new Map<ServerWebSocket<SocketData>, () => void>();
   const collaborationReauthorizationTimers = new Map<ServerWebSocket<CollaborationSocketData>, ReturnType<typeof setInterval>>();
@@ -32,6 +32,9 @@ export function createServerOptions(fetch: (request: Request) => Promise<Respons
     if (!access.ok) socket.close(4003, "Collaboration access revoked");
     return access.ok;
   };
+  fetch.onAuthChange?.(() => {
+    for (const room of rooms.values()) for (const socket of room) void reauthorizeCollaborationSocket(socket).catch(() => socket.close(1011, "Collaboration authorization unavailable"));
+  });
   const presenceExpiryTimer = setInterval(() => {
     const deadline = Date.now() - PRESENCE_EXPIRY_MS;
     for (const room of rooms.values()) for (const socket of room) if (socket.data.lastActivityAt < deadline) socket.close(4008, "Collaboration presence expired");

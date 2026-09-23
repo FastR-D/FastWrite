@@ -27,15 +27,20 @@ function routeFromLocation(): { name: "admin" } | { name: "diagrams" } | { name:
 
 export function App() {
   const [route, setRoute] = useState(routeFromLocation);
+  const [authenticationReady, setAuthenticationReady] = useState(() => {
+    const parameters = new URLSearchParams(window.location.search);
+    return !["oidc", "cas", "fastcas"].some((provider) => parameters.get(provider) === "complete");
+  });
   useEffect(() => { applyTheme(initialTheme()); }, []);
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
-    if (parameters.get("oidc") !== "complete" && parameters.get("cas") !== "complete") return;
+    if (parameters.get("oidc") !== "complete" && parameters.get("cas") !== "complete" && parameters.get("fastcas") !== "complete") return;
     void api.auth.refresh().then((session) => {
       localStorage.setItem("fastwrite.session-token", session.token);
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
       window.dispatchEvent(new PopStateEvent("popstate"));
-    }).catch(() => window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`));
+    }).catch(() => window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`))
+      .finally(() => setAuthenticationReady(true));
   }, []);
   useEffect(() => {
     const update = () => setRoute(routeFromLocation());
@@ -58,6 +63,7 @@ export function App() {
     window.addEventListener("keydown", save, { capture: true });
     return () => window.removeEventListener("keydown", save, { capture: true });
   }, []);
+  if (!authenticationReady) return <main className="app-loading" aria-live="polite">Completing sign-in…</main>;
   const page = route.name === "admin" ? <AdminPage /> : route.name === "diagrams" ? <DiagramsPage /> : route.name === "workspace" ? <WorkspacePage projectId={route.projectId} /> : route.name === "shared" ? <SharedReviewPage token={route.token} /> : route.name === "access-request" ? <AccessRequestPage projectId={route.projectId} /> : route.name === "gallery" ? <GalleryPage /> : <ProjectsPage />;
   return <Suspense fallback={<main className="app-loading" aria-live="polite">Loading FastWrite…</main>}>{route.name !== "diagrams" && <Link href="/diagrams" style={{position:"fixed",bottom:18,right:24,zIndex:100,background:"#244f3d",color:"white",padding:"10px 18px",borderRadius:8}}>科研绘图</Link>}{page}</Suspense>;
 }

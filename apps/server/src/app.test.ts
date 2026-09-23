@@ -102,7 +102,7 @@ describe("workspace API", () => {
       logout: async () => undefined
     };
     const request = await testApplication(undefined, { serverAuth: true }, provider);
-    expect(await (await request("/api/auth/providers")).json()).toEqual({ local: true, oidc: true, cas: false });
+    expect(await (await request("/api/auth/providers")).json()).toEqual({ local: true, oidc: true, cas: false, fastcas: false, fastcasSignup: false });
     const start = await request("/api/auth/oidc/login?returnTo=/projects?view=recent");
     expect(start.status).toBe(302);
     expect(start.headers.get("location")).toBe("https://idp.example.test/authorize?state=opaque");

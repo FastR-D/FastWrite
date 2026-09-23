@@ -9,6 +9,7 @@ import type {
 import { WRITING_PROFILES } from "@fastwrite/shared";
 import { api } from "../api/client";
 import { ImportDialog } from "../components/import/ImportDialog";
+import { FastCASDialog } from "../components/FastCASDialog";
 import { Button, Checkbox, Dialog, Divider, Field, Icon, IconButton, Link, MultiSelect, NumberField, Select, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { PublicationTargetFields } from "../components/ui/PublicationTargetFields";
 import { navigate, projectPath } from "../lib/navigation";
@@ -25,6 +26,7 @@ export function ProjectsPage() {
   const [newOpen, setNewOpen] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [fastcasOpen, setFastcasOpen] = useState(false);
   const [teamsOpen, setTeamsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [account, setAccount] = useState<{
@@ -178,9 +180,11 @@ export function ProjectsPage() {
           >
             {account ? account.displayName : "Sign in"}
           </Button>
+          {account ? <Button size="small" variant="ghost" onClick={() => setFastcasOpen(true)}>Account authentication</Button> : null}
           <ThemeToggle />
         </div>
       </header>
+      <FastCASDialog open={fastcasOpen} onClose={() => setFastcasOpen(false)} />
       <main className="projects-main">
         <section className="projects-hero">
           <div>
@@ -390,7 +394,7 @@ function AccountDialog({
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [providers, setProviders] = useState<{ oidc: boolean; cas: boolean }>({ oidc: false, cas: false });
+  const [providers, setProviders] = useState<{ oidc: boolean; cas: boolean; fastcas: boolean; fastcasSignup: boolean }>({ oidc: false, cas: false, fastcas: false, fastcasSignup: false });
   useEffect(() => { if (open) void api.auth.providers().then((value) => setProviders(value)).catch(() => undefined); }, [open]);
   const submit = async () => {
     setLoading(true);
@@ -445,10 +449,12 @@ function AccountDialog({
       }
     >
       <form id="account-auth-form" className="form-stack" onSubmit={(event) => { event.preventDefault(); if (!loading && email.trim() && password) void submit(); }}>
-        {mode === "login" && (providers.oidc || providers.cas) ? <div className="form-stack">
+        {mode === "login" && (providers.oidc || providers.cas || providers.fastcas) ? <div className="form-stack">
+          {providers.fastcas ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/login?returnTo=/projects")}>Continue with FastCAS</Button> : null}
           {providers.oidc ? <Button type="button" variant="secondary" onClick={() => { window.location.assign(`/api/auth/oidc/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`); }}>Continue with organization sign-in</Button> : null}
           {providers.cas ? <Button type="button" variant="secondary" onClick={() => { window.location.assign("/api/auth/cas/login"); }}>Continue with campus CAS</Button> : null}
         </div> : null}
+        {mode === "register" && providers.fastcasSignup ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/signup?returnTo=/projects")}>Create a new account with FastCAS</Button> : null}
         {mode === "register" ? (
           <Field label="Name">
             <TextField

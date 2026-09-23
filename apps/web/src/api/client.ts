@@ -99,7 +99,12 @@ export const api = {
   auth: {
     register: (body: { email: string; password: string; displayName?: string }) => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/register", jsonInit("POST", body)),
     login: (body: { email: string; password: string }) => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/login", jsonInit("POST", body)),
-    providers: () => request<{ local: boolean; oidc: boolean; cas: boolean }>("/api/auth/providers"),
+    providers: () => request<{ local: boolean; oidc: boolean; cas: boolean; fastcas: boolean; fastcasSignup: boolean }>("/api/auth/providers"),
+    fastcasStatus: () => request<{ enabled: boolean; issuer?: string; proof?: { method: "password" | "external" | "none"; recent: boolean; localLoginId?: string }; links: Array<{ id: string; state: "prepared" | "active" | "revoked"; version: number }> }>("/api/auth/fastcas/status"),
+    fastcasSetLocalPassword: (password: string) => request<{ loginId: string }>("/api/auth/fastcas/local-password", jsonInit("POST", { password })),
+    fastcasLink: (password: string) => request<{ url: string }>("/api/auth/fastcas/link", jsonInit("POST", { password, returnTo: "/projects" })),
+    fastcasReconcile: (id: string) => request(`/api/auth/fastcas/links/${encodeURIComponent(id)}/reconcile`, { method: "POST" }),
+    fastcasRevoke: (id: string, password: string) => request(`/api/auth/fastcas/links/${encodeURIComponent(id)}/revoke`, jsonInit("POST", { password })),
     refresh: () => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/refresh", { method: "POST" }),
     me: (signal?: AbortSignal) => request<{ id: string; emailNormalized: string; displayName: string; platformRole: string }>("/api/auth/me", signal ? { signal } : undefined),
     logout: () => request<void>("/api/auth/logout", { method: "POST" })

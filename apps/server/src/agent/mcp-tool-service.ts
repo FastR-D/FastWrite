@@ -10,12 +10,12 @@ export class McpToolService {
   async call(projectId: string, name: string, input: unknown, policy: McpPermissionPolicy): Promise<unknown> {
     const startedAt = Date.now();
     const resolved = this.registry.resolveTool(name, policy);
-    if (!resolved) { this.record(projectId, name, "denied", startedAt); throw new ApiError(403, "mcp_tool_denied", `MCP tool '${name}' is not permitted by the active policy`); }
+    if (!resolved) { await this.record(projectId, name, "denied", startedAt); throw new ApiError(403, "mcp_tool_denied", `MCP tool '${name}' is not permitted by the active policy`); }
     validateSchema(input, resolved.tool.inputSchema);
     if (name === "workspace.read") {
       const path = recordString(input, "path");
       const file = await this.workspaces.readTextFile(projectId, path);
-      const result = { path, content: file.content.slice(0, 120_000), version: file.file.version }; this.record(projectId, name, "completed", startedAt); return result;
+      const result = { path, content: file.content.slice(0, 120_000), version: file.file.version }; await this.record(projectId, name, "completed", startedAt); return result;
     }
     if (name === "workspace.search") {
       const query = recordString(input, "query").toLowerCase();
@@ -26,16 +26,16 @@ export class McpToolService {
         results.push({ path, excerpts: file.content.split(/\r?\n/).filter((line) => line.toLowerCase().includes(query)).slice(0, 20) });
         if (results.length >= 50) break;
       }
-      const result = { query, results }; this.record(projectId, name, "completed", startedAt); return result;
+      const result = { query, results }; await this.record(projectId, name, "completed", startedAt); return result;
     }
     if (name === "latex.compile") {
       if (!this.compiler) throw new ApiError(503, "mcp_tool_unavailable", "LaTeX compiler is unavailable");
-      const result = await this.compiler.compile(projectId); this.record(projectId, name, "completed", startedAt); return result;
+      const result = await this.compiler.compile(projectId); await this.record(projectId, name, "completed", startedAt); return result;
     }
     throw new Error(`MCP tool '${name}' has no executor`);
   }
   audit(projectId?: string): McpAuditRecord[] { return (this.database?.snapshot().mcpAudits ?? []).filter((item) => !projectId || item.projectId === projectId).map((item) => structuredClone(item)); }
-  private record(projectId: string, tool: string, status: McpAuditRecord["status"], startedAt: number): void { const item = { id: `mcp_${crypto.randomUUID()}`, projectId, tool, status, durationMs: Date.now() - startedAt, createdAt: new Date().toISOString() }; if (this.database) void this.database.mutate((state) => { state.mcpAudits.push(item); if (state.mcpAudits.length > 5000) state.mcpAudits.splice(0, state.mcpAudits.length - 5000); }).catch(() => undefined); }
+  private async record(projectId: string, tool: string, status: McpAuditRecord["status"], startedAt: number): Promise<void> { const item = { id: `mcp_${crypto.randomUUID()}`, projectId, tool, status, durationMs: Date.now() - startedAt, createdAt: new Date().toISOString() }; if (this.database) await this.database.mutate((state) => { state.mcpAudits.push(item); if (state.mcpAudits.length > 5000) state.mcpAudits.splice(0, state.mcpAudits.length - 5000); }); }
 }
 
 function recordString(value: unknown, key: string): string { const candidate = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined; if (typeof candidate !== "string" || !candidate.trim()) throw new ApiError(400, "mcp_input_invalid", `${key} is required`); return candidate.trim().slice(0, 500); }

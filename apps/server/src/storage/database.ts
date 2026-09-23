@@ -4,6 +4,7 @@ import { normalizePublicationTarget, paperSkillForProfile, type AccountUser, typ
 import type { HarnessRun, HarnessSession, McpAuditRecord } from "@fastwrite/harness-protocol";
 import type { AccessRequest, NotificationDelivery, NotificationPreference, UserNotification, SupportAccessRequest } from "@fastwrite/shared";
 import type { JobRecord } from "../jobs/job-queue";
+import type { Link, Transaction } from "@fastrd/fastcas/server";
 
 export interface FileVersionRecord {
   version: number;
@@ -44,7 +45,10 @@ export interface DatabaseState {
   users: AccountUser[];
   externalIdentities: ExternalIdentity[];
   localCredentials: Array<{ userId: string; passwordHash: string }>;
-  sessions: Array<{ id: string; userId: string; tokenHash: string; expiresAt: string; refreshTokenHash?: string; refreshExpiresAt?: string; familyId?: string; idpGroups?: string[]; revokedAt?: string; createdAt: string }>;
+  fastcasTransactions: Transaction[];
+  fastcasLinks: Array<{ issuer: string; userId: string; link: Link }>;
+  fastcasEvents: Array<{ id: string; issuer: string; processedAt: string }>;
+  sessions: Array<{ id: string; userId: string; tokenHash: string; expiresAt: string; refreshTokenHash?: string; refreshExpiresAt?: string; familyId?: string; idpGroups?: string[]; revokedAt?: string; createdAt: string; authenticatedAt?: string; authSource?: "local" | "external" | "fastcas"; casIssuer?: string; casSid?: string; casLinkId?: string; casLinkVersion?: number; casVerifiedEmail?: string }>;
   teams: Team[];
   teamMembers: TeamMember[];
   teamGroupBindings: TeamGroupBinding[];
@@ -69,12 +73,14 @@ export interface DatabaseState {
   experimentRuns: Array<{ id: string; projectId: string; projectVersion: number; scriptPath: string; status: "queued" | "running" | "completed" | "failed" | "cancelled"; authorization: "user-approved"; inputSnapshotHash?: string; result?: { success: boolean; exitCode: number; log: string; artifactPaths: string[]; runId: string }; jobId?: string; createdAt: string; updatedAt: string }>;
 }
 
-export const CURRENT_SCHEMA_VERSION = 14;
-const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], researchScreening: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [], users: [], externalIdentities: [], sessions: [], teams: [], teamMembers: [], teamGroupBindings: [], projectMembers: [], projectAclRules: [], invitations: [], accessRequests: [], notifications: [], notificationPreferences: [], notificationDeliveries: [], auditEvents: [], harnessProfiles: [], encryptedSecrets: [], localCredentials: [], collaborationDocuments: [], yDocumentSnapshots: [], yDocumentUpdates: [], commentThreads: [], commentMessages: [], skillReleaseOverrides: [], jobs: [], supportAccessRequests: [], experimentRuns: [] };
+export const CURRENT_SCHEMA_VERSION = 15;
+const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], researchScreening: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [], users: [], externalIdentities: [], fastcasTransactions: [], fastcasLinks: [], fastcasEvents: [], sessions: [], teams: [], teamMembers: [], teamGroupBindings: [], projectMembers: [], projectAclRules: [], invitations: [], accessRequests: [], notifications: [], notificationPreferences: [], notificationDeliveries: [], auditEvents: [], harnessProfiles: [], encryptedSecrets: [], localCredentials: [], collaborationDocuments: [], yDocumentSnapshots: [], yDocumentUpdates: [], commentThreads: [], commentMessages: [], skillReleaseOverrides: [], jobs: [], supportAccessRequests: [], experimentRuns: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
   private writeQueue: Promise<void> = Promise.resolve();
+  private mutationQueue: Promise<void> = Promise.resolve();
+  private primaryPersistence?: (state: DatabaseState) => Promise<void>;
   private readonly path: string;
 
   constructor(dataDirectory: string) {
@@ -116,7 +122,7 @@ export class JsonDatabase {
         fastReadBundles: parsed.fastReadBundles ?? [],
         claimRelations: parsed.claimRelations ?? []
         ,projectShares: parsed.projectShares ?? [], shareComments: parsed.shareComments ?? [], skillReleaseOverrides: parsed.skillReleaseOverrides ?? [],
-        users: parsed.users ?? [], externalIdentities: parsed.externalIdentities ?? [], localCredentials: parsed.localCredentials ?? [], sessions: parsed.sessions ?? [], teams: parsed.teams ?? [], teamMembers: parsed.teamMembers ?? [], teamGroupBindings: parsed.teamGroupBindings ?? [], projectMembers: parsed.projectMembers ?? [], projectAclRules: parsed.projectAclRules ?? [], invitations: parsed.invitations ?? [], accessRequests: parsed.accessRequests ?? [], notifications: parsed.notifications ?? [], notificationPreferences: parsed.notificationPreferences ?? [], notificationDeliveries: parsed.notificationDeliveries ?? [], auditEvents: parsed.auditEvents ?? [], harnessProfiles: parsed.harnessProfiles ?? [], encryptedSecrets: parsed.encryptedSecrets ?? [], collaborationDocuments: parsed.collaborationDocuments ?? [], yDocumentSnapshots: parsed.yDocumentSnapshots ?? [], yDocumentUpdates: parsed.yDocumentUpdates ?? [], commentThreads: parsed.commentThreads ?? [], commentMessages: parsed.commentMessages ?? [], jobs: parsed.jobs ?? [], supportAccessRequests: parsed.supportAccessRequests ?? [], experimentRuns: parsed.experimentRuns ?? []
+        fastcasTransactions: parsed.fastcasTransactions ?? [], fastcasLinks: parsed.fastcasLinks ?? [], fastcasEvents: parsed.fastcasEvents ?? [], users: parsed.users ?? [], externalIdentities: parsed.externalIdentities ?? [], localCredentials: parsed.localCredentials ?? [], sessions: parsed.sessions ?? [], teams: parsed.teams ?? [], teamMembers: parsed.teamMembers ?? [], teamGroupBindings: parsed.teamGroupBindings ?? [], projectMembers: parsed.projectMembers ?? [], projectAclRules: parsed.projectAclRules ?? [], invitations: parsed.invitations ?? [], accessRequests: parsed.accessRequests ?? [], notifications: parsed.notifications ?? [], notificationPreferences: parsed.notificationPreferences ?? [], notificationDeliveries: parsed.notificationDeliveries ?? [], auditEvents: parsed.auditEvents ?? [], harnessProfiles: parsed.harnessProfiles ?? [], encryptedSecrets: parsed.encryptedSecrets ?? [], collaborationDocuments: parsed.collaborationDocuments ?? [], yDocumentSnapshots: parsed.yDocumentSnapshots ?? [], yDocumentUpdates: parsed.yDocumentUpdates ?? [], commentThreads: parsed.commentThreads ?? [], commentMessages: parsed.commentMessages ?? [], jobs: parsed.jobs ?? [], supportAccessRequests: parsed.supportAccessRequests ?? [], experimentRuns: parsed.experimentRuns ?? []
       };
       this.state = migrate(migratedState);
       let migrated = false;
@@ -151,6 +157,10 @@ export class JsonDatabase {
     return structuredClone(this.state);
   }
 
+  // In cutover mode, success means the PostgreSQL primary has committed. The
+  // JSON file is then a local cache; callbacks must not acknowledge before this.
+  setPrimaryPersistence(commit: (state: DatabaseState) => Promise<void>): void { this.primaryPersistence = commit; }
+
   version(): number {
     return this.state.schemaVersion;
   }
@@ -162,14 +172,24 @@ export class JsonDatabase {
   }
 
   async mutate<T>(mutation: (state: DatabaseState) => T): Promise<T> {
+    const operation = this.mutationQueue.then(() => this.applyMutation(mutation));
+    this.mutationQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async applyMutation<T>(mutation: (state: DatabaseState) => T): Promise<T> {
     const before = structuredClone(this.state);
+    let primaryCommitted = false;
     try {
-      const result = mutation(this.state);
-      enforceCapacity(this.state);
+      const next = structuredClone(before);
+      const result = mutation(next);
+      enforceCapacity(next);
+      if (this.primaryPersistence) { await this.primaryPersistence(structuredClone(next)); primaryCommitted = true; }
+      this.state = next;
       await this.flush();
       return structuredClone(result);
     } catch (error) {
-      this.state = before;
+      if (!primaryCommitted) this.state = before;
       throw error;
     }
   }
@@ -225,7 +245,7 @@ export class JsonDatabase {
     const write = this.writeQueue.then(async () => {
       const temporaryPath = `${this.path}.${process.pid}.tmp`;
       await mkdir(dirname(this.path), { recursive: true });
-      await writeFile(temporaryPath, serialized, "utf8");
+      await writeFile(temporaryPath, serialized, { encoding: "utf8", mode: 0o600 });
       await rename(temporaryPath, this.path);
     });
     // Keep the queue usable after a transient filesystem failure (for example,
@@ -243,6 +263,9 @@ function migrate(state: DatabaseState): DatabaseState {
   state.externalIdentities ??= [];
   state.localCredentials ??= [];
   state.sessions ??= [];
+  state.fastcasTransactions ??= [];
+  state.fastcasLinks ??= [];
+  state.fastcasEvents ??= [];
   state.teams ??= [];
   state.teamMembers ??= [];
   state.projectMembers ??= [];
@@ -293,6 +316,7 @@ function migrate(state: DatabaseState): DatabaseState {
   if (state.schemaVersion < 12) state.schemaVersion = 12;
   if (state.schemaVersion < 13) { state.teamGroupBindings ??= []; state.schemaVersion = 13; }
   if (state.schemaVersion < 14) { state.skillReleaseOverrides ??= []; state.schemaVersion = 14; }
+  if (state.schemaVersion < 15) state.schemaVersion = 15;
   state.researchScreening ??= [];
   if (state.schemaVersion > CURRENT_SCHEMA_VERSION) throw new Error(`Unsupported database schema version ${state.schemaVersion}`);
   return state;

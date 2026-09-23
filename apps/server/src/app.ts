@@ -76,6 +76,8 @@ import { HarnessProfileService } from "./harness/profile-service";
 import { CollaborationService } from "./collaboration/collaboration-service";
 import { CommentService } from "./comments/comment-service";
 import { CasIdentityProvider, OidcIdentityProvider, type IdentityProvider } from "./auth/identity-provider";
+import { FastCASService, type FastCASConfiguration } from "./auth/fastcas-service";
+import { FastCASError } from "@fastrd/fastcas/server";
 import { MailDeliveryService, SmtpMailTransport, type MailTransport } from "./notifications/mail-delivery-service";
 import { InProcessJobQueue, type JobRecord, type JobStore } from "./jobs/job-queue";
 import { InMemoryCollaborationBus, RedisCollaborationBus, type CollaborationBus } from "./collaboration/collaboration-bus";
@@ -130,7 +132,7 @@ interface Services {
 }
 
 type Handler = (request: Request, params: Record<string, string>, url: URL) => Promise<Response> | Response;
-export type ApplicationFetch = ((request: Request) => Promise<Response>) & { dispatchMail(): Promise<void> };
+export type ApplicationFetch = ((request: Request) => Promise<Response>) & { dispatchMail(): Promise<void>; onAuthChange?(listener: () => void): () => void };
 
 interface Route {
   method: string;
@@ -145,6 +147,7 @@ export interface ApplicationOptions {
   features?: Partial<typeof config.features>;
   oidcProvider?: IdentityProvider;
   casProvider?: IdentityProvider;
+  fastcasConfiguration?: FastCASConfiguration;
   mailTransport?: MailTransport;
   researchFetcher?: (input: string | Request | URL, init?: RequestInit) => Promise<Response>;
   metrics?: MetricsRegistry;
@@ -265,6 +268,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
     if (persisted && postgresCutover) await database.replaceState(persisted);
   }
   const postgresMirror = autoPostgres;
+  if (postgresCutover && postgresMirror) database.setPrimaryPersistence(async snapshot => { await postgresMirror.mutate(state => Object.assign(state, snapshot)); });
   let postgresMirrorError: string | undefined;
   let postgresMirrorFailures = 0;
   const persistToPostgres = async () => {
@@ -289,6 +293,8 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   }
   const oidc = options.oidcProvider ?? (config.oidc ? new OidcIdentityProvider(config.oidc) : undefined);
   const cas = options.casProvider ?? (config.cas ? new CasIdentityProvider(config.cas) : undefined);
+  const fastcasConfiguration = options.fastcasConfiguration ?? config.fastcas;
+  const fastcas = fastcasConfiguration ? new FastCASService(fastcasConfiguration, database, auth) : undefined;
   const authorization = new AuthorizationService(database);
   const teams = new TeamService(database, authorization);
   const harnessProfiles = new HarnessProfileService(database, authorization);
@@ -375,7 +381,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
     configure: configureAgent,
     postgresMirror: () => ({ configured: Boolean(postgresMirror), healthy: Boolean(postgresMirror) && !postgresMirrorError, failures: postgresMirrorFailures, ...(postgresMirrorError ? { lastError: postgresMirrorError } : {}) }),
     postgresCompare: comparePostgres
-  }, features.serverAuth, oidc, cas, metrics);
+  }, features.serverAuth, oidc, cas, metrics, fastcas);
 
   const applicationFetch: ApplicationFetch = async function applicationFetch(request: Request): Promise<Response> {
     try {
@@ -390,7 +396,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
           authorization.requireProject(current, params.projectId, projectActionFor(url.pathname, request.method));
         }
         const response = withRuntimeHeaders(await route.handler(request, params, url));
-        await persistToPostgres();
+        if (!postgresCutover) await persistToPostgres();
         metrics.observe(request.method, url.pathname, response.status);
         void mailDelivery.dispatchPending();
         return response;
@@ -399,13 +405,14 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
       metrics.observe(request.method, url.pathname, response.status);
       return response;
     } catch (error) {
-      const response = withRuntimeHeaders(errorResponse(error));
+      const response = withRuntimeHeaders(errorResponse(error instanceof FastCASError ? new ApiError(error.status, error.code, error.message) : error));
       metrics.observe(request.method, new URL(request.url).pathname, response.status);
       return response;
     }
   };
   void stopCollaborationBus;
   applicationFetch.dispatchMail = () => mailDelivery.dispatchPending();
+  applicationFetch.onAuthChange = listener => fastcas?.onRevocation(listener) ?? (() => {});
   return applicationFetch;
 }
 
@@ -441,7 +448,7 @@ function pathAuthorizesIndividually(pathname: string): boolean {
   return /\/api\/projects\/[^/]+\/(?:file|asset|files|assets)$/.test(pathname);
 }
 
-function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry()): Route[] {
+function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry(), fastcas?: FastCASService): Route[] {
   const presence = new Map<string, Map<string, { clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>();
   const principal = (request: Request, required = authEnabled): Principal | undefined => auth.principal(request, required);
   const authorize = (request: Request, projectId: string, action: Parameters<AuthorizationService["requireProject"]>[2]) => {
@@ -465,7 +472,73 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("GET", "/api/metrics", async () => new Response(metrics.prometheus(), { headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8" } })),
     route("POST", "/api/auth/register", async (request) => { const result = await auth.register(await readJson<{ email: string; password: string; displayName?: string }>(request)); await teams.personalWorkspace({ user: result.user, sessionId: "register" }); return authResponse(result, 201); }),
     route("POST", "/api/auth/login", async (request) => authResponse(await auth.login(await readJson<{ email: string; password: string }>(request)))),
-    route("GET", "/api/auth/providers", async () => json({ local: true, oidc: Boolean(oidc), cas: Boolean(cas) })),
+    route("GET", "/api/auth/providers", async () => json({ local: true, oidc: Boolean(oidc), cas: Boolean(cas), fastcas: Boolean(fastcas), fastcasSignup: Boolean(fastcas?.configuration.allowRegistration) })),
+    route("GET", "/api/auth/fastcas/signup", async (_request, _params, url) => {
+      if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
+      const signup = await fastcas.beginRegistration(url.searchParams.get("returnTo") ?? "/projects");
+      return new Response(null, { status: 302, headers: { location: signup.url.href, "set-cookie": loginBindingCookie("fastcas", signup.binding), "cache-control": "no-store" } });
+    }),
+    route("GET", "/api/auth/fastcas/login", async (_request, _params, url) => {
+      if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
+      const login = await fastcas.beginLogin(url.searchParams.get("returnTo") ?? "/projects");
+      return new Response(null, { status: 302, headers: { location: login.url.href, "set-cookie": loginBindingCookie("fastcas", login.binding), "cache-control": "no-store" } });
+    }),
+    route("POST", "/api/auth/fastcas/link", async request => {
+      requireFastCASOrigin(request);
+      if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
+      const actor = principal(request, true)!;
+      const body = await readJson<{ password: string; returnTo?: string }>(request);
+      const login = await fastcas.beginLink(actor, body.password, body.returnTo);
+      return json({ url: login.url.href }, 200, { "set-cookie": loginBindingCookie("fastcas", login.binding), "cache-control": "no-store" });
+    }),
+    route("GET", "/api/auth/fastcas/callback", async (request, _params, url) => {
+      if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
+      const finished = await fastcas.callback(url, requestCookie(request, "fastwrite.fastcas.login"), requestCookie(request, "fastwrite.refresh"));
+      if (finished.result) await teams.personalWorkspace({ user: finished.result.user, sessionId: "fastcas-login" });
+      const target = new URL(finished.returnTo, url.origin);
+      target.searchParams.set("fastcas", finished.result ? "complete" : "linked");
+      const location = target.pathname + target.search + target.hash;
+      return finished.result ? externalAuthCallback("fastcas", finished.result, location) : new Response(null, { status: 302, headers: { location, "set-cookie": expiredLoginBindingCookie("fastcas"), "cache-control": "no-store" } });
+    }),
+    route("GET", "/api/auth/fastcas/status", async request => json(fastcas ? fastcas.status(principal(request, true)!) : { enabled: false, links: [] })),
+    route("POST", "/api/auth/fastcas/local-password", async request => {
+      requireFastCASOrigin(request);
+      if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
+      const actor = principal(request, true)!;
+      const body = await readJson<{ password: string }>(request);
+      return json(await fastcas.setLocalPassword(actor, body.password));
+    }),
+    route("POST", "/api/auth/fastcas/links/:linkId/reconcile", async (request, params) => {
+      requireFastCASOrigin(request);
+      if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
+      return json(await fastcas.reconcile(principal(request, true)!, params.linkId!));
+    }),
+    route("POST", "/api/auth/fastcas/links/:linkId/revoke", async (request, params) => {
+      requireFastCASOrigin(request);
+      if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
+      const actor = principal(request, true)!;
+      const body = await readJson<{ password: string }>(request);
+      return json(await fastcas.revoke(actor, body.password, params.linkId!));
+    }),
+    route("POST", "/api/auth/fastcas/events", async request => {
+      if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
+      if (request.headers.get("content-type")?.split(";")[0] !== "application/jwt") throw new ApiError(415, "event_type_invalid", "Signed event required");
+      const raw = await request.text();
+      if (raw.length > 65536) throw new ApiError(413, "event_too_large", "Event exceeds size limit");
+      await fastcas.handleEvent(raw);
+      return new Response(null, { status: 204 });
+    }),
+    route("POST", "/api/auth/fastcas/backchannel-logout", async request => {
+      if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
+      if (request.headers.get("content-type")?.split(";")[0] !== "application/x-www-form-urlencoded") throw new ApiError(415, "logout_type_invalid", "Signed logout required");
+      const raw = await request.text();
+      if (raw.length > 65536) throw new ApiError(413, "logout_too_large", "Logout exceeds size limit");
+      const form = new URLSearchParams(raw);
+      const tokens = form.getAll("logout_token");
+      if (tokens.length !== 1 || Array.from(form.keys()).length !== 1) throw new ApiError(400, "logout_invalid", "Invalid logout form");
+      await fastcas.handleLogout(tokens[0]!);
+      return new Response(null, { status: 204 });
+    }),
     route("GET", "/api/auth/oidc/login", async (_request, _params, url) => { if (!oidc) throw new ApiError(404, "oidc_not_configured", "OIDC is not configured"); const returnTo = url.searchParams.get("returnTo"); const login = await oidc.beginLogin({ ...(returnTo ? { returnTo } : {}) }); if (login.kind !== "redirect" || !login.binding) throw new ApiError(400, "oidc_login_invalid", "The configured identity provider does not return a login binding"); const response = Response.redirect(login.url, 302); response.headers.set("set-cookie", loginBindingCookie("oidc", login.binding)); return response; }),
     route("GET", "/api/auth/oidc/callback", async (request, _params, url) => { if (!oidc) throw new ApiError(404, "oidc_not_configured", "OIDC is not configured"); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); requireLoginBinding(request, "oidc", state); const returnTo = oidc.loginReturnTo?.(state ?? undefined) ?? "/"; const identity = await oidc.finishLogin({ ...(code ? { code } : {}), ...(state ? { state } : {}) }); const result = await auth.loginExternal(identity); await teams.personalWorkspace({ user: result.user, sessionId: "external-login" }); await teams.syncIdpGroups(result.user, identityGroups(identity.issuer, identity.groups)); return externalAuthCallback("oidc", result, `${returnTo}${returnTo.includes("?") ? "&" : "?"}oidc=complete`); }),
     route("GET", "/api/auth/cas/login", async () => { if (!cas) throw new ApiError(404, "cas_not_configured", "CAS is not configured"); const login = await cas.beginLogin({}); if (login.kind !== "redirect" || !login.binding) throw new ApiError(400, "cas_login_invalid", "The configured identity provider does not return a login binding"); const response = Response.redirect(login.url, 302); response.headers.set("set-cookie", loginBindingCookie("cas", login.binding)); return response; }),
@@ -1328,22 +1401,22 @@ function expiredRefreshCookie(): string {
   return [`fastwrite.refresh=`, "HttpOnly", "SameSite=Lax", "Path=/api/auth", "Max-Age=0", ...(process.env.NODE_ENV === "production" ? ["Secure"] : [])].join("; ");
 }
 
-function externalAuthCallback(provider: "oidc" | "cas", result: AuthResult, location: string): Response {
+function externalAuthCallback(provider: "oidc" | "cas" | "fastcas", result: AuthResult, location: string): Response {
   const headers = new Headers({ location });
   headers.append("set-cookie", refreshCookie(result.refreshToken));
   headers.append("set-cookie", expiredLoginBindingCookie(provider));
   return new Response(null, { status: 302, headers });
 }
 
-function loginBindingCookie(provider: "oidc" | "cas", binding: string): string {
+function loginBindingCookie(provider: "oidc" | "cas" | "fastcas", binding: string): string {
   return [`fastwrite.${provider}.login=${binding}`, "HttpOnly", "SameSite=Lax", `Path=/api/auth/${provider}`, "Max-Age=600", ...(process.env.NODE_ENV === "production" ? ["Secure"] : [])].join("; ");
 }
 
-function expiredLoginBindingCookie(provider: "oidc" | "cas"): string {
+function expiredLoginBindingCookie(provider: "oidc" | "cas" | "fastcas"): string {
   return [`fastwrite.${provider}.login=`, "HttpOnly", "SameSite=Lax", `Path=/api/auth/${provider}`, "Max-Age=0", ...(process.env.NODE_ENV === "production" ? ["Secure"] : [])].join("; ");
 }
 
-function requireLoginBinding(request: Request, provider: "oidc" | "cas", state: string | null): void {
+function requireLoginBinding(request: Request, provider: "oidc" | "cas" | "fastcas", state: string | null): void {
   const stored = request.headers.get("cookie")?.split(";").map((item) => item.trim()).find((item) => item.startsWith(`fastwrite.${provider}.login=`))?.slice(`fastwrite.${provider}.login=`.length);
   if (!stored || !state || !constantTimeEqual(stored, state)) throw new ApiError(403, "identity_login_binding_invalid", "Identity login state does not match this browser session");
 }
@@ -1480,3 +1553,6 @@ export function mimeType(extension: string): string {
     ".wasm": "application/wasm"
   } as Record<string, string>)[extension] ?? "application/octet-stream";
 }
+
+function requestCookie(request: Request, name: string): string { return request.headers.get("cookie")?.split(";").map(item => item.trim()).find(item => item.startsWith(name + "="))?.slice(name.length + 1) ?? ""; }
+function requireFastCASOrigin(request: Request): void { if (request.headers.get("origin") !== new URL(request.url).origin) throw new ApiError(403, "csrf_origin_invalid", "Same-origin request required"); }

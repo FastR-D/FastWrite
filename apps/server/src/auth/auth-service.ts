@@ -3,6 +3,7 @@ import type { AccountUser, ExternalIdentity, PlatformRole } from "@fastwrite/sha
 import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
 import type { AuthenticatedIdentity } from "./identity-provider";
+import type { Identity, Link } from "@fastrd/fastcas/server";
 
 export interface Principal { user: AccountUser; sessionId: string; idpGroups?: string[]; }
 
@@ -71,13 +72,13 @@ export class AuthService {
       user = existing && state.users.find((item) => item.id === existing.userId);
       if (!user) {
         const emailNormalized = identity.email ? normalizeEmail(identity.email) : `external-${hash(`${identity.issuer}:${identity.subject}`).slice(0, 24)}@identity.invalid`;
-        user = { id: `user_${crypto.randomUUID()}`, emailNormalized, displayName: (identity.displayName || identity.username || emailNormalized.split("@")[0] || "User").slice(0, 100), platformRole: state.users.length ? "user" : "platform_admin", status: "active", authzVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+        user = { id: `user_${crypto.randomUUID()}`, emailNormalized, displayName: (identity.displayName || identity.username || emailNormalized.split("@")[0] || "User").slice(0, 100), platformRole: "user", status: "active", authzVersion: 1, createdAt: timestamp, updatedAt: timestamp };
         state.users.push(user);
         const external: ExternalIdentity = { id: `identity_${crypto.randomUUID()}`, userId: user.id, issuer: identity.issuer, subject: identity.subject, ...(identity.email ? { email: identity.email } : {}), ...(identity.username ? { username: identity.username } : {}), createdAt: timestamp };
         state.externalIdentities.push(external); state.auditEvents.push(audit(user.id, "auth.external_register", "user", user.id));
       }
       if (user.status !== "active") throw new ApiError(403, "account_disabled", "This account is disabled");
-      state.sessions.push(session(user.id, token, refreshToken, timestamp, undefined, normalizedIdpGroups(identity.issuer, identity.groups))); state.auditEvents.push(audit(user.id, "auth.external_login", "session", user.id));
+      state.sessions.push({ ...session(user.id, token, refreshToken, timestamp, undefined, normalizedIdpGroups(identity.issuer, identity.groups)), authSource: "external" }); state.auditEvents.push(audit(user.id, "auth.external_login", "session", user.id));
     });
     if (!user) throw new ApiError(500, "external_login_failed", "Unable to complete external login");
     return { user, token, refreshToken };
@@ -101,7 +102,7 @@ export class AuthService {
       if (!stored || stored.revokedAt) throw new ApiError(401, "refresh_replayed", "Refresh session has already been used");
       stored.revokedAt = timestamp;
       const rotated = session(user.id, token, refreshToken, timestamp, familyId, existing.idpGroups);
-      state.sessions.push(rotated);
+      state.sessions.push({ ...rotated, authenticatedAt: existing.authenticatedAt ?? existing.createdAt, ...(existing.authSource ? { authSource: existing.authSource } : {}), ...(existing.casIssuer ? { casIssuer: existing.casIssuer } : {}), ...(existing.casSid ? { casSid: existing.casSid } : {}), ...(existing.casLinkId ? { casLinkId: existing.casLinkId } : {}), ...(existing.casLinkVersion ? { casLinkVersion: existing.casLinkVersion } : {}), ...(existing.casVerifiedEmail ? { casVerifiedEmail: existing.casVerifiedEmail } : {}) });
       state.auditEvents.push(audit(user.id, "auth.refresh", "session", rotated.id));
     });
     return { user, token, refreshToken };
@@ -114,6 +115,77 @@ export class AuthService {
     const user = item && state.users.find((candidate) => candidate.id === item.userId);
     if (!item || !user || user.status !== "active") throw new ApiError(401, "session_invalid", "Your session has expired");
     return { user, sessionId: item.id, idpGroups: item.idpGroups ?? [] };
+  }
+
+  fastCASProofStatus(principal: Principal): { method: "password" | "external" | "none"; recent: boolean; localLoginId?: string } {
+    const state = this.database.snapshot();
+    if (state.localCredentials.some(item => item.userId === principal.user.id)) {
+      const localLoginId = state.externalIdentities.find(item => item.userId === principal.user.id && item.issuer === LOCAL_ISSUER)?.subject;
+      return { method: "password", recent: false, ...(localLoginId ? { localLoginId } : {}) };
+    }
+    if (!state.externalIdentities.some(item => item.userId === principal.user.id && item.issuer !== LOCAL_ISSUER)) {
+      const item = state.sessions.find(item => item.id === principal.sessionId && item.userId === principal.user.id && !item.revokedAt && item.expiresAt > new Date().toISOString());
+      const age = item ? Date.now() - Date.parse(item.authenticatedAt ?? item.createdAt) : Infinity;
+      const activeLink = item?.casLinkId && state.fastcasLinks.some(link => link.userId === principal.user.id && link.issuer === item.casIssuer && link.link.id === item.casLinkId && link.link.state === "active" && link.link.version === item.casLinkVersion);
+      return { method: "none", recent: item?.authSource === "fastcas" && Boolean(activeLink) && age >= 0 && age <= 5 * 60_000 };
+    }
+    const item = state.sessions.find(item => item.id === principal.sessionId && item.userId === principal.user.id && !item.revokedAt && item.expiresAt > new Date().toISOString());
+    const age = item ? Date.now() - Date.parse(item.authenticatedAt ?? item.createdAt) : Infinity;
+    return { method: "external", recent: item?.authSource === "external" && age >= 0 && age <= 5 * 60_000 };
+  }
+
+  async proveFastCASAccount(principal: Principal, password: string): Promise<void> {
+    const proof = this.fastCASProofStatus(principal);
+    if (proof.method === "external") {
+      if (!proof.recent || password) throw new ApiError(401, "external_reauthentication_required", "Sign in again with your original OIDC or CAS provider, then return within five minutes");
+      return;
+    }
+    if (proof.method === "none") throw new ApiError(409, "last_login_method", "Add another login method before removing FastCAS authentication");
+    const credential = this.database.snapshot().localCredentials.find(item => item.userId === principal.user.id);
+    if (!credential || !password || !await Bun.password.verify(password, credential.passwordHash)) throw new ApiError(401, "local_proof_required", "Confirm your FastWrite password to manage FastCAS authentication");
+    await this.database.mutate(state => {
+      const item = state.sessions.find(item => item.id === principal.sessionId && item.userId === principal.user.id && !item.revokedAt && item.expiresAt > new Date().toISOString());
+      if (!item || !state.users.some(user => user.id === item.userId && user.status === "active")) throw new ApiError(401, "session_invalid", "Sign in again");
+      item.authenticatedAt = new Date().toISOString();
+    });
+  }
+
+  async setLocalPasswordFromFastCAS(principal: Principal, issuer: string, password: string): Promise<{ loginId: string }> {
+    if (typeof password !== "string" || password.length < 12 || password.length > 1024) throw new ApiError(400, "password_length_invalid", "Password must be between 12 and 1024 characters");
+    const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
+    return this.database.mutate(state => {
+      const now = new Date().toISOString();
+      const user = state.users.find(item => item.id === principal.user.id && item.status === "active");
+      const current = state.sessions.find(item => item.id === principal.sessionId && item.userId === principal.user.id && !item.revokedAt && item.expiresAt > now && item.authSource === "fastcas" && item.casIssuer === issuer && item.casLinkId);
+      const age = current ? Date.now() - Date.parse(current.authenticatedAt ?? current.createdAt) : Infinity;
+      if (!user || !current || age < 0 || age > 5 * 60_000) throw new ApiError(401, "fastcas_reauthentication_required", "Sign in with FastCAS again, then set a local password within five minutes");
+      if (!state.fastcasLinks.some(item => item.userId === user.id && item.issuer === issuer && item.link.id === current.casLinkId && item.link.state === "active" && item.link.version === current.casLinkVersion)) throw new ApiError(401, "fastcas_link_inactive", "FastCAS authentication is no longer active");
+      if (state.localCredentials.some(item => item.userId === user.id) || state.externalIdentities.some(item => item.userId === user.id && item.issuer === LOCAL_ISSUER)) throw new ApiError(409, "local_login_exists", "This account already has a local password");
+      const occupied = (value: string) => state.externalIdentities.some(item => item.issuer === LOCAL_ISSUER && item.subject === value);
+      let loginId = current.casVerifiedEmail;
+      if (!loginId || occupied(loginId)) {
+        do { loginId = `local-${randomBytes(16).toString("hex")}@fastwrite.invalid`; } while (occupied(loginId));
+      }
+      state.externalIdentities.push({ id: `identity_${crypto.randomUUID()}`, userId: user.id, issuer: LOCAL_ISSUER, subject: loginId, email: loginId, createdAt: now });
+      state.localCredentials.push({ userId: user.id, passwordHash });
+      state.auditEvents.push(audit(user.id, "auth.local_password_from_fastcas", "user", user.id));
+      return { loginId };
+    });
+  }
+
+  async loginFastCAS(identity: Identity, link: Link): Promise<AuthResult> {
+    const timestamp = new Date().toISOString(); const token = randomToken(); const refreshToken = randomToken();
+    const user = await this.database.mutate(state => {
+      const mapping = state.fastcasLinks.find(item => item.issuer === identity.issuer && item.link.id === link.id && item.link.subject === identity.subject && item.link.state === "active" && item.link.version === link.version && item.userId === link.local_account_ref);
+      const user = mapping && state.users.find(item => item.id === mapping.userId && item.status === "active");
+      if (!user) throw new ApiError(403, "fastcas_not_linked", "Sign in to your FastWrite account and authenticate it with FastCAS first");
+      let verifiedEmail: string | undefined;
+      if (identity.emailVerified && identity.email) { try { verifiedEmail = normalizeEmail(identity.email); } catch { /* Invalid upstream email is never used as a local login ID. */ } }
+      state.sessions.push({ ...session(user.id, token, refreshToken, timestamp), authSource: "fastcas", casIssuer: identity.issuer, casLinkId: link.id, casLinkVersion: link.version, ...(identity.sessionId ? { casSid: identity.sessionId } : {}), ...(verifiedEmail ? { casVerifiedEmail: verifiedEmail } : {}) });
+      state.auditEvents.push(audit(user.id, "auth.fastcas_login", "session", user.id));
+      return user;
+    });
+    return { user, token, refreshToken };
   }
 
   issueCollaborationRoomToken(principal: Principal, input: { projectId: string; path: string; scope: "read" | "write" }): { token: string; expiresAt: string } {
@@ -148,7 +220,7 @@ function normalizeEmail(value: string): string { const email = value.trim().toLo
 function hash(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 function safeEqual(left: string, right: string): boolean { const a = Buffer.from(left); const b = Buffer.from(right); return a.length === b.length && timingSafeEqual(a, b); }
 function randomToken(): string { return randomBytes(32).toString("base64url"); }
-function session(userId: string, token: string, refreshToken: string, createdAt: string, familyId = `family_${crypto.randomUUID()}`, idpGroups?: string[]) { return { id: `session_${crypto.randomUUID()}`, userId, tokenHash: hash(token), refreshTokenHash: hash(refreshToken), familyId, ...(idpGroups?.length ? { idpGroups } : {}), createdAt, expiresAt: new Date(Date.now() + ACCESS_TOKEN_MS).toISOString(), refreshExpiresAt: new Date(Date.now() + REFRESH_TOKEN_MS).toISOString() }; }
+function session(userId: string, token: string, refreshToken: string, createdAt: string, familyId = `family_${crypto.randomUUID()}`, idpGroups?: string[]) { return { id: `session_${crypto.randomUUID()}`, userId, tokenHash: hash(token), refreshTokenHash: hash(refreshToken), familyId, ...(idpGroups?.length ? { idpGroups } : {}), authSource: "local" as const, authenticatedAt: createdAt, createdAt, expiresAt: new Date(Date.now() + ACCESS_TOKEN_MS).toISOString(), refreshExpiresAt: new Date(Date.now() + REFRESH_TOKEN_MS).toISOString() }; }
 function normalizedIdpGroups(issuer: string, groups: string[]): string[] {
   const normalizedIssuer = issuer.trim().replace(/\/$/, "");
   if (!normalizedIssuer) return [];
