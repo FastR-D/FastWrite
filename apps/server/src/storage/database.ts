@@ -48,7 +48,7 @@ export interface DatabaseState {
   fastcasTransactions: Transaction[];
   fastcasLinks: Array<{ issuer: string; userId: string; link: Link }>;
   fastcasEvents: Array<{ id: string; issuer: string; processedAt: string }>;
-  sessions: Array<{ id: string; userId: string; tokenHash: string; expiresAt: string; refreshTokenHash?: string; refreshExpiresAt?: string; familyId?: string; idpGroups?: string[]; revokedAt?: string; createdAt: string; authenticatedAt?: string; authSource?: "local" | "external" | "fastcas"; casIssuer?: string; casSid?: string; casLinkId?: string; casLinkVersion?: number; casVerifiedEmail?: string }>;
+  sessions: Array<{ id: string; userId: string; tokenHash: string; expiresAt: string; refreshTokenHash?: string; refreshExpiresAt?: string; familyId?: string; idpGroups?: string[]; revokedAt?: string; createdAt: string; authenticatedAt?: string; authSource?: "local" | "external" | "fastcas" | "api_key"; casIssuer?: string; casSid?: string; casLinkId?: string; casLinkVersion?: number; casVerifiedEmail?: string }>;
   teams: Team[];
   teamMembers: TeamMember[];
   teamGroupBindings: TeamGroupBinding[];

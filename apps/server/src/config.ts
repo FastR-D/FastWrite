@@ -110,6 +110,8 @@ export function discoverHarnessConfiguration(harness: "claude" | "codex"): Harne
   try { readFileSync(path, "utf8"); return { harness, configured: true, source: "user-config", configPath: path }; } catch { return { harness, configured: false, source: "none", configPath: path }; }
 }
 
+const apiKeys = process.env.FASTWRITE_API_KEYS?.trim();
+
 export const config = {
   harness: configuredHarness(process.env.FASTWRITE_HARNESS),
   port: Number.parseInt(process.env.FASTWRITE_PORT ?? "3003", 10),
@@ -127,6 +129,7 @@ export const config = {
   collaborationRoomTokenSecret,
   redisUrl,
   postgresUrl,
+  apiKeys,
   oidc: oidcIssuer && oidcClientId && oidcRedirectUri ? { issuer: oidcIssuer, clientId: oidcClientId, redirectUri: oidcRedirectUri, ...(oidcClientSecret ? { clientSecret: oidcClientSecret } : {}) } satisfies OidcConfiguration : undefined,
   cas: casServerUrl && casServiceUrl ? { serverUrl: casServerUrl, serviceUrl: casServiceUrl } satisfies CasConfiguration : undefined,
   fastcas: fastcasIssuer && fastcasClientId && fastcasSecret && fastcasRedirect ? { issuer: fastcasIssuer, clientId: fastcasClientId, clientSecret: fastcasSecret, redirectUri: fastcasRedirect, allowLoopbackHTTP: process.env.FASTWRITE_FASTCAS_LOOPBACK_HTTP === "true", allowRegistration: process.env.FASTWRITE_FASTCAS_ALLOW_SIGNUP === "true" } : undefined,

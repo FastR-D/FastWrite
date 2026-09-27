@@ -29,11 +29,23 @@ export function App() {
   const [route, setRoute] = useState(routeFromLocation);
   const [authenticationReady, setAuthenticationReady] = useState(() => {
     const parameters = new URLSearchParams(window.location.search);
-    return !["oidc", "cas", "fastcas"].some((provider) => parameters.get(provider) === "complete");
+    return !["oidc", "cas", "fastcas", "token"].some((provider) => parameters.has(provider) || parameters.get(provider) === "complete");
   });
   useEffect(() => { applyTheme(initialTheme()); }, []);
+
+  // 处理 API Key 自动登录 token
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
+    const token = parameters.get("token");
+
+    if (token) {
+      // 保存 token 并刷新页面移除 URL 参数
+      localStorage.setItem("fastwrite.session-token", token);
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
+      setAuthenticationReady(true);
+      return;
+    }
+
     if (parameters.get("oidc") !== "complete" && parameters.get("cas") !== "complete" && parameters.get("fastcas") !== "complete") return;
     void api.auth.refresh().then((session) => {
       localStorage.setItem("fastwrite.session-token", session.token);

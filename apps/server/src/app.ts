@@ -88,6 +88,7 @@ import { LocalObjectStore, createS3ObjectStore, type ObjectStore } from "./stora
 import { LocalModelProvider } from "./agent/local-model-provider";
 import { createNotification } from "./notifications/notification-service";
 import { MetricsRegistry } from "./metrics";
+import { ApiKeyService } from "./auth/api-key-service";
 
 const PROJECT_ACTIONS: ProjectAction[] = ["project:read", "project:write", "project:invite", "project:manage", "comment:write", "compile:run", "review:run", "agent:propose", "changeset:approve", "harness:use", "github:sync"];
 
@@ -119,6 +120,7 @@ interface Services {
   harnessSessions: HarnessSessionService;
   mcpTools: McpToolService;
   auth: AuthService;
+  apiKeyService: ApiKeyService;
   authorization: AuthorizationService;
   teams: TeamService;
   harnessProfiles: HarnessProfileService;
@@ -286,6 +288,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   if (postgresCutover && postgresMirror) await persistToPostgres();
   const comparePostgres = async () => postgresMirror && "dualReadCompare" in postgresMirror ? await (postgresMirror as import("./storage/postgres-repository").SqlPostgresRepository).dualReadCompare() : { equal: true, legacyHash: "", normalizedHash: "", mismatches: [] as string[] };
   const auth = new AuthService(database, config.collaborationRoomTokenSecret);
+  const apiKeyService = new ApiKeyService(config.apiKeys);
   const bootstrapRequested = config.features.serverAuth || process.env.FASTWRITE_BOOTSTRAP_ADMIN_EMAIL || process.env.FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD;
   if (bootstrapRequested) {
     const bootstrapCreated = await auth.ensureBootstrapAdmin(config.bootstrapAdmin);
@@ -371,7 +374,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const completions = new CompletionService(workspaces, skillRegistry, asGateway(providers.completion), memories);
   const diagrams = new DiagramService(dataDirectory, options.agentProvider?.generateDiagram ? options.agentProvider : diagramProvider(dataDirectory));
   await diagrams.initialize();
-  const services: Services = { diagrams, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
+  const services: Services = { diagrams, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, apiKeyService, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
   const routes = buildRoutes(services, {
     status: () => {
       const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
@@ -448,7 +451,7 @@ function pathAuthorizesIndividually(pathname: string): boolean {
   return /\/api\/projects\/[^/]+\/(?:file|asset|files|assets)$/.test(pathname);
 }
 
-function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry(), fastcas?: FastCASService): Route[] {
+function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, apiKeyService, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry(), fastcas?: FastCASService): Route[] {
   const presence = new Map<string, Map<string, { clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>();
   const principal = (request: Request, required = authEnabled): Principal | undefined => auth.principal(request, required);
   const authorize = (request: Request, projectId: string, action: Parameters<AuthorizationService["requireProject"]>[2]) => {
@@ -470,6 +473,304 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
   return [
     route("GET", "/api/health", async () => json({ status: "ok", version: "0.1.0" })),
     route("GET", "/api/metrics", async () => new Response(metrics.prometheus(), { headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8" } })),
+
+    // FastResearch 集成端点
+    route("GET", "/api/integration/projects", async (request) => {
+      const keyConfig = apiKeyService.requireScope(request, "project:list");
+
+      // 如果 API Key 绑定了用户，只返回该用户有权限访问的项目
+      let projects = database.snapshot().projects;
+
+      if (keyConfig.userId && authEnabled) {
+        const userProjects = database.snapshot().projectMembers
+          .filter(member => member.userId === keyConfig.userId)
+          .map(member => member.projectId);
+
+        projects = projects.filter(project =>
+          project.personalOwnerUserId === keyConfig.userId ||
+          project.teamId && userProjects.includes(project.id)
+        );
+      }
+
+      return json({
+        projects: projects.map(project => ({
+          id: project.id,
+          title: project.title,
+          venue: project.venue,
+          visibility: project.visibility,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt
+        })),
+        userId: keyConfig.userId,
+        userName: keyConfig.name
+      });
+    }),
+
+    route("POST", "/api/integration/projects", async (request) => {
+      const keyConfig = apiKeyService.requireScope(request, "project:create");
+      const body = await readJson<{ title: string; venue?: string; template?: string }>(request);
+
+      if (!body.title?.trim()) {
+        throw new ApiError(400, "title_required", "Project title is required");
+      }
+
+      const projectId = `project_${crypto.randomUUID()}`;
+      const timestamp = new Date().toISOString();
+
+      await database.mutate((state) => {
+        const project = {
+          id: projectId,
+          title: body.title.trim().slice(0, 200),
+          venue: body.venue?.trim().slice(0, 100) || "custom",
+          visibility: keyConfig.userId ? "private" : "team" as const,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          ...(keyConfig.userId ? { personalOwnerUserId: keyConfig.userId } : {})
+        };
+
+        state.projects.push(project);
+
+        // 如果 API Key 绑定了用户，将用户设置为项目所有者
+        if (keyConfig.userId && authEnabled) {
+          state.projectMembers.push({
+            projectId,
+            userId: keyConfig.userId,
+            role: "owner",
+            createdAt: timestamp,
+            updatedAt: timestamp
+          });
+
+          state.auditEvents.push({
+            id: `audit_${crypto.randomUUID()}`,
+            actorUserId: keyConfig.userId,
+            action: "project.create",
+            resourceType: "project",
+            resourceId: projectId,
+            metadata: { source: "api_key", keyName: keyConfig.name },
+            createdAt: timestamp
+          });
+        }
+      });
+
+      // 初始化项目工作区
+      await workspaces.initialize();
+
+      return json({
+        projectId,
+        title: body.title.trim(),
+        message: "Project created successfully",
+        createdBy: keyConfig.name,
+        userId: keyConfig.userId
+      }, 201);
+    }),
+
+    route("GET", "/api/integration/projects/:projectId", async (request, params) => {
+      const keyConfig = apiKeyService.requireScope(request, "project:read");
+      const project = database.snapshot().projects.find(p => p.id === params.projectId);
+
+      if (!project) {
+        throw new ApiError(404, "project_not_found", "Project not found");
+      }
+
+      // 如果 API Key 绑定了用户，检查权限
+      if (keyConfig.userId && authEnabled) {
+        const hasAccess = project.personalOwnerUserId === keyConfig.userId ||
+          database.snapshot().projectMembers.some(
+            member => member.projectId === params.projectId && member.userId === keyConfig.userId
+          );
+
+        if (!hasAccess) {
+          throw new ApiError(403, "access_denied", "You don't have permission to access this project");
+        }
+      }
+
+      return json({ project });
+    }),
+
+    route("POST", "/api/integration/projects/:projectId/compile", async (request, params) => {
+      const keyConfig = apiKeyService.requireScope(request, "project:compile");
+      const project = database.snapshot().projects.find(p => p.id === params.projectId);
+
+      if (!project) {
+        throw new ApiError(404, "project_not_found", "Project not found");
+      }
+
+      // 如果 API Key 绑定了用户，检查权限
+      if (keyConfig.userId && authEnabled) {
+        const hasAccess = project.personalOwnerUserId === keyConfig.userId ||
+          database.snapshot().projectMembers.some(
+            member => member.projectId === params.projectId && member.userId === keyConfig.userId
+          );
+
+        if (!hasAccess) {
+          throw new ApiError(403, "access_denied", "You don't have permission to compile this project");
+        }
+      }
+
+      const result = await latexCompiler.compile(params.projectId);
+
+      return json({
+        success: result.status === "success",
+        status: result.status,
+        pdfUrl: result.pdfUrl,
+        logs: result.logs?.slice(0, 1000),
+        compiledBy: keyConfig.name
+      });
+    }),
+
+    // API Key 自动登录端点 - 为 FastResearch 等外部服务提供快速跳转登录
+    route("POST", "/api/integration/auth/token", async (request) => {
+      const keyConfig = apiKeyService.requireScope(request, "project:read");
+      const body = await readJson<{ externalAccountId?: string; displayName?: string }>(request);
+
+      if (!authEnabled) {
+        throw new ApiError(503, "auth_disabled", "User authentication is not enabled");
+      }
+
+      const timestamp = new Date().toISOString();
+      const externalAccountId = body.externalAccountId?.trim().slice(0, 200);
+      const externalDisplayName = body.displayName?.trim().slice(0, 100);
+      let user: any;
+      let userCreated = false;
+
+      // A service key can mint one FastWrite account per external account.
+      if (!keyConfig.userId) {
+        const externalIssuer = "fastresearch";
+        if (externalAccountId) {
+          // Resolve and create inside one database mutation so two clicks for a
+          // new FastResearch account cannot create duplicate FastWrite users.
+          const resolved = await database.mutate((state) => {
+            const linkedIdentity = state.externalIdentities.find(identity => identity.issuer === externalIssuer && identity.subject === externalAccountId);
+            const linkedUser = linkedIdentity ? state.users.find(candidate => candidate.id === linkedIdentity.userId) : undefined;
+            if (linkedUser) return { user: linkedUser, created: false };
+
+            const userId = `user_${crypto.randomUUID()}`;
+            const createdUser = {
+              id: userId,
+              emailNormalized: `fastresearch-${createHash("sha256").update(externalAccountId).digest("hex").slice(0, 24)}@fastwrite.service`,
+              displayName: externalDisplayName || keyConfig.name || "FastResearch User",
+              platformRole: "user" as const,
+              status: "active" as const,
+              authzVersion: 1,
+              createdAt: timestamp,
+              updatedAt: timestamp
+            };
+            state.users.push(createdUser);
+            state.externalIdentities.push({
+              id: `identity_${crypto.randomUUID()}`,
+              userId,
+              issuer: externalIssuer,
+              subject: externalAccountId,
+              username: externalDisplayName || keyConfig.name || "FastResearch User",
+              createdAt: timestamp
+            });
+            state.auditEvents.push({
+              id: `audit_${crypto.randomUUID()}`,
+              actorUserId: userId,
+              action: "auth.external_key_auto_create_user",
+              resourceType: "user",
+              resourceId: userId,
+              metadata: { keyName: keyConfig.name, externalAccountId, source: externalIssuer },
+              createdAt: timestamp
+            });
+            return { user: createdUser, created: true };
+          });
+          user = resolved.user;
+          userCreated = resolved.created;
+        }
+        if (!user) {
+          const serviceEmail = `apikey-${keyConfig.key.slice(0, 16)}@fastwrite.service`;
+          const existingUser = database.snapshot().users.find(u => u.emailNormalized === serviceEmail);
+          if (existingUser) {
+            user = existingUser;
+          } else {
+            // Keep the legacy shared service account for callers without an external identity.
+            const userId = `user_${crypto.randomUUID()}`;
+            user = {
+              id: userId,
+              emailNormalized: serviceEmail,
+              displayName: keyConfig.name || "API Service User",
+              platformRole: "user" as const,
+              status: "active" as const,
+              authzVersion: 1,
+              createdAt: timestamp,
+              updatedAt: timestamp
+            };
+
+            await database.mutate((state) => {
+              state.users.push(user);
+              state.auditEvents.push({
+                id: `audit_${crypto.randomUUID()}`,
+                actorUserId: userId,
+                action: "auth.api_key_auto_create_user",
+                resourceType: "user",
+                resourceId: userId,
+                metadata: { keyName: keyConfig.name, source: "api_key_auto" },
+                createdAt: timestamp
+              });
+            });
+            userCreated = true;
+          }
+        }
+      } else {
+        // 使用绑定的用户
+        user = database.snapshot().users.find(u => u.id === keyConfig.userId);
+        if (!user) {
+          throw new ApiError(404, "user_not_found", "User account not found for this API Key");
+        }
+      }
+
+      if (user.status !== "active") {
+        throw new ApiError(403, "account_disabled", "This account is disabled");
+      }
+
+      // 生成登录 token
+      const token = randomBytes(32).toString("base64url");
+      const refreshToken = randomBytes(32).toString("base64url");
+      const sessionId = `session_${crypto.randomUUID()}`;
+
+      await database.mutate((state) => {
+        const session = {
+          id: sessionId,
+          userId: user.id,
+          tokenHash: createHash("sha256").update(token).digest("hex"),
+          refreshTokenHash: createHash("sha256").update(refreshToken).digest("hex"),
+          familyId: `family_${crypto.randomUUID()}`,
+          authSource: "api_key" as const,
+          authenticatedAt: timestamp,
+          createdAt: timestamp,
+          expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), // 15 分钟
+          refreshExpiresAt: new Date(Date.now() + 30 * 86400_000).toISOString() // 30 天
+        };
+
+        state.sessions.push(session);
+        state.auditEvents.push({
+          id: `audit_${crypto.randomUUID()}`,
+          actorUserId: user.id,
+          action: "auth.api_key_token",
+          resourceType: "session",
+          resourceId: session.id,
+          metadata: { keyName: keyConfig.name, source: "api_key", userCreated: String(userCreated) },
+          createdAt: timestamp
+        });
+      });
+      await teams.personalWorkspace({ user, sessionId });
+
+      // 返回登录凭证
+      return json({
+        user: {
+          id: user.id,
+          emailNormalized: user.emailNormalized,
+          displayName: user.displayName,
+          platformRole: user.platformRole
+        },
+        token,
+        refreshToken,
+        expiresIn: 15 * 60, // 秒
+        userCreated // 告知是否是新创建的用户
+      });
+    }),
+
     route("POST", "/api/auth/register", async (request) => { const result = await auth.register(await readJson<{ email: string; password: string; displayName?: string }>(request)); await teams.personalWorkspace({ user: result.user, sessionId: "register" }); return authResponse(result, 201); }),
     route("POST", "/api/auth/login", async (request) => authResponse(await auth.login(await readJson<{ email: string; password: string }>(request)))),
     route("GET", "/api/auth/providers", async () => json({ local: true, oidc: Boolean(oidc), cas: Boolean(cas), fastcas: Boolean(fastcas), fastcasSignup: Boolean(fastcas?.configuration.allowRegistration) })),
