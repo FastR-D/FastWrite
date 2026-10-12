@@ -32,7 +32,7 @@ import type {
   EvidenceCockpit, CitationReviewer
   ,AgentWireApi
 } from "@fastwrite/shared";
-import type { AgentProvider } from "./agent/provider";
+import { OpenAIAgentProvider, type AgentProvider } from "./agent/provider";
 import { asGateway } from "./agent/agent-gateway";
 import { DraftService } from "./agent/draft-service";
 import { ReviseService } from "./agent/revise-service";
@@ -157,8 +157,8 @@ export interface ApplicationOptions {
 }
 
 function providerFor(configuration: AgentProviderConfiguration): AgentProvider | undefined {
-  if (!configuration.baseURL || !configuration.model) return undefined;
-  return new LocalModelProvider({ endpoint: configuration.baseURL, model: configuration.model });
+  if (!configuration.apiKey) return undefined;
+  return new OpenAIAgentProvider(configuration.apiKey, configuration.model, configuration.baseURL, configuration.wireAPI);
 }
 
 function createRedisCollaborationBus(url: string): CollaborationBus {
@@ -313,7 +313,6 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const texPackages = options.texPackages ?? new TexPackageService(dataDirectory);
   await texPackages.initialize();
   const defaultProvider = options.agentProvider;
-  const configuredProviders = defaultProvider ? { completion: defaultProvider, agent: defaultProvider, revise: defaultProvider, review: defaultProvider, memory: defaultProvider } : undefined;
   let runtimeConfiguration: AgentProviderConfiguration | undefined;
   let runtimeProvider: AgentProvider | undefined;
   const configureAgent = (input: AgentSettingsInput) => {
@@ -321,12 +320,14 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
     if (!apiKey) throw new ApiError(400, "agent_api_key_required", "Enter an API key to enable Agent tasks");
     const baseURL = boundedSetting(input.baseURL, 2_048);
     if (baseURL) {
-      try { new URL(baseURL); } catch { throw new ApiError(400, "agent_base_url_invalid", "Base URL must be a valid absolute URL"); }
+      try { const url = new URL(baseURL); if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Invalid provider URL"); } catch { throw new ApiError(400, "agent_base_url_invalid", "Base URL must be an HTTP(S) URL without embedded credentials"); }
     }
     if (input.wireAPI !== undefined && input.wireAPI !== "chat" && input.wireAPI !== "responses") throw new ApiError(400, "agent_wire_api_invalid", "Wire API must be 'chat' or 'responses'");
-    runtimeConfiguration = { apiKey, ...(baseURL ? { baseURL } : {}), ...(boundedSetting(input.model, 256) ? { model: boundedSetting(input.model, 256) } : {}), wireAPI: input.wireAPI ?? (baseURL ? "chat" : "responses") };
     if (input.harness && input.harness !== config.harness) throw new ApiError(400, "harness_runtime_switch_unsupported", "Restart the server to switch Harness implementations");
-    runtimeProvider = providerFor(runtimeConfiguration);
+    const nextConfiguration = { apiKey, ...(baseURL ? { baseURL } : {}), ...(boundedSetting(input.model, 256) ? { model: boundedSetting(input.model, 256) } : {}), wireAPI: input.wireAPI ?? (baseURL ? "chat" : "responses") };
+    const nextProvider = providerFor(nextConfiguration);
+    runtimeConfiguration = nextConfiguration;
+    runtimeProvider = nextProvider;
   };
   const skillRegistry = new SkillRegistry(config.skillsDirectory, database);
   const harnessRegistry = new HarnessRegistry();
@@ -336,7 +337,11 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   for (const server of defaultMcpServers()) mcpRegistry.register(server);
   const harnessRuns = new HarnessRunService(harnessRegistry, database);
   const harnessProviderInstance = harnessProvider(harnessRuns, config.harness, process.cwd(), config.harnessModel);
-  const providers = configuredProviders ?? { completion: harnessProviderInstance, agent: harnessProviderInstance, revise: harnessProviderInstance, review: harnessProviderInstance, memory: harnessProviderInstance };
+  const environmentProvider = providerFor(config.agentProviders.agent);
+  const activeProvider = () => runtimeProvider ?? defaultProvider ?? environmentProvider ?? harnessProviderInstance;
+  // Services retain this proxy; each new call resolves the current configuration.
+  const sharedProvider = runtimeAgentProvider(activeProvider);
+  const providers = { completion: sharedProvider, agent: sharedProvider, revise: sharedProvider, review: sharedProvider, memory: sharedProvider };
   const harnessSessions = new HarnessSessionService(database);
   const latexCompiler = new LatexCompileService(dataDirectory, workspaces, { mode: process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host" });
   const mcpTools = new McpToolService(mcpRegistry, workspaces, latexCompiler, database);
@@ -370,14 +375,21 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const alignment = new AlignmentService(workspaces);
   const agentTasks = new AgentTaskService(database, workspaces, skillRegistry, asGateway(providers.agent), memories, asGateway(providers.review), compliance);
   const completions = new CompletionService(workspaces, skillRegistry, asGateway(providers.completion), memories);
-  const diagrams = new DiagramService(dataDirectory, options.agentProvider?.generateDiagram ? options.agentProvider : diagramProvider(dataDirectory));
+  const defaultDiagramProvider = diagramProvider(dataDirectory);
+  const diagrams = new DiagramService(dataDirectory, { generateDiagram: (input, signal) => {
+    const provider = runtimeProvider ?? defaultProvider ?? environmentProvider;
+    return (provider?.generateDiagram ? provider : defaultDiagramProvider).generateDiagram!(input, signal);
+  } });
   await diagrams.initialize();
   const services: Services = { diagrams, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
   const routes = buildRoutes(services, {
     status: () => {
       const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
       const discovered = discoverHarnessConfiguration(config.harness);
-      return { configured: Boolean(runtimeConfiguration ?? runtimeProvider ?? providers.agent) || discovered.configured, harness: config.harness, source: runtimeConfiguration || runtimeProvider ? "runtime" : providers.agent ? "environment" : "none", ...(activeConfiguration.baseURL ? { baseURL: activeConfiguration.baseURL } : discovered.baseURL ? { baseURL: discovered.baseURL } : {}), ...(activeConfiguration.model ? { model: activeConfiguration.model } : discovered.model ? { model: discovered.model } : {}), wireAPI: activeConfiguration.wireAPI ?? (activeConfiguration.baseURL ? "chat" : "responses") };
+      const configured = Boolean(runtimeProvider ?? defaultProvider ?? environmentProvider) || discovered.configured;
+      const source = runtimeProvider ? "runtime" : defaultProvider || environmentProvider || discovered.configured ? "environment" : "none";
+      const usesHTTP = Boolean(runtimeProvider ?? environmentProvider);
+      return { configured, harness: config.harness, source, ...(activeConfiguration.baseURL ? { baseURL: activeConfiguration.baseURL } : !usesHTTP && discovered.baseURL ? { baseURL: discovered.baseURL } : {}), ...(activeConfiguration.model ? { model: activeConfiguration.model } : !usesHTTP && discovered.model ? { model: discovered.model } : {}), wireAPI: activeConfiguration.wireAPI ?? (activeConfiguration.baseURL ? "chat" : "responses") };
     },
     configure: configureAgent,
     postgresMirror: () => ({ configured: Boolean(postgresMirror), healthy: Boolean(postgresMirror) && !postgresMirrorError, failures: postgresMirrorFailures, ...(postgresMirrorError ? { lastError: postgresMirrorError } : {}) }),

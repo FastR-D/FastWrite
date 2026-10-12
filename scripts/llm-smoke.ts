@@ -17,8 +17,7 @@ import type {
 import { createApplication } from "../apps/server/src/app";
 import { config } from "../apps/server/src/config";
 
-if (!config.openAIKey) throw new Error(".env must define OPENAI_API_KEY or OPENAI_KEY");
-if (!config.openAIBaseURL) throw new Error(".env must define OPENAI_BASE_URL or OPENAI_API_BASE for this smoke test");
+if (!config.agentProviders.agent.apiKey) throw new Error(".env must define FASTWRITE_HARNESS_API_KEY for this smoke test");
 
 const dataDirectory = await mkdtemp(join(tmpdir(), "fastwrite-real-llm-"));
 const fetchApp = await createApplication(dataDirectory);
@@ -43,7 +42,7 @@ async function stage<T>(name: string, operation: () => Promise<T>): Promise<T> {
 }
 
 try {
-  console.log(`LLM endpoint configured; model=${config.agentModel ?? "auto-discovered"}`);
+  console.log(`LLM endpoint configured; model=${config.agentProviders.agent.model ?? "auto-discovered"}`);
   const project = await api<PaperProject>("/api/projects", "POST", { name: "Real LLM Smoke", venue: "network-information-security" });
   const initial = await api<FileContentResponse>(`/api/projects/${project.id}/file?path=main.tex`);
   const source = String.raw`\documentclass{article}
