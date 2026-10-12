@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fastrd/fastcas": "file:../../../FastCAS/sdk/typescript",
+    "@fastrd/fastcas": "workspace:*",
     "@fastwrite/harness-claude": "workspace:*",
     "@fastwrite/harness-codex": "workspace:*",
     "@fastwrite/harness-core": "workspace:*",

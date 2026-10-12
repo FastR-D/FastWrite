@@ -2,6 +2,8 @@
 
 需要 [Bun](https://bun.sh/) 1.3+ 和 Git。
 
+FastCAS SDK 固定在仓库内的 `packages/fastcas-sdk`，来源为 [FastR-D/FastCAS 的 sdk/typescript](https://github.com/FastR-D/FastCAS/tree/676d49b18f700c009f1f491280a93de7da294836/sdk/typescript)，版本提交 `676d49b18f700c009f1f491280a93de7da294836`。本地使用 TypeScript 源码导出并适配严格可选属性检查；无需克隆相邻的 FastCAS 仓库或预先构建 SDK。更新 SDK 时应同步检查上游接口和身份认证契约测试。
+
 ## 开发运行
 
 ```bash
