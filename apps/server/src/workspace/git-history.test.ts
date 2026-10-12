@@ -242,6 +242,37 @@ test("discard reverts a tracked file to its staged content", async () => {
   expect(await readFile(join(workspace, "main.tex"), "utf8")).toBe("staged\n");
 });
 
+test("snapshot, staging and discard preserve line endings despite host Git conversion settings", async () => {
+  const { root, workspace, history } = await fixture();
+  await history.workingStatus(root, workspace);
+  const git = async (args: string[]) => {
+    const child = Bun.spawn(["git", `--git-dir=${join(root, "history.git")}`, ...args], { stdout: "pipe", stderr: "pipe" });
+    const [output, error, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(status, error).toBe(0);
+    return output.trim();
+  };
+  // Repository configuration has higher precedence than a user's global
+  // setting; using it makes this regression deterministic on every platform.
+  await git(["config", "core.autocrlf", "true"]);
+  const files = { "lf.tex": "one\ntwo\n", "crlf.tex": "one\r\ntwo\r\n", "mixed.tex": "one\r\ntwo\n" };
+  for (const [path, content] of Object.entries(files)) await writeFile(join(workspace, path), content);
+  const first = (await history.snapshot(root, workspace, "Original line endings"))!;
+  for (const [path, content] of Object.entries(files)) {
+    expect(await history.fileAt(root, first, path)).toBe(content);
+    await writeFile(join(workspace, path), `staged ${content}`);
+  }
+  await history.stage(root, workspace, Object.keys(files));
+  for (const path of Object.keys(files)) await writeFile(join(workspace, path), "unstaged\n");
+  await history.discard(root, workspace, Object.keys(files));
+  for (const [path, content] of Object.entries(files)) expect(await readFile(join(workspace, path), "utf8")).toBe(`staged ${content}`);
+  await history.unstage(root, workspace, Object.keys(files));
+  await history.discard(root, workspace, Object.keys(files));
+  await history.stageRemoval(root, workspace, Object.keys(files));
+  await history.discard(root, workspace, Object.keys(files));
+  for (const [path, content] of Object.entries(files)) expect(await readFile(join(workspace, path), "utf8")).toBe(content);
+  expect(await git(["config", "--get", "core.autocrlf"])).toBe("true");
+}, 15000);
+
 test("discard deletes an untracked file", async () => {
   const { root, workspace, history } = await fixture();
   await writeFile(join(workspace, "scratch.tex"), "draft\n");
