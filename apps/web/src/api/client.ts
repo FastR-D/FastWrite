@@ -55,7 +55,7 @@ export class ApiClientError extends Error {
   }
 }
 
-async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
+export async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   const token = localStorage.getItem("fastwrite.session-token");
   if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
@@ -85,6 +85,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await requestResponse(path, init);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const response = await requestResponse(path);
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestInit {
