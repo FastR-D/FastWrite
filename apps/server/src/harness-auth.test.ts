@@ -25,7 +25,9 @@ async function fixture(serverAuth = true) {
   const database = new JsonDatabase(directory);
   await database.initialize();
   const auth = new AuthService(database);
-  const admin = await auth.register({ email: "admin@example.test", password: "test-password-long-enough" });
+  const adminCredentials = { email: "admin@example.test", password: "test-password-long-enough" };
+  await auth.ensureBootstrapAdmin(adminCredentials);
+  const admin = await auth.login(adminCredentials);
   const user = await auth.register({ email: "user@example.test", password: "test-password-long-enough" });
   const auditor = await auth.register({ email: "auditor@example.test", password: "test-password-long-enough" });
   const timestamp = new Date().toISOString();
