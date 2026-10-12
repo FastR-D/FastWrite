@@ -955,7 +955,6 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .research-results, .research-bundles, .research-evidence-list, .research-claims-list { display: grid; gap: 8px; }
 .research-reader-controls { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(250px, 1.5fr) minmax(180px, 1fr); align-items: end; gap: 10px; padding: 10px; border: 1px solid var(--research-border); background: var(--slate-25); }
 .research-reader-controls input[type="file"] { width: 100%; font-size: 9px; }
-.checkbox-field { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); font-size: 9px; line-height: 1.4; }
 .research-results article, .research-bundle, .research-evidence-list > article, .research-claims-list > article { display: grid; gap: 7px; min-width: 0; border: 1px solid var(--research-border); border-radius: 7px; padding: 10px; background: var(--slate-25); }
 .research-results small, .research-bundle small, .research-evidence-list small, .research-claims-list small { color: var(--text-muted); font-size: 8px; }
 .research-work-title, .research-evidence-list article > header, .research-claims-list article > header { display: flex; align-items: center; gap: 7px; min-width: 0; }
@@ -1107,7 +1106,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .workbench-git { overflow: auto; }
 .source-control-view > p, .source-control-view > label { margin: 10px; font-size: 12px; }
 .source-control-history { display: grid; gap: 2px; padding: 6px 10px 10px; border-bottom: 1px solid var(--border); }
-.source-control-history button { display: grid; gap: 2px; text-align: left; padding: 7px 8px; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
+.source-control-history button { display: grid; height: auto; justify-content: stretch; gap: 2px; text-align: left; padding: 7px 8px; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
 .source-control-history button:hover, .source-control-history button:focus-visible { background: var(--surface-hover); outline: 2px solid var(--focus); outline-offset: -2px; }
 .source-control-history strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .source-control-history small { color: var(--muted); font-size: 11px; }
