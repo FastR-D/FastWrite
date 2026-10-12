@@ -38,7 +38,13 @@ jobs:
           bunx playwright install --with-deps chromium
 
       - name: Verify real sandboxed compilation
-        run: bun scripts/compiler-sandbox-smoke.ts
+        run: |
+          # This disposable GitHub-hosted runner must allow bwrap to create its
+          # network namespace. The compiler still runs with --unshare-all.
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bun scripts/compiler-sandbox-smoke.ts
 
       - name: Run release checks
         run: bun run release:check
