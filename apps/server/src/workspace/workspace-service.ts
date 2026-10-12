@@ -400,7 +400,23 @@ export class WorkspaceService {
     return this.projectQueue.run(id, async () => {
       this.getProject(id);
       const projectDirectory = join(this.projectsDirectory, id);
-      await this.gitHistory.discard(projectDirectory, join(projectDirectory, "workspace"), paths);
+      const root = join(projectDirectory, "workspace");
+      const normalized = paths.map(normalizeWorkspacePath);
+      const status = await this.gitHistory.workingStatus(projectDirectory, root);
+      const affected = new Set([...Object.keys(this.database.snapshot().fileVersions[id] ?? {}), ...status.files.map(file => file.path), ...normalized].filter(path => normalized.some(prefix => path === prefix || path.startsWith(`${prefix}/`))));
+      await this.gitHistory.discard(projectDirectory, root, paths);
+      const remaining = new Set(await this.listRelativeFiles(root));
+      const timestamp = now();
+      await this.database.mutate(state => {
+        const versions = state.fileVersions[id] ??= {};
+        for (const path of affected) {
+          if (remaining.has(path)) versions[path] = { version: (versions[path]?.version ?? 0) + 1, updatedAt: timestamp };
+          else delete versions[path];
+        }
+        const project = state.projects.find(item => item.id === id)!;
+        project.version++; project.updatedAt = timestamp;
+        for (const claim of state.paperClaims) if (claim.projectId === id && affected.has(claim.anchor.path)) { claim.anchorStatus = "stale"; claim.updatedAt = timestamp; }
+      });
     });
   }
 

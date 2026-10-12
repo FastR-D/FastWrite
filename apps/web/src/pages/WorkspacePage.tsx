@@ -25,7 +25,7 @@ import type {
   WorkspaceTreeNode,
   EvidenceCockpit,
 } from "@fastwrite/shared";
-import { api } from "../api/client";
+import { api, ApiClientError } from "../api/client";
 import { Button, Dialog, Field, Icon, IconButton, Link, SegmentedControl, Select, TabBar, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { FileTree } from "../components/workspace/FileTree";
 import { AddFileDialog } from "../components/workspace/AddFileDialog";
@@ -942,6 +942,26 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                */
               await editorRef.current?.flush();
               await registry.flush();
+            }} onDiscard={async paths => {
+              await api.projects.discardPaths(projectId, paths);
+              const matches = (path: string) => paths.some(prefix => path === prefix || path.startsWith(prefix + "/"));
+              const removed = new Set<string>();
+              for (const entry of registry.entries.values()) if (matches(entry.session.path)) {
+                try {
+                  const document = await api.projects.readFile(projectId, entry.session.path);
+                  if (entry.collaboration) await entry.collaboration.refresh(); else registry.open(document);
+                  if (selectedPath === entry.session.path) setFileDocument(document);
+                } catch (failure) {
+                  if (!(failure instanceof ApiClientError) || failure.status !== 404) throw failure;
+                  await registry.forget(entry.session.path);
+                  removed.add(entry.session.path);
+                }
+              }
+              if (removed.size) {
+                setSourceTabs(tabs => tabs.filter(tab => !removed.has(tab.path)));
+                if (selectedPath && removed.has(selectedPath)) { setSelectedPath(null); setFileDocument(null); }
+              }
+              await refreshWorkspace();
             }} onCommit={async (message) => {
               /*
                * No flush here: the sidebar's `act` has already run `onFlush`

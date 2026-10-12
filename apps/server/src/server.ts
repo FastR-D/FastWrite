@@ -94,6 +94,14 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
         return server.upgrade(request, { data: { kind: "harness", runId, accessRequest } }) ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
       }
       const response = await fetch(request);
+      const discardedProject = request.method === "POST" && url.pathname.match(/^\/api\/projects\/([^/]+)\/history\/discard$/);
+      if (response.ok && discardedProject) {
+        const projectId = decodeURIComponent(discardedProject[1]!);
+        for (const room of rooms.values()) for (const socket of room) if (socket.data.projectId === projectId) {
+          try { if (await reauthorizeCollaborationSocket(socket)) await sendSyncStep2(fetch, socket, new Uint8Array([0])); }
+          catch { socket.close(4003, "Workspace document changed"); }
+        }
+      }
       const persistedRoom = request.method === "POST" && url.pathname.match(/^\/api\/projects\/([^/]+)\/collaboration(?:\/persist)?$/);
       if (response.ok && persistedRoom) {
         const state = await response.clone().json() as { path: string; update: string };

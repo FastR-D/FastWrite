@@ -956,7 +956,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("POST", "/api/projects/:projectId/history/discard", async (request, params) => {
       const body = await readJson<{ paths?: string[] }>(request);
       const paths = await authorizeHistoryPaths(request, required(params, "projectId"), body.paths ?? []);
-      await workspaces.discardPaths(required(params, "projectId"), paths!);
+      await collaboration.discardPaths(required(params, "projectId"), paths!);
       return new Response(null, { status: 204 });
     }),
     route("POST", "/api/projects/:projectId/history/commit", async (request, params) => {
