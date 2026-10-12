@@ -54,6 +54,7 @@ cleanup() {
   if [ "$status" -ne 0 ]; then
     mkdir -p "$PROJECT_ROOT/output/playwright"
     cp "$QA_DATA/server.log" "$PROJECT_ROOT/output/playwright/server.log" 2>/dev/null || true
+    bun -e 'const db = await Bun.file(Bun.argv[1]).json(); for (const job of db.jobs ?? []) if (job.kind === "latex.compile") console.error(JSON.stringify({ id: job.id, status: job.status, error: job.error, compileError: job.output?.error, log: job.output?.log }));' "$QA_DATA/database.json" 2>&1 || true
     pw run-code 'async (page) => { await page.screenshot({ path: "output/playwright/smoke-failure.png", fullPage: true }); }' >/dev/null 2>&1 || true
   fi
   pw close >/dev/null 2>&1 || true

@@ -44,6 +44,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends bubblewrap latexmk texlive-latex-base texlive-latex-recommended texlive-fonts-recommended
           bunx playwright install --with-deps chromium
 
+      - name: Verify real sandboxed compilation
+        run: bun scripts/compiler-sandbox-smoke.ts
+
       - name: Run release checks
         run: bun run release:check
 
