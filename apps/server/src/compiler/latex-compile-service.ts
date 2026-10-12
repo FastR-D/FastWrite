@@ -1,5 +1,5 @@
 import { mkdir, readFile, rm } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, posix } from "node:path";
 import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { normalizeWorkspacePath } from "@fastwrite/shared";
@@ -52,11 +52,12 @@ export class LatexCompileService {
       const mainDocument = normalizeWorkspacePath(snapshot.mainDocument);
       const identity = { projectVersion: snapshot.projectVersion, snapshotId };
       await mkdir(output, { recursive: true });
+      const compilerOutput = this.policy.mode === "bubblewrap" ? "/workspace/output" : output;
       const argumentsList = executable.endsWith("latexmk") || executable.includes("latexmk")
-        ? [executable, "-norc", "-pdf", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${output}`, `-auxdir=${output}`, `./${mainDocument}`]
-        : [executable, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-output-directory=${output}`, `./${mainDocument}`];
+        ? [executable, "-norc", "-pdf", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${compilerOutput}`, `-auxdir=${compilerOutput}`, `./${mainDocument}`]
+        : [executable, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-output-directory=${compilerOutput}`, `./${mainDocument}`];
       const command = this.policy.mode === "bubblewrap" ? this.bubblewrapCommand(argumentsList, source, output) : argumentsList;
-      const child = Bun.spawn(command, { cwd: source, stdout: "pipe", stderr: "pipe", env: compileEnvironment(output) });
+      const child = Bun.spawn(command, { cwd: source, stdout: "pipe", stderr: "pipe", env: compileEnvironment(compilerOutput) });
       const timeout = setTimeout(() => child.kill(), this.policy.timeoutMs);
       const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
       clearTimeout(timeout);
@@ -79,7 +80,7 @@ export class LatexCompileService {
     if (!bwrap) throw new ApiError(503, "compile_sandbox_unavailable", "Bubblewrap is required for sandboxed server compilation.");
     const cpuSeconds = Math.max(1, Math.ceil(this.policy.timeoutMs / 1000));
     const memoryKb = this.policy.memoryMb * 1024;
-    return [bwrap, "--die-with-parent", "--unshare-net", "--new-session", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib", "--ro-bind", "/lib64", "/lib64", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--bind", source, "/workspace/source", "--bind", output, "/workspace/output", "--chdir", "/workspace/source", "--", "sh", "-c", `ulimit -t ${cpuSeconds}; ulimit -v ${memoryKb}; ulimit -u ${this.policy.pids}; exec "$@"`, "fastwrite-compile", ...command.map((part) => part === source ? "/workspace/source" : part === output ? "/workspace/output" : part)];
+    return [bwrap, "--die-with-parent", "--unshare-all", "--new-session", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib", "--ro-bind-try", "/lib64", "/lib64", "--ro-bind-try", "/etc/texmf", "/etc/texmf", "--ro-bind-try", "/var/lib/texmf", "/var/lib/texmf", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--ro-bind", source, "/workspace/source", "--bind", output, "/workspace/output", "--chdir", "/workspace/source", "--", "/bin/bash", "-ec", `ulimit -t ${cpuSeconds}; ulimit -v ${memoryKb}; ulimit -u ${this.policy.pids}; exec "$@"`, "fastwrite-compile", ...command];
   }
 }
 
@@ -91,7 +92,7 @@ export function compileEnvironment(output: string): Record<string, string> {
   }
   return { ...env, HOME: output, USERPROFILE: output, TMPDIR: output, TEMP: output, TMP: output,
     TEXMFOUTPUT: output, openin_any: "p", openout_any: "p", shell_escape: "f", SOURCE_DATE_EPOCH: "0",
-    TEXMFCONFIG: join(output, "texmf-config"), TEXMFVAR: join(output, "texmf-var") };
+    TEXMFCONFIG: (output === "/workspace/output" ? posix : { join }).join(output, "texmf-config"), TEXMFVAR: (output === "/workspace/output" ? posix : { join }).join(output, "texmf-var") };
 }
 
 async function findOutputFile(root: string, filename: string): Promise<string | null> {
