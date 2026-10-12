@@ -34,7 +34,11 @@ run_code() {
 
 run_accessibility() {
   run_code 'async (page) => {
-  await page.addScriptTag({ path: "node_modules/axe-core/axe.min.js" });
+  // Serve the test tool from this origin so the application CSP stays enabled.
+  const axeUrl = new URL("/__e2e__/axe.min.js", page.url()).href;
+  await page.route(axeUrl, route => route.fulfill({ path: "node_modules/axe-core/axe.min.js", contentType: "application/javascript" }));
+  try { await page.addScriptTag({ url: axeUrl }); }
+  finally { await page.unroute(axeUrl); }
   const result = await page.evaluate(async () => await window.axe.run(document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] }
   }));
@@ -46,6 +50,12 @@ run_accessibility() {
 }
 
 cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    mkdir -p "$PROJECT_ROOT/output/playwright"
+    cp "$QA_DATA/server.log" "$PROJECT_ROOT/output/playwright/server.log" 2>/dev/null || true
+    pw run-code 'async (page) => { await page.screenshot({ path: "output/playwright/smoke-failure.png", fullPage: true }); }' >/dev/null 2>&1 || true
+  fi
   pw close >/dev/null 2>&1 || true
   if [ -n "$SERVER_PID" ]; then kill "$SERVER_PID" >/dev/null 2>&1 || true; fi
   case "$QA_DATA" in
