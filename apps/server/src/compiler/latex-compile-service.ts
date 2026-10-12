@@ -53,10 +53,10 @@ export class LatexCompileService {
       const identity = { projectVersion: snapshot.projectVersion, snapshotId };
       await mkdir(output, { recursive: true });
       const argumentsList = executable.endsWith("latexmk") || executable.includes("latexmk")
-        ? [executable, "-pdf", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${output}`, `-auxdir=${output}`, mainDocument]
-        : [executable, "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-output-directory=${output}`, mainDocument];
+        ? [executable, "-norc", "-pdf", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${output}`, `-auxdir=${output}`, `./${mainDocument}`]
+        : [executable, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-output-directory=${output}`, `./${mainDocument}`];
       const command = this.policy.mode === "bubblewrap" ? this.bubblewrapCommand(argumentsList, source, output) : argumentsList;
-      const child = Bun.spawn(command, { cwd: source, stdout: "pipe", stderr: "pipe", env: { ...process.env, TEXMFOUTPUT: output, openin_any: "p", openout_any: "p", SOURCE_DATE_EPOCH: "0", TEXMFCONFIG: join(output, "texmf-config"), TEXMFVAR: join(output, "texmf-var") } });
+      const child = Bun.spawn(command, { cwd: source, stdout: "pipe", stderr: "pipe", env: compileEnvironment(output) });
       const timeout = setTimeout(() => child.kill(), this.policy.timeoutMs);
       const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
       clearTimeout(timeout);
@@ -81,6 +81,17 @@ export class LatexCompileService {
     const memoryKb = this.policy.memoryMb * 1024;
     return [bwrap, "--die-with-parent", "--unshare-net", "--new-session", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib", "--ro-bind", "/lib64", "/lib64", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--bind", source, "/workspace/source", "--bind", output, "/workspace/output", "--chdir", "/workspace/source", "--", "sh", "-c", `ulimit -t ${cpuSeconds}; ulimit -v ${memoryKb}; ulimit -u ${this.policy.pids}; exec "$@"`, "fastwrite-compile", ...command.map((part) => part === source ? "/workspace/source" : part === output ? "/workspace/output" : part)];
   }
+}
+
+export function compileEnvironment(output: string): Record<string, string> {
+  // Do not expose provider credentials, database URLs, or user TeX overrides to documents.
+  const env: Record<string, string> = {};
+  for (const key of ["PATH", "SystemRoot", "WINDIR", "PATHEXT", "LANG", "LC_ALL"]) {
+    if (process.env[key]) env[key] = process.env[key]!;
+  }
+  return { ...env, HOME: output, USERPROFILE: output, TMPDIR: output, TEMP: output, TMP: output,
+    TEXMFOUTPUT: output, openin_any: "p", openout_any: "p", shell_escape: "f", SOURCE_DATE_EPOCH: "0",
+    TEXMFCONFIG: join(output, "texmf-config"), TEXMFVAR: join(output, "texmf-var") };
 }
 
 async function findOutputFile(root: string, filename: string): Promise<string | null> {

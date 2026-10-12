@@ -343,7 +343,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const sharedProvider = runtimeAgentProvider(activeProvider);
   const providers = { completion: sharedProvider, agent: sharedProvider, revise: sharedProvider, review: sharedProvider, memory: sharedProvider };
   const harnessSessions = new HarnessSessionService(database);
-  const latexCompiler = new LatexCompileService(dataDirectory, workspaces, { mode: process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host" });
+  const latexCompiler = new LatexCompileService(dataDirectory, workspaces, { mode: features.serverAuth || process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host" });
   const mcpTools = new McpToolService(mcpRegistry, workspaces, latexCompiler, database);
   const latexTemplates = new LatexTemplateService(dataDirectory, fetch, config.templateDirectory);
   const memories = new MemoryService(database, workspaces, skillRegistry, asGateway(providers.memory));
