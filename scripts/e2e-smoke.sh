@@ -35,7 +35,7 @@ run_code() {
 run_accessibility() {
   run_code 'async (page) => {
   // Serve the test tool from this origin so the application CSP stays enabled.
-  const axeUrl = new URL("/__e2e__/axe.min.js", page.url()).href;
+  const axeUrl = await page.evaluate(() => location.origin + "/__e2e__/axe.min.js");
   await page.route(axeUrl, route => route.fulfill({ path: "node_modules/axe-core/axe.min.js", contentType: "application/javascript" }));
   try { await page.addScriptTag({ url: axeUrl }); }
   finally { await page.unroute(axeUrl); }
@@ -101,7 +101,7 @@ run_code 'async (page) => {
   if (!token) throw new Error("UI login did not establish a session");
   // The API fixtures below use page.request and need the same identity as the UI.
   await page.context().setExtraHTTPHeaders({ Authorization: "Bearer " + token });
-  const identity = await page.request.get(new URL("/api/auth/me", page.url()).href);
+  const identity = await page.request.get(await page.evaluate(() => location.origin + "/api/auth/me"));
   if (!identity.ok()) throw new Error("E2E fixture authentication failed");
 }'
 

@@ -13,7 +13,7 @@ bun run dev
 
 打开 <http://localhost:3002>（Vite 前端代理 API）。
 
-浏览器 WASM 编译器会在编译时自动识别缺少的 TeX 包，由 FastWrite Server 从兼容的 TeX Live/CTAN 源按需下载；下载结果会在服务端和浏览器中缓存，不需要预先同步 `local-packages`。
+工作区 PDF 预览使用服务器 LaTeX 编译，需要安装 `latexmk` 或 `pdflatex` 以及论文使用的 TeX 包。启用 `FASTWRITE_SERVER_AUTH=true` 时强制使用 Linux `bubblewrap` 沙箱，宿主机必须允许其创建隔离命名空间；缺少沙箱会拒绝编译。Windows 本地开发如需在开启鉴权的情况下编译，应把服务部署到具备这些依赖的 Linux/WSL 环境。单人、受信任的本地模式可使用宿主编译，但不会加载项目的 latexmk 配置或启用 shell escape。
 
 选定 venue 的 LaTeX 模板首次成功获取后会缓存到 `FASTWRITE_DATA_DIR/templates/`（未配置时为默认数据目录）；后续初始化直接使用本地缓存，不会重复下载。
 
