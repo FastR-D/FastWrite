@@ -2,6 +2,7 @@ import { createApplication, type ApplicationFetch } from "./app";
 import { config } from "./config";
 import type { Server, ServerWebSocket } from "bun";
 import { harnessEventBus } from "./agent/harness-event-bus";
+import { ApiError, errorResponse } from "./http";
 import * as Y from "yjs";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
@@ -23,9 +24,24 @@ export async function startServer() {
   return server;
 }
 
-export function createServerOptions(fetch: ((request: Request) => Promise<Response>) & Pick<Partial<ApplicationFetch>, "onAuthChange">) {
+export function createServerOptions(fetch: ((request: Request) => Promise<Response>) & Pick<Partial<ApplicationFetch>, "onAuthChange" | "authorizeHarnessRun">) {
   const rooms = new Map<string, Set<ServerWebSocket<CollaborationSocketData>>>();
-  const harnessUnsubscribers = new Map<ServerWebSocket<SocketData>, () => void>();
+  const harnessUnsubscribers = new Map<ServerWebSocket<HarnessSocketData>, () => void>();
+  const harnessReauthorizationTimers = new Map<ServerWebSocket<HarnessSocketData>, ReturnType<typeof setInterval>>();
+  const authorizeHarness = (request: Request, runId: string) => {
+    if (!fetch.authorizeHarnessRun) throw new ApiError(503, "harness_authorization_unavailable", "Harness authorization is unavailable");
+    fetch.authorizeHarnessRun(request, runId);
+  };
+  const stopHarnessSocket = (socket: ServerWebSocket<HarnessSocketData>) => {
+    harnessUnsubscribers.get(socket)?.();
+    harnessUnsubscribers.delete(socket);
+    clearInterval(harnessReauthorizationTimers.get(socket));
+    harnessReauthorizationTimers.delete(socket);
+  };
+  const reauthorizeHarnessSocket = (socket: ServerWebSocket<HarnessSocketData>) => {
+    try { authorizeHarness(socket.data.accessRequest, socket.data.runId); return true; }
+    catch { stopHarnessSocket(socket); socket.close(4003, "Harness access revoked"); return false; }
+  };
   const collaborationReauthorizationTimers = new Map<ServerWebSocket<CollaborationSocketData>, ReturnType<typeof setInterval>>();
   const reauthorizeCollaborationSocket = async (socket: ServerWebSocket<CollaborationSocketData>) => {
     const access = await fetch(new Request(`http://fastwrite.local/api/collaboration/room-access?token=${encodeURIComponent(socket.data.roomToken)}`));
@@ -33,6 +49,7 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
     return access.ok;
   };
   fetch.onAuthChange?.(() => {
+    for (const socket of harnessUnsubscribers.keys()) reauthorizeHarnessSocket(socket);
     for (const room of rooms.values()) for (const socket of room) void reauthorizeCollaborationSocket(socket).catch(() => socket.close(1011, "Collaboration authorization unavailable"));
   });
   const presenceExpiryTimer = setInterval(() => {
@@ -54,9 +71,20 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
         return server.upgrade(request, { data: { kind: "collaboration", room: `${identity.projectId}:${identity.path}`, clientId, roomToken, lastActivityAt: Date.now(), ...identity } }) ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
       }
       if (url.pathname === "/api/harness/socket") {
+        const origin = request.headers.get("origin");
+        if (origin && origin !== url.origin) return errorResponse(new ApiError(403, "csrf_origin_invalid", "Cross-origin requests are not allowed"));
         const runId = url.searchParams.get("runId")?.trim();
         if (!runId) return new Response("runId is required", { status: 400 });
-        return server.upgrade(request, { data: { kind: "harness", runId } }) ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
+        // Only the same authorization headers as HTTP are accepted. Never take
+        // a long-lived session token from the URL, where it can enter logs.
+        const headers = new Headers();
+        for (const name of ["authorization", "x-fastwrite-session"]) {
+          const value = request.headers.get(name);
+          if (value) headers.set(name, value);
+        }
+        const accessRequest = new Request(request.url, { headers });
+        try { authorizeHarness(accessRequest, runId); } catch (error) { return errorResponse(error); }
+        return server.upgrade(request, { data: { kind: "harness", runId, accessRequest } }) ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
       }
       const response = await fetch(request);
       const persistedRoom = request.method === "POST" && url.pathname.match(/^\/api\/projects\/([^/]+)\/collaboration(?:\/persist)?$/);
@@ -75,9 +103,29 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
       return response;
     },
     websocket: {
-      open(socket: ServerWebSocket<SocketData>) { if (socket.data.kind === "harness") { harnessUnsubscribers.set(socket, harnessEventBus.subscribe(socket.data.runId, (event) => socket.send(JSON.stringify(event)))); void fetch(new Request(`http://fastwrite.local/api/harness-runs/${encodeURIComponent(socket.data.runId)}/events`)).then(async (response) => { if (!response.ok) return; const events = await response.json() as unknown[]; for (const event of events) socket.send(JSON.stringify(event)); }).catch(() => undefined); return; } const collaborationSocket = socket as ServerWebSocket<CollaborationSocketData>; const room = rooms.get(socket.data.room) ?? new Set(); room.add(collaborationSocket); rooms.set(socket.data.room, room); collaborationReauthorizationTimers.set(collaborationSocket, setInterval(() => { void reauthorizeCollaborationSocket(collaborationSocket).catch(() => collaborationSocket.close(1011, "Collaboration authorization unavailable")); }, 60_000)); for (const peer of room) if (peer !== collaborationSocket && peer.data.awarenessUpdate) collaborationSocket.send(peer.data.awarenessUpdate); void sendSyncStep1(fetch, collaborationSocket).catch(() => collaborationSocket.close(1011, "Collaboration state unavailable")); },
+      open(socket: ServerWebSocket<SocketData>) {
+        if (socket.data.kind === "harness") {
+          const harnessSocket = socket as ServerWebSocket<HarnessSocketData>;
+          if (!reauthorizeHarnessSocket(harnessSocket)) return;
+          harnessUnsubscribers.set(harnessSocket, harnessEventBus.subscribe(socket.data.runId, (event) => {
+            if (reauthorizeHarnessSocket(harnessSocket)) socket.send(JSON.stringify(event));
+          }));
+          const timer = setInterval(() => reauthorizeHarnessSocket(harnessSocket), 60_000);
+          timer.unref?.();
+          harnessReauthorizationTimers.set(harnessSocket, timer);
+          void fetch(new Request(`http://fastwrite.local/api/harness-runs/${encodeURIComponent(socket.data.runId)}/events`, { headers: socket.data.accessRequest.headers })).then(async (response) => {
+            if (!harnessUnsubscribers.has(harnessSocket)) return;
+            if (!response.ok) { stopHarnessSocket(harnessSocket); socket.close(4003, "Harness access denied"); return; }
+            const events = await response.json() as unknown[];
+            if (!harnessUnsubscribers.has(harnessSocket) || !reauthorizeHarnessSocket(harnessSocket)) return;
+            for (const event of events) socket.send(JSON.stringify(event));
+          }).catch(() => { stopHarnessSocket(harnessSocket); socket.close(1011, "Harness history unavailable"); });
+          return;
+        }
+        const collaborationSocket = socket as ServerWebSocket<CollaborationSocketData>; const room = rooms.get(socket.data.room) ?? new Set(); room.add(collaborationSocket); rooms.set(socket.data.room, room); collaborationReauthorizationTimers.set(collaborationSocket, setInterval(() => { void reauthorizeCollaborationSocket(collaborationSocket).catch(() => collaborationSocket.close(1011, "Collaboration authorization unavailable")); }, 60_000)); for (const peer of room) if (peer !== collaborationSocket && peer.data.awarenessUpdate) collaborationSocket.send(peer.data.awarenessUpdate); void sendSyncStep1(fetch, collaborationSocket).catch(() => collaborationSocket.close(1011, "Collaboration state unavailable"));
+      },
       async message(socket: ServerWebSocket<SocketData>, message: string | Buffer) { if (socket.data.kind !== "collaboration" || typeof message === "string") return; const collaborationSocket = socket as ServerWebSocket<CollaborationSocketData>; if (!await reauthorizeCollaborationSocket(collaborationSocket).catch(() => { collaborationSocket.close(1011, "Collaboration authorization unavailable"); return false; })) return; const bytes = new Uint8Array(message); if (bytes.byteLength < 2 || bytes.byteLength > MAX_COLLABORATION_FRAME_BYTES) { collaborationSocket.close(1003, "Invalid collaboration frame"); return; } try { const decoder = decoding.createDecoder(bytes); const type = decoding.readVarUint(decoder); if (type === MESSAGE_SYNC) { const syncType = decoding.readVarUint(decoder); if (syncType === messageYjsSyncStep1) { const stateVector = decoding.readVarUint8Array(decoder); await sendSyncStep2(fetch, collaborationSocket, stateVector); return; } if (syncType !== messageYjsSyncStep2 && syncType !== messageYjsUpdate) throw new Error("Unknown Yjs sync message"); const update = decoding.readVarUint8Array(decoder); if (socket.data.scope !== "write") { if (syncType === messageYjsSyncStep2) return; collaborationSocket.close(4003, "Collaboration write access denied"); return; } await persistUpdate(fetch, collaborationSocket, update); const room = rooms.get(socket.data.room); if (room) broadcastBinary(room, Buffer.from(bytes), collaborationSocket); return; } if (type === MESSAGE_AWARENESS) { const update = sanitizeAwareness(decoder, collaborationSocket); if (!update) return; collaborationSocket.data.awarenessUpdate = update; collaborationSocket.data.lastActivityAt = Date.now(); const room = rooms.get(socket.data.room); if (room) broadcastBinary(room, update, collaborationSocket); return; } throw new Error("Unknown collaboration message"); } catch { collaborationSocket.close(1003, "Invalid collaboration message"); } },
-      close(socket: ServerWebSocket<SocketData>) { if (socket.data.kind === "harness") { harnessUnsubscribers.get(socket)?.(); harnessUnsubscribers.delete(socket); return; } const collaborationSocket = socket as ServerWebSocket<CollaborationSocketData>; const timer = collaborationReauthorizationTimers.get(collaborationSocket); if (timer) clearInterval(timer); collaborationReauthorizationTimers.delete(collaborationSocket); const room = rooms.get(socket.data.room); if (!room) return; room.delete(collaborationSocket); const removal = removeAwareness(collaborationSocket); if (removal) broadcastBinary(room, removal); if (!room.size) rooms.delete(socket.data.room); }
+      close(socket: ServerWebSocket<SocketData>) { if (socket.data.kind === "harness") { stopHarnessSocket(socket as ServerWebSocket<HarnessSocketData>); return; } const collaborationSocket = socket as ServerWebSocket<CollaborationSocketData>; const timer = collaborationReauthorizationTimers.get(collaborationSocket); if (timer) clearInterval(timer); collaborationReauthorizationTimers.delete(collaborationSocket); const room = rooms.get(socket.data.room); if (!room) return; room.delete(collaborationSocket); const removal = removeAwareness(collaborationSocket); if (removal) broadcastBinary(room, removal); if (!room.size) rooms.delete(socket.data.room); }
     },
     maxRequestBodySize: config.maxFileBytes + 1024 * 1024,
     // Agent operations enforce their own workflow-specific deadlines.
@@ -86,7 +134,8 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
 }
 
 interface CollaborationSocketData { room: string; projectId: string; path: string; clientId: string; roomToken: string; scope: "read" | "write"; userId: string; displayName: string; color: string; lastActivityAt: number; awarenessClientId?: number; awarenessClock?: number; awarenessUpdate?: Buffer }
-type SocketData = (CollaborationSocketData & { kind: "collaboration" }) | { kind: "harness"; runId: string };
+interface HarnessSocketData { kind: "harness"; runId: string; accessRequest: Request }
+type SocketData = (CollaborationSocketData & { kind: "collaboration" }) | HarnessSocketData;
 function broadcastBinary(room: Set<ServerWebSocket<CollaborationSocketData>>, payload: Buffer, exclude?: ServerWebSocket<CollaborationSocketData>) { for (const socket of room) if (socket !== exclude) socket.send(payload); }
 async function roomDocument(fetch: (request: Request) => Promise<Response>, socket: ServerWebSocket<CollaborationSocketData>) { const response = await fetch(new Request("http://fastwrite.local/api/collaboration/room-state", { headers: { "x-fastwrite-room-token": socket.data.roomToken } })); if (!response.ok) throw new Error("Room state unavailable"); const state = await response.json() as { update: string }; const document = new Y.Doc(); Y.applyUpdate(document, Buffer.from(state.update, "base64")); return document; }
 async function sendSyncStep1(fetch: (request: Request) => Promise<Response>, socket: ServerWebSocket<CollaborationSocketData>) { const encoder = encoding.createEncoder(); encoding.writeVarUint(encoder, MESSAGE_SYNC); writeSyncStep1(encoder, await roomDocument(fetch, socket)); socket.send(encoding.toUint8Array(encoder)); }
