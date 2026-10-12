@@ -486,16 +486,12 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     if (current) authorization.requireProject(current, projectId, action);
     return current;
   };
-  const assignProjectOwner = async (project: { id: string }, current?: Principal, teamId?: string) => {
-    if (!current) return;
-    if (teamId) authorization.requireTeamRole(current, teamId, ["owner", "admin"]);
-    const timestamp = new Date().toISOString();
-    await database.mutate((state) => {
-      const stored = state.projects.find((item) => item.id === project.id);
-      if (stored) { if (teamId) { stored.teamId = teamId; stored.visibility = "team"; } else { stored.personalOwnerUserId = current.user.id; stored.visibility = "private"; } }
-      if (!state.projectMembers.some((item) => item.projectId === project.id && item.userId === current.user.id)) state.projectMembers.push({ projectId: project.id, userId: current.user.id, role: "owner", createdAt: timestamp, updatedAt: timestamp });
-      state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: current.user.id, action: "project.create", resourceType: "project", resourceId: project.id, createdAt: timestamp });
-    });
+  const uploadIdFor = (request: Request, params: Record<string, string>) => {
+    const current = principal(request);
+    const id = required(params, "uploadId");
+    const session = uploads.get(id);
+    if (current && session.ownerUserId !== current.user.id && current.user.platformRole !== "platform_admin") throw new ApiError(404, "upload_not_found", "Upload session not found");
+    return id;
   };
   return [
     route("GET", "/api/health", async () => json({ status: "ok", version: "0.1.0" })),
@@ -886,17 +882,20 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       return json(!authEnabled ? workspaces.listProjects() : workspaces.listProjects().filter((project) => current && authorization.projectRole(current.user.id, project.id)));
     }),
     route("POST", "/api/projects", async (request) => {
+      const current = principal(request);
       const body = await readJson<CreateProjectRequest>(request);
+      if (body.teamId && current) authorization.requireTeamRole(current, body.teamId, ["owner", "admin"]);
+      const owner = current ? { userId: current.user.id, ...(body.teamId ? { teamId: body.teamId } : {}) } : undefined;
       if (body.initializeFromTemplate) {
         if (!body.publicationTarget) throw new ApiError(400, "template_target_required", "Select a conference or journal before using its template");
         const venue = body.venue ?? body.publicationTarget.domain;
         const template = await latexTemplates.materialize(body.name, venue, body.publicationTarget);
-        const project = await workspaces.importStagingDirectory({ stagingDirectory: template.stagingDirectory, name: body.name, mainDocument: template.mainDocument, venue, publicationTarget: body.publicationTarget, source: { type: "local", displayName: template.displayName } });
-        await assignProjectOwner(project, principal(request, false), body.teamId);
+        const project = await workspaces.importStagingDirectory({ owner, stagingDirectory: template.stagingDirectory, name: body.name, mainDocument: template.mainDocument, venue, publicationTarget: body.publicationTarget, source: { type: "local", displayName: template.displayName } });
+
         return json(project, 201);
       }
-      const project = await workspaces.createEmpty(body.name, body.mainDocument, body.venue, body.publicationTarget);
-      await assignProjectOwner(project, principal(request, false), body.teamId);
+      const project = await workspaces.createEmpty(body.name, body.mainDocument, body.venue, body.publicationTarget, owner);
+
       return json(project, 201);
     }),
     route("GET", "/api/projects/:projectId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(workspaces.getProject(projectId)); }),
@@ -1304,6 +1303,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       return json(rolledBack);
     }),
     route("POST", "/api/upload-sessions", async (request) => {
+      const current = principal(request);
       const body = await readJson<{
         projectName: string;
         mainDocument: string;
@@ -1312,22 +1312,23 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
         sourceName: string;
         entries: UploadManifestEntry[];
       }>(request);
-      return json(await uploads.create(body), 201);
+      return json(await uploads.create(body, current?.user.id), 201);
     }),
-    route("GET", "/api/upload-sessions/:uploadId", async (_request, params) => json(uploads.get(required(params, "uploadId")))),
+    route("GET", "/api/upload-sessions/:uploadId", async (request, params) => json(uploads.get(uploadIdFor(request, params)))),
     route("PUT", "/api/upload-sessions/:uploadId/files", async (request, params, url) => {
-      return json(await uploads.uploadFile(required(params, "uploadId"), requiredQuery(url, "path"), await request.arrayBuffer()));
+      return json(await uploads.uploadFile(uploadIdFor(request, params), requiredQuery(url, "path"), await request.arrayBuffer()));
     }),
-    route("POST", "/api/upload-sessions/:uploadId/complete", async (_request, params) => {
-      return json(await uploads.complete(required(params, "uploadId")), 201);
+    route("POST", "/api/upload-sessions/:uploadId/complete", async (request, params) => {
+      return json(await uploads.complete(uploadIdFor(request, params)), 201);
     }),
-    route("DELETE", "/api/upload-sessions/:uploadId", async (_request, params) => {
-      await uploads.cancel(required(params, "uploadId"));
+    route("DELETE", "/api/upload-sessions/:uploadId", async (request, params) => {
+      await uploads.cancel(uploadIdFor(request, params));
       return new Response(null, { status: 204 });
     }),
     route("POST", "/api/project-imports/github", async (request) => {
+      const current = principal(request);
       const body = await readJson<GithubImportRequest>(request);
-      return json(await github.import(body), 201);
+      return json(await github.import(body, current ? { userId: current.user.id } : undefined), 201);
     })
   ];
 }

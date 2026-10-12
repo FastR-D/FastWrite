@@ -44,6 +44,8 @@ function projectId(): string {
   return `paper_${crypto.randomUUID()}`;
 }
 
+export interface ProjectOwner { userId: string; teamId?: string; }
+
 export class WorkspaceService {
   private readonly projectsDirectory: string;
   private readonly gitHistory = new GitHistory();
@@ -83,17 +85,18 @@ export class WorkspaceService {
     return join(this.projectsDirectory, id, "workspace");
   }
 
-  async createEmpty(name: string, mainDocument = "main.tex", venue: TargetVenue = "network-information-security", publicationTarget?: PublicationTarget): Promise<PaperProject> {
+  async createEmpty(name: string, mainDocument = "main.tex", venue: TargetVenue = "network-information-security", publicationTarget?: PublicationTarget, owner?: ProjectOwner): Promise<PaperProject> {
     const normalizedMain = normalizeWorkspacePath(mainDocument);
     const id = projectId();
     const root = join(this.projectsDirectory, id, "workspace");
     await mkdir(dirname(join(root, normalizedMain)), { recursive: true });
     const template = `\\documentclass{article}\n\\title{${name.replace(/[{}\\]/g, "")} }\n\\author{}\n\\begin{document}\n\\maketitle\n\n\\section{Introduction}\n\n\\end{document}\n`;
     await writeFile(join(root, normalizedMain), template, "utf8");
-    return this.registerProject(id, name, normalizedMain, venue, { type: "local", displayName: "New paper" }, [normalizedMain], publicationTarget);
+    return this.registerProject(id, name, normalizedMain, venue, { type: "local", displayName: "New paper" }, [normalizedMain], publicationTarget, owner);
   }
 
   async importStagingDirectory(input: {
+    owner?: ProjectOwner | undefined;
     stagingDirectory: string;
     name: string;
     mainDocument: string;
@@ -115,10 +118,11 @@ export class WorkspaceService {
       await rm(projectDirectory, { recursive: true, force: true });
       throw new ApiError(400, "main_document_missing", `Main document '${normalizedMain}' was not uploaded`);
     }
-    return this.registerProject(id, input.name, normalizedMain, input.venue, input.source, files, input.publicationTarget);
+    return this.registerProject(id, input.name, normalizedMain, input.venue, input.source, files, input.publicationTarget, input.owner);
   }
 
   async copyExternalDirectory(input: {
+    owner?: ProjectOwner | undefined;
     sourceDirectory: string;
     name: string;
     mainDocument?: string;
@@ -134,6 +138,7 @@ export class WorkspaceService {
       ? normalizeWorkspacePath(input.mainDocument)
       : await this.detectMainDocument(temporary, files);
     return this.importStagingDirectory({
+      owner: input.owner,
       stagingDirectory: temporary,
       name: input.name,
       mainDocument,
@@ -533,7 +538,8 @@ export class WorkspaceService {
     venue: TargetVenue,
     source: ImportSource,
     files: string[],
-    publicationTarget?: PublicationTarget
+    publicationTarget?: PublicationTarget,
+    owner?: ProjectOwner
   ): Promise<PaperProject> {
     const timestamp = now();
     const skill = paperSkillForProfile(venue);
@@ -547,10 +553,15 @@ export class WorkspaceService {
       source,
       createdAt: timestamp,
       updatedAt: timestamp,
-      version: 1
+      version: 1,
+      ...(owner ? owner.teamId ? { teamId: owner.teamId, visibility: "team" as const } : { personalOwnerUserId: owner.userId, visibility: "private" as const } : {})
     };
     await this.database.mutate((state) => {
       state.projects.push(project);
+      if (owner) {
+        state.projectMembers.push({ projectId: id, userId: owner.userId, role: "owner", createdAt: timestamp, updatedAt: timestamp });
+        state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: owner.userId, action: "project.create", resourceType: "project", resourceId: id, createdAt: timestamp });
+      }
       state.fileVersions[id] = Object.fromEntries(files.map((path) => [path, { version: 1, updatedAt: timestamp }]));
     });
     await this.snapshotHistory(id, "Import paper snapshot");

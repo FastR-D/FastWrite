@@ -32,7 +32,7 @@ export class UploadService {
     await mkdir(this.uploadsDirectory, { recursive: true });
   }
 
-  async create(input: CreateUploadInput): Promise<UploadSession> {
+  async create(input: CreateUploadInput, ownerUserId?: string): Promise<UploadSession> {
     if (!input.projectName.trim()) throw new ApiError(400, "project_name_required", "Project name is required");
     if (input.entries.length === 0) throw new ApiError(400, "empty_upload", "The selected directory is empty");
     if (input.entries.length > config.maxEntries) throw new ApiError(413, "too_many_files", `A project can contain at most ${config.maxEntries} entries`);
@@ -58,6 +58,7 @@ export class UploadService {
     const createdAt = new Date();
     const session: UploadSession = {
       id: `upload_${crypto.randomUUID()}`,
+      ...(ownerUserId ? { ownerUserId } : {}),
       projectName: input.projectName.trim(),
       mainDocument,
       venue: input.venue,
@@ -128,6 +129,7 @@ export class UploadService {
     });
     try {
       const project = await this.workspaces.importStagingDirectory({
+        owner: session.ownerUserId ? { userId: session.ownerUserId } : undefined,
         stagingDirectory: this.stagingDirectory(id),
         name: session.projectName,
         mainDocument: session.mainDocument,
