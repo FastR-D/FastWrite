@@ -8,8 +8,18 @@ interface WorkspaceSnapshot {
   savedAt: number;
 }
 
-const keyFor = (projectId: string) => `fastwrite.workspace-snapshot:${projectId}`;
-const fileKeyFor = (projectId: string, path: string) => `fastwrite.workspace-file:${projectId}:${path}`;
+async function cacheScope() {
+  const token = localStorage.getItem("fastwrite.session-token");
+  const digest = token ? await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)) : null;
+  const key = digest ? Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("") : "local";
+  return { key, current: () => localStorage.getItem("fastwrite.session-token") === token };
+}
+const keyFor = (scope: string, projectId: string) => `fastwrite.workspace-snapshot:v2:${scope}:${projectId}`;
+const fileKeyFor = (scope: string, projectId: string, path: string) => `fastwrite.workspace-file:v2:${scope}:${projectId}:${path}`;
+
+export function canUseOfflineCache(error: unknown): boolean {
+  return error instanceof TypeError && /fetch|network|load failed|connection/i.test(error.message) || error instanceof DOMException && error.name === "NetworkError";
+}
 const NETWORK_EVENT = "fastwrite-network";
 
 export function networkState(): "online" | "offline" {
@@ -26,23 +36,24 @@ export function subscribeNetworkState(listener: (state: "online" | "offline") =>
   return () => { window.removeEventListener(NETWORK_EVENT, handler); window.removeEventListener("online", online); window.removeEventListener("offline", offline); };
 }
 
-export function saveWorkspaceSnapshot(projectId: string, snapshot: Omit<WorkspaceSnapshot, "savedAt">) {
-  try { localStorage.setItem(keyFor(projectId), JSON.stringify({ ...snapshot, savedAt: Date.now() })); } catch { /* Storage may be unavailable or full. */ }
+export async function saveWorkspaceSnapshot(projectId: string, snapshot: Omit<WorkspaceSnapshot, "savedAt">) {
+  try { const scope = await cacheScope(); if (!scope.current()) return; localStorage.setItem(keyFor(scope.key, projectId), JSON.stringify({ ...snapshot, savedAt: Date.now() })); } catch { /* Storage may be unavailable or full. */ }
 }
 
-export function loadWorkspaceSnapshot(projectId: string): WorkspaceSnapshot | null {
+export async function loadWorkspaceSnapshot(projectId: string): Promise<WorkspaceSnapshot | null> {
   try {
-    const raw = localStorage.getItem(keyFor(projectId));
+    const scope = await cacheScope(); if (!scope.current()) return null;
+    const raw = localStorage.getItem(keyFor(scope.key, projectId));
     if (!raw) return null;
     const snapshot = JSON.parse(raw) as WorkspaceSnapshot;
     return snapshot?.project && Array.isArray(snapshot.tree) && Array.isArray(snapshot.outline) && Array.isArray(snapshot.claims) ? snapshot : null;
   } catch { return null; }
 }
 
-export function saveWorkspaceFile(projectId: string, path: string, file: unknown) {
-  try { localStorage.setItem(fileKeyFor(projectId, path), JSON.stringify(file)); } catch { /* Best effort cache. */ }
+export async function saveWorkspaceFile(projectId: string, path: string, file: unknown) {
+  try { const scope = await cacheScope(); if (!scope.current()) return; localStorage.setItem(fileKeyFor(scope.key, projectId, path), JSON.stringify(file)); } catch { /* Best effort cache. */ }
 }
 
-export function loadWorkspaceFile<T>(projectId: string, path: string): T | null {
-  try { const raw = localStorage.getItem(fileKeyFor(projectId, path)); return raw ? JSON.parse(raw) as T : null; } catch { return null; }
+export async function loadWorkspaceFile<T>(projectId: string, path: string): Promise<T | null> {
+  try { const scope = await cacheScope(); if (!scope.current()) return null; const raw = localStorage.getItem(fileKeyFor(scope.key, projectId, path)); return raw ? JSON.parse(raw) as T : null; } catch { return null; }
 }

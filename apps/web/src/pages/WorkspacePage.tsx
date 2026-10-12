@@ -50,7 +50,7 @@ import { FASTWRITE_SAVE_EVENT } from "../lib/keyboard";
 import { publicationTargetAbbreviation } from "../lib/labels";
 import { ProjectSearchDialog } from "../components/workspace/ProjectSearchDialog";
 import { ProvenanceDialog } from "../components/workspace/ProvenanceDialog";
-import { loadWorkspaceFile, loadWorkspaceSnapshot, saveWorkspaceFile, saveWorkspaceSnapshot } from "../lib/offlineWorkspace";
+import { canUseOfflineCache, loadWorkspaceFile, loadWorkspaceSnapshot, saveWorkspaceFile, saveWorkspaceSnapshot } from "../lib/offlineWorkspace";
 
 const SourceEditor = lazy(() =>
   import("../components/workspace/SourceEditor").then((module) => ({
@@ -117,6 +117,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [offlineNotice, setOfflineNotice] = useState("");
   const [sidebarWidth, setSidebarWidth] = useStoredNumber(
     `fastwrite.workbench-layout:${projectId}:sidebar-width`,
     254,
@@ -300,7 +301,8 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           setOutline(nextOutline);
           setClaims(nextClaims);
           setEvidenceCockpit(nextCockpit);
-          saveWorkspaceSnapshot(projectId, { project: nextProject, tree: nextTree, outline: nextOutline, claims: nextClaims });
+          setOfflineNotice("");
+          void saveWorkspaceSnapshot(projectId, { project: nextProject, tree: nextTree, outline: nextOutline, claims: nextClaims });
           setSelectedPath(nextProject.mainDocument);
           if (latestCompile)
             setCompileState({
@@ -312,14 +314,17 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             });
         },
       )
-      .catch((loadError) => {
+      .catch(async (loadError) => {
         if ((loadError as DOMException).name === "AbortError") return;
-        const snapshot = loadWorkspaceSnapshot(projectId);
+        const snapshot = canUseOfflineCache(loadError) ? await loadWorkspaceSnapshot(projectId) : null;
+        if (controller.signal.aborted) return;
         if (snapshot) {
           setProject(snapshot.project); commitTree(snapshot.tree); setTree(snapshot.tree); setOutline(snapshot.outline); setClaims(snapshot.claims); setSelectedPath(snapshot.project.mainDocument);
-          const cachedMain = loadWorkspaceFile<FileContentResponse>(projectId, snapshot.project.mainDocument);
+          const cachedMain = await loadWorkspaceFile<FileContentResponse>(projectId, snapshot.project.mainDocument);
+          if (controller.signal.aborted) return;
           if (cachedMain) setFileDocument(cachedMain);
-          setError("Offline workspace snapshot loaded. Unsaved and cached files remain available; reconnect to refresh the project.");
+          setError("");
+          setOfflineNotice("Offline workspace snapshot loaded. Cached files remain available; reconnect and reload to refresh the project.");
         } else setError(loadError instanceof Error ? loadError.message : "Could not open project");
       })
       .finally(() => setLoading(false));
@@ -346,7 +351,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       .readFile(projectId, selectedPath, controller.signal)
       .then((nextDocument) => {
         if (controller.signal.aborted) return;
-        saveWorkspaceFile(projectId, selectedPath, nextDocument);
+        void saveWorkspaceFile(projectId, selectedPath, nextDocument);
         setFileDocument(nextDocument);
         setCursorLocation((current) =>
           current.path === selectedPath
@@ -354,9 +359,10 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             : { path: selectedPath, line: 1 },
         );
       })
-      .catch((readError) => {
+      .catch(async (readError) => {
         if ((readError as DOMException).name === "AbortError") return;
-        const cachedFile = loadWorkspaceFile<FileContentResponse>(projectId, selectedPath);
+        const cachedFile = canUseOfflineCache(readError) ? await loadWorkspaceFile<FileContentResponse>(projectId, selectedPath) : null;
+        if (controller.signal.aborted) return;
         if (cachedFile) setFileDocument(cachedFile);
         else setError(readError instanceof Error ? readError.message : "Could not open file");
       });
@@ -650,6 +656,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
 
   return (
     <div className="workspace-page">
+      {offlineNotice ? <div role="status" className="workspace-offline-notice">{offlineNotice}</div> : null}
       <header className="workspace-topbar">
         <div className="workspace-topbar__left">
           <IconButton
