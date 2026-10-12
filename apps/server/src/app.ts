@@ -132,7 +132,7 @@ interface Services {
 }
 
 type Handler = (request: Request, params: Record<string, string>, url: URL) => Promise<Response> | Response;
-export type ApplicationFetch = ((request: Request) => Promise<Response>) & { dispatchMail(): Promise<void>; onAuthChange?(listener: () => void): () => void };
+export type ApplicationFetch = ((request: Request) => Promise<Response>) & { dispatchMail(): Promise<void>; authorizeHarnessRun(request: Request, runId: string): void; onAuthChange?(listener: () => void): () => void };
 
 interface Route {
   method: string;
@@ -412,6 +412,10 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
   void stopCollaborationBus;
   applicationFetch.dispatchMail = () => mailDelivery.dispatchPending();
+  applicationFetch.authorizeHarnessRun = (request, runId) => {
+    requireHarnessAccess(auth, request, features.serverAuth);
+    if (!harnessRuns.get(runId)) throw new ApiError(404, "harness_run_not_found", "Harness run not found");
+  };
   applicationFetch.onAuthChange = listener => fastcas?.onRevocation(listener) ?? (() => {});
   return applicationFetch;
 }
@@ -448,9 +452,22 @@ function pathAuthorizesIndividually(pathname: string): boolean {
   return /\/api\/projects\/[^/]+\/(?:file|asset|files|assets)$/.test(pathname);
 }
 
+// Raw Harness sessions share host CLI credentials and accept arbitrary working
+// directories. They are host administration APIs, not project-scoped AI APIs.
+function requireHarnessAccess(auth: AuthService, request: Request, authEnabled: boolean, adminOnly = true): Principal | undefined {
+  if (!authEnabled) return undefined;
+  const actor = auth.principal(request)!;
+  if (adminOnly) requireRole(actor.user, "platform_admin");
+  return actor;
+}
+
 function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry(), fastcas?: FastCASService): Route[] {
   const presence = new Map<string, Map<string, { clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>();
   const principal = (request: Request, required = authEnabled): Principal | undefined => auth.principal(request, required);
+  const harnessRoute = (method: string, path: string, handler: Handler, adminOnly = true): Route => route(method, path, (request, params, url) => {
+    requireHarnessAccess(auth, request, authEnabled, adminOnly);
+    return handler(request, params, url);
+  });
   const authorize = (request: Request, projectId: string, action: Parameters<AuthorizationService["requireProject"]>[2]) => {
     const current = principal(request);
     if (current) authorization.requireProject(current, projectId, action);
@@ -621,8 +638,8 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       if(format==='pptx')return new Response(await renderPptx(record.scene),{headers:{'content-type':'application/vnd.openxmlformats-officedocument.presentationml.presentation','content-disposition':'attachment; filename="diagram.pptx"'}});
       throw new ApiError(400,'diagram_format_invalid','支持 SVG、draw.io 和 PPTX');
     }),
-    route("GET", "/api/harness-settings", async () => json(agentSettings.status())),
-    route("PUT", "/api/harness-settings", async (request) => { agentSettings.configure(await readJson<AgentSettingsInput>(request)); return json(agentSettings.status()); }),
+    harnessRoute("GET", "/api/harness-settings", async () => json(agentSettings.status()), false),
+    harnessRoute("PUT", "/api/harness-settings", async (request) => { agentSettings.configure(await readJson<AgentSettingsInput>(request)); return json(agentSettings.status()); }),
     route("GET", "/api/venues", async () => json(await skillRegistry.catalog())),
     route("GET", "/api/skills/workflows", async () => json((await skillRegistry.workflowCatalog()).map(({ instructions: _instructions, ...descriptor }) => descriptor))),
     route("GET", "/api/skills/releases", async () => json(await skillRegistry.publishedCatalog())),
@@ -630,26 +647,34 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("POST", "/api/skills/releases/:skillId/evaluate", async (request, params) => { const actor = principal(request, authEnabled); if (actor) requireRole(actor.user, "platform_admin"); try { return json(await skillRegistry.evaluate(required(params, "skillId"))); } catch (error) { throw new ApiError(404, "skill_release_not_found", error instanceof Error ? error.message : "Skill release not found"); } }),
     route("POST", "/api/skills/releases/:skillId/rollback", async (request, params) => { const actor = principal(request, authEnabled); if (actor) requireRole(actor.user, "platform_admin"); const body = await readJson<{ reason?: string }>(request); if (!body.reason?.trim()) throw new ApiError(400, "skill_rollback_reason_required", "A rollback reason is required"); try { return json(await skillRegistry.rollback(required(params, "skillId"), body.reason)); } catch (error) { throw new ApiError(404, "skill_release_not_found", error instanceof Error ? error.message : "Skill release not found"); } }),
     route("GET", "/api/agent-skills", async () => json(await skillRegistry.taskCatalog())),
-    route("GET", "/api/harnesses", async () => json(await Promise.all(harnessRegistry.list().map(async (adapter) => ({ status: await adapter.getStatus(), capabilities: await adapter.getCapabilities() }))))),
-    route("GET", "/api/harness-sessions", async () => json(harnessSessions.list())),
-    route("GET", "/api/mcp", async () => json(mcpRegistry.list())),
-    route("GET", "/api/mcp/audit", async (_request, params, url) => json(mcpTools.audit(url.searchParams.get("projectId") ?? undefined))),
+    harnessRoute("GET", "/api/harnesses", async () => json(await Promise.all(harnessRegistry.list().map(async (adapter) => ({ status: await adapter.getStatus(), capabilities: await adapter.getCapabilities() })))), false),
+    harnessRoute("GET", "/api/harness-sessions", async () => json(harnessSessions.list())),
+    harnessRoute("GET", "/api/mcp", async () => json(mcpRegistry.list()), false),
+    harnessRoute("GET", "/api/mcp/audit", async (request, _params, url) => {
+      const projectId = url.searchParams.get("projectId") || undefined;
+      if (authEnabled) {
+        const actor = principal(request)!;
+        if (projectId) authorization.requireProject(actor, projectId, "harness:use");
+        else requireRole(actor.user, "platform_admin");
+      }
+      return json(mcpTools.audit(projectId));
+    }, false),
     route("POST", "/api/projects/:projectId/mcp/call", async (request, params) => { const body = await readJson<{ name?: string; input?: unknown; allow?: string[]; deny?: string[] }>(request); if (!body.name) throw new ApiError(400, "mcp_tool_required", "name is required"); const projectId = required(params, "projectId"); const current = principal(request, false); if (current) await authorizeMcpWorkspaceInput(projectId, current, authorization, body.name, body.input, workspaces); const policy = current ? { allow: harnessProfiles.resolve(current, projectId).allowedTools } : { allow: body.allow ?? [], ...(body.deny ? { deny: body.deny } : {}) }; return json(await mcpTools.call(projectId, body.name, body.input ?? {}, policy)); }),
-    route("GET", "/api/harness-runs", async () => json(harnessRuns.list())),
-    route("GET", "/api/harness-runs/:runId", async (_request, params) => {
+    harnessRoute("GET", "/api/harness-runs", async () => json(harnessRuns.list())),
+    harnessRoute("GET", "/api/harness-runs/:runId", async (_request, params) => {
       const run = harnessRuns.get(required(params, "runId"));
       if (!run) throw new ApiError(404, "harness_run_not_found", "Harness run not found");
       return json(run);
     }),
-    route("GET", "/api/harness-runs/:runId/events", async (_request, params, url) => {
+    harnessRoute("GET", "/api/harness-runs/:runId/events", async (_request, params, url) => {
       const run = harnessRuns.get(required(params, "runId"));
       if (!run) throw new ApiError(404, "harness_run_not_found", "Harness run not found");
       const since = Math.max(0, Number.parseInt(url.searchParams.get("since") ?? "0", 10) || 0);
       const limit = Math.min(2000, Math.max(1, Number.parseInt(url.searchParams.get("limit") ?? "2000", 10) || 2000));
       return json(run.events.slice(since, since + limit));
     }),
-    route("GET", "/api/harness-runs/:runId/approvals", async (_request, params) => json(harnessRuns.listApprovals(required(params, "runId")))),
-    route("POST", "/api/harness-approvals/:approvalId", async (request, params) => {
+    harnessRoute("GET", "/api/harness-runs/:runId/approvals", async (_request, params) => json(harnessRuns.listApprovals(required(params, "runId")))),
+    harnessRoute("POST", "/api/harness-approvals/:approvalId", async (request, params) => {
       const body = await readJson<{ decision?: "approved" | "denied" }>(request);
       if (body.decision !== "approved" && body.decision !== "denied") throw new ApiError(400, "approval_decision_invalid", "decision must be approved or denied");
       let approval;
@@ -658,7 +683,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       if (!approval) throw new ApiError(404, "approval_not_found", "Approval not found");
       return json(approval);
     }),
-    route("POST", "/api/harness-runs", async (request) => {
+    harnessRoute("POST", "/api/harness-runs", async (request) => {
       const body = await readJson<{ kind?: "claude" | "codex"; sessionId?: string; cwd?: string; content?: string; model?: string; projectId?: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }>(request);
       if (!body.kind || !body.sessionId || !body.cwd?.trim() || !body.content?.trim()) throw new ApiError(400, "harness_run_invalid", "kind, sessionId, cwd and content are required");
       const actor = body.projectId ? principal(request)! : principal(request, false);
@@ -669,19 +694,19 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       for await (const event of harnessRuns.send({ kind: body.kind, session: { harness: body.kind, sessionId: body.sessionId, cwd: body.cwd.trim() }, content: body.content.trim(), ...(body.model?.trim() ? { model: body.model.trim() } : {}), ...(body.skills ? { skills: body.skills } : {}), ...(actor ? { actorUserId: actor.user.id } : {}), ...(body.projectId ? { projectId: body.projectId } : {}), ...(projectVersion !== undefined ? { projectVersion } : {}), ...(resolved ? { resolvedHarnessProfile: { profileId: resolved.profileId, version: resolved.version, fingerprint: resolved.fingerprint, sourceChain: resolved.sourceChain } } : {}), signal: request.signal })) events.push(event);
       return json({ events }, 201);
     }),
-    route("POST", "/api/harnesses/:kind/sessions", async (request, params) => {
+    harnessRoute("POST", "/api/harnesses/:kind/sessions", async (request, params) => {
       const adapter = harnessAdapter(harnessRegistry, required(params, "kind"));
       const body = await readJson<{ cwd?: string; title?: string }>(request);
       if (!body.cwd?.trim()) throw new ApiError(400, "harness_cwd_required", "cwd is required");
       return json(await harnessSessions.create(adapter, { cwd: body.cwd.trim(), ...(body.title?.trim() ? { title: body.title.trim().slice(0, 200) } : {}) }), 201);
     }),
-    route("POST", "/api/harnesses/:kind/sessions/:sessionId/resume", async (request, params) => {
+    harnessRoute("POST", "/api/harnesses/:kind/sessions/:sessionId/resume", async (request, params) => {
       const adapter = harnessAdapter(harnessRegistry, required(params, "kind"));
       const body = await readJson<{ cwd?: string }>(request);
       if (!body.cwd?.trim()) throw new ApiError(400, "harness_cwd_required", "cwd is required");
       return json(await harnessSessions.resume(adapter, { harness: adapter.kind, sessionId: required(params, "sessionId"), cwd: body.cwd.trim() }));
     }),
-    route("POST", "/api/harnesses/:kind/sessions/:sessionId/messages", async (request, params) => {
+    harnessRoute("POST", "/api/harnesses/:kind/sessions/:sessionId/messages", async (request, params) => {
       const adapter = harnessAdapter(harnessRegistry, required(params, "kind"));
       const body = await readJson<{ cwd?: string; content?: string; model?: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }>(request);
       if (!body.cwd?.trim() || !body.content?.trim()) throw new ApiError(400, "harness_message_invalid", "cwd and content are required");

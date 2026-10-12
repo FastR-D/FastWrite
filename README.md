@@ -27,6 +27,8 @@ bun start
 
 可通过 `FASTWRITE_PORT` 修改端口，通过 `FASTWRITE_DATA_DIR` 指定 Workspace 数据目录。
 
+设置 `FASTWRITE_SERVER_AUTH=true` 后，Harness 状态与 MCP 目录查询需要登录；共享 CLI 的原始会话、运行记录、事件、审批及全局 Harness 配置修改仅允许平台管理员访问。项目内 AI 操作继续遵循项目权限，指定项目的 MCP 审计需要该项目的 Harness 使用权限，全局审计仅限管理员。原始 Harness WebSocket 使用与 HTTP 相同的 `Authorization: Bearer ...` 或 `X-FastWrite-Session` 请求头认证，不接受 URL 中的登录令牌；连接在握手、历史回放、每次事件推送及定时检查时校验权限。浏览器原生 WebSocket 无法设置这些请求头，浏览器客户端可使用已认证的 HTTP 事件接口。
+
 ## 开发说明
 
 写作质量接口：`POST /api/projects/:projectId/writing-checks` 执行确定性检查；`GET /api/projects/:projectId/argument-graph` 获取论证关系；`POST /api/projects/:projectId/adversarial-memo` 生成仅供参考的对抗预检意见。Claim 侧栏支持 stale claim 的 reanchor；Agent 生成候选会校验 Writing Guard 与 evidence dependencies；Review 报告会显示各 pass 的完成、失败或跳过状态。评测可运行 `bun run writing:eval`。
