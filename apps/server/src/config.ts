@@ -31,8 +31,6 @@ const objectStoreEndpoint = process.env.FASTWRITE_OBJECT_STORE_ENDPOINT?.trim();
 const objectStoreRegion = process.env.FASTWRITE_OBJECT_STORE_REGION?.trim() || "us-east-1";
 const objectStoreAccessKey = process.env.FASTWRITE_OBJECT_STORE_ACCESS_KEY?.trim();
 const objectStoreSecretKey = process.env.FASTWRITE_OBJECT_STORE_SECRET_KEY?.trim();
-const bootstrapAdminEmail = process.env.FASTWRITE_BOOTSTRAP_ADMIN_EMAIL?.trim() || "admin@qq.com";
-const bootstrapAdminPassword = process.env.FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD?.trim() || "admin123456789";
 const packagedWebDirectory = resolve(import.meta.dir, "web");
 const embeddedWebDirectory = resolve(import.meta.dir, "../../web/dist");
 const releaseDirectory = dirname(process.execPath);
@@ -52,6 +50,16 @@ export interface AgentProviderConfiguration {
 export interface OidcConfiguration { issuer: string; clientId: string; redirectUri: string; clientSecret?: string; }
 export interface CasConfiguration { serverUrl: string; serviceUrl: string; }
 export interface MailConfiguration { smtpUrl: string; from: string; webhookSecret?: string; }
+export interface BootstrapAdminConfiguration { email: string; password: string; }
+
+export function bootstrapAdminConfiguration(environment: NodeJS.ProcessEnv = process.env): BootstrapAdminConfiguration | undefined {
+  const email = environment.FASTWRITE_BOOTSTRAP_ADMIN_EMAIL?.trim();
+  const password = environment.FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD;
+  if (!email && !password) return undefined;
+  if (!email || !password) throw new Error("Set both FASTWRITE_BOOTSTRAP_ADMIN_EMAIL and FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD");
+  if (password.trim().length < 12) throw new Error("Bootstrap admin password must contain at least 12 non-padding characters");
+  return { email, password };
+}
 
 function configured(environment: NodeJS.ProcessEnv, key: string): string | undefined {
   return environment[key]?.trim() || undefined;
@@ -132,7 +140,7 @@ export const config = {
   fastcas: fastcasIssuer && fastcasClientId && fastcasSecret && fastcasRedirect ? { issuer: fastcasIssuer, clientId: fastcasClientId, clientSecret: fastcasSecret, redirectUri: fastcasRedirect, allowLoopbackHTTP: process.env.FASTWRITE_FASTCAS_LOOPBACK_HTTP === "true", allowRegistration: process.env.FASTWRITE_FASTCAS_ALLOW_SIGNUP === "true" } : undefined,
   mail: smtpUrl && mailFrom ? { smtpUrl, from: mailFrom, ...(mailWebhookSecret ? { webhookSecret: mailWebhookSecret } : {}) } satisfies MailConfiguration : undefined,
   objectStore: objectStoreBucket && objectStoreEndpoint && objectStoreAccessKey && objectStoreSecretKey ? { bucket: objectStoreBucket, endpoint: objectStoreEndpoint, region: objectStoreRegion, accessKey: objectStoreAccessKey, secretKey: objectStoreSecretKey } : undefined,
-  bootstrapAdmin: { email: bootstrapAdminEmail, password: bootstrapAdminPassword },
+  bootstrapAdmin: bootstrapAdminConfiguration(),
   agentProviders: agentProviderConfigurations(),
   features: {
     serverAuth: process.env.FASTWRITE_SERVER_AUTH === "true",

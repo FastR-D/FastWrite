@@ -27,6 +27,8 @@ bun start
 
 可通过 `FASTWRITE_PORT` 修改端口，通过 `FASTWRITE_DATA_DIR` 指定 Workspace 数据目录。
 
+启用 `FASTWRITE_SERVER_AUTH=true` 时，若数据库没有有效管理员，必须同时设置 `FASTWRITE_BOOTSTRAP_ADMIN_EMAIL` 和 `FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD`（自行生成至少 12 位的唯一密码），否则服务拒绝启动。没有默认管理员账号或密码；公开注册始终创建普通用户。初始化成功后可以移除这两个变量，已有管理员可正常登录。修改初始化变量不会重置已有账号密码；升级前已使用旧版默认账号的部署需单独轮换该账号密码。
+
 ## 开发说明
 
 写作质量接口：`POST /api/projects/:projectId/writing-checks` 执行确定性检查；`GET /api/projects/:projectId/argument-graph` 获取论证关系；`POST /api/projects/:projectId/adversarial-memo` 生成仅供参考的对抗预检意见。Claim 侧栏支持 stale claim 的 reanchor；Agent 生成候选会校验 Writing Guard 与 evidence dependencies；Review 报告会显示各 pass 的完成、失败或跳过状态。评测可运行 `bun run writing:eval`。
