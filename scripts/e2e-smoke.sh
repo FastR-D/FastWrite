@@ -55,6 +55,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$PROJECT_ROOT"
+# Synthetic credentials for this disposable database only.
+export FASTWRITE_SERVER_AUTH=true
+export FASTWRITE_BOOTSTRAP_ADMIN_EMAIL=e2e-admin@example.test
+export FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD=fastwrite-e2e-only-password
 if [ "${FASTWRITE_E2E_SKIP_BUILD:-0}" != "1" ]; then bun run build >/dev/null; fi
 if [ -n "$E2E_SERVER_BIN" ]; then
   FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" "$E2E_SERVER_BIN" >"$QA_DATA/server.log" 2>&1 &
@@ -75,6 +79,21 @@ done
 
 pw open "http://127.0.0.1:$E2E_PORT/projects" --browser "$E2E_BROWSER"
 run_accessibility
+
+run_code 'async (page) => {
+  await page.getByRole("button", { name: "Sign in", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Sign in", exact: true });
+  await dialog.getByLabel("Email", { exact: true }).fill("e2e-admin@example.test");
+  await dialog.getByLabel("Password", { exact: true }).fill("fastwrite-e2e-only-password");
+  await dialog.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "New paper", exact: true }).waitFor();
+  const token = await page.evaluate(() => localStorage.getItem("fastwrite.session-token"));
+  if (!token) throw new Error("UI login did not establish a session");
+  // The API fixtures below use page.request and need the same identity as the UI.
+  await page.context().setExtraHTTPHeaders({ Authorization: "Bearer " + token });
+  const identity = await page.request.get(new URL("/api/auth/me", page.url()).href);
+  if (!identity.ok()) throw new Error("E2E fixture authentication failed");
+}'
 
 run_code 'async (page) => {
   await page.getByRole("button", { name: "New paper" }).click();
