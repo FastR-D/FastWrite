@@ -24,6 +24,7 @@
     "release:check": "sh scripts/release-check.sh",
     "security:check": "bash scripts/security-check.sh",
     "start": "bun apps/server/src/server.ts",
+    "backup:restore": "bun scripts/restore-backup.ts",
     "worker:jobs": "bun apps/server/src/jobs/job-worker.ts",
     "worker:mail": "bun apps/server/src/notifications/mail-worker.ts",
     "storage:postgres:migrate": "bun scripts/postgres-migrate.ts",

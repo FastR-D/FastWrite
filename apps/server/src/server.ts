@@ -1,5 +1,6 @@
 import { createApplication, type ApplicationFetch } from "./app";
 import { config } from "./config";
+import { lockDataDirectory } from "./storage/data-directory-lock";
 import type { Server, ServerWebSocket } from "bun";
 import { harnessEventBus } from "./agent/harness-event-bus";
 import { ApiError, errorResponse } from "./http";
@@ -14,8 +15,14 @@ const MAX_COLLABORATION_FRAME_BYTES = 5 * 1024 * 1024;
 const PRESENCE_EXPIRY_MS = 30_000;
 
 export async function startServer() {
-  const fetch = await createApplication();
-  const server = Bun.serve(createServerOptions(fetch));
+  const release = lockDataDirectory(config.dataDirectory);
+  let fetch: ApplicationFetch;
+  let server: ReturnType<typeof Bun.serve>;
+  try { fetch = await createApplication(); server = Bun.serve(createServerOptions(fetch)); }
+  catch (error) { release(); throw error; }
+  process.once("exit", release);
+  // A stopped listener can still have background writers. Hold the lock until process exit.
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => process.exit(0));
   const mailTimer = setInterval(() => { void fetch.dispatchMail(); }, 15_000);
   mailTimer.unref?.();
   console.log(`FastWrite server: http://localhost:${config.port}`);

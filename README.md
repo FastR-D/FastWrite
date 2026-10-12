@@ -44,6 +44,14 @@ bun start
 
 ## 可运行发布包
 
+数据库备份恢复必须停服执行，在线恢复接口返回 `409 offline_restore_required`。源码目录中运行：
+
+```bash
+bun run backup:restore -- --data-dir /absolute/path/to/paperdata --file /absolute/path/to/backup.json --confirm replace-database
+```
+
+对象存储备份可把 `--file` 换成 `--object-key backups/backup-name.json`，并提供部署时相同的 `FASTWRITE_OBJECT_STORE_*` 配置。命令校验备份格式和当前 schema，保存恢复前的安全副本，再替换数据库；完成后重新启动服务。JSON 备份仅包含数据库，项目文件需另外备份并放回匹配的数据目录。服务和恢复命令使用 `.fastwrite-process.lock` 互斥；若被强制终止留下锁文件，须确认该目录的全部进程已停止后再移除。旧版本备份应先使用匹配版本恢复，再按升级流程迁移。
+
 ```bash
 bun run package:app
 ./app-bin/fastwrite
