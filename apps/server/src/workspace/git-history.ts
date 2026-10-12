@@ -160,7 +160,7 @@ export class GitHistory {
   async workingStatus(projectDirectory: string, workspaceRoot: string): Promise<WorkingStatus> {
     await this.ensureIndex(projectDirectory, workspaceRoot);
     const context = [`--git-dir=${join(projectDirectory, "history.git")}`, `--work-tree=${workspaceRoot}`];
-    const output = await runGitOutput([...context, "status", "--porcelain=v2", "--branch", "-z"]);
+    const output = await runGitOutput([...context, "status", "--porcelain=v2", "--untracked-files=all", "--branch", "-z"]);
     return parseWorkingStatus(output);
   }
 

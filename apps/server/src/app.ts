@@ -493,6 +493,22 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     if (current && session.ownerUserId !== current.user.id && current.user.platformRole !== "platform_admin") throw new ApiError(404, "upload_not_found", "Upload session not found");
     return id;
   };
+  const authorizeHistoryPaths = async (request: Request, projectId: string, paths?: string[]) => {
+    const current = principal(request);
+    if (paths !== undefined && (!Array.isArray(paths) || paths.length === 0 || paths.some(path => typeof path !== "string"))) throw new ApiError(400, "history_paths_required", "At least one file path is required");
+    let selected: string[] | undefined;
+    try {
+      selected = paths?.map(normalizeWorkspacePath);
+      if (selected?.some(path => !path)) throw new Error("empty path");
+    } catch { throw new ApiError(400, "history_path_invalid", "History paths must be nonempty relative paths"); }
+    if (current) {
+      const status = await workspaces.workingStatus(projectId);
+      const known = new Set([...workspacePathsForAuthorization(await workspaces.tree(projectId)), ...Object.keys(database.snapshot().fileVersions[projectId] ?? {}), ...status.files.flatMap(file => file.oldPath ? [file.path, file.oldPath] : [file.path]), ...(selected ?? [])]);
+      for (const path of known) if (!selected || selected.some(prefix => path === prefix || path.startsWith(`${prefix}/`))) authorization.requireProjectPath(current, projectId, path, "project:write");
+      for (const file of status.files) if (file.oldPath && selected?.some(prefix => file.path === prefix || file.path.startsWith(`${prefix}/`))) authorization.requireProjectPath(current, projectId, file.oldPath, "project:write");
+    }
+    return selected;
+  };
   return [
     route("GET", "/api/health", async () => json({ status: "ok", version: "0.1.0" })),
     route("GET", "/api/metrics", async () => new Response(metrics.prometheus(), { headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8" } })),
@@ -913,28 +929,37 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "project:read", workspaces);
       return workspaces.exportProject(projectId);
     }),
-    route("POST", "/api/projects/:projectId/history/checkpoint", async (_request, params) => {
+    route("POST", "/api/projects/:projectId/history/checkpoint", async (request, params) => {
+      await authorizeHistoryPaths(request, required(params, "projectId"));
       return json(await workspaces.createHistoryCheckpoint(required(params, "projectId")), 201);
     }),
-    route("GET", "/api/projects/:projectId/history/working-status", async (_request, params) => {
-      return json(await workspaces.workingStatus(required(params, "projectId")));
+    route("GET", "/api/projects/:projectId/history/working-status", async (request, params) => {
+      const projectId = required(params, "projectId");
+      const current = principal(request);
+      const status = await workspaces.workingStatus(projectId);
+      if (current) status.files = status.files.filter(file => [file.path, ...(file.oldPath ? [file.oldPath] : [])].every(path => authorization.projectPathDecision(current, projectId, path, "project:read").allowed));
+      return json(status);
     }),
     route("POST", "/api/projects/:projectId/history/stage", async (request, params) => {
       const body = await readJson<{ paths?: string[] }>(request);
-      await workspaces.stagePaths(required(params, "projectId"), body.paths ?? []);
+      const paths = await authorizeHistoryPaths(request, required(params, "projectId"), body.paths ?? []);
+      await workspaces.stagePaths(required(params, "projectId"), paths!);
       return new Response(null, { status: 204 });
     }),
     route("POST", "/api/projects/:projectId/history/unstage", async (request, params) => {
       const body = await readJson<{ paths?: string[] }>(request);
-      await workspaces.unstagePaths(required(params, "projectId"), body.paths ?? []);
+      const paths = await authorizeHistoryPaths(request, required(params, "projectId"), body.paths ?? []);
+      await workspaces.unstagePaths(required(params, "projectId"), paths!);
       return new Response(null, { status: 204 });
     }),
     route("POST", "/api/projects/:projectId/history/discard", async (request, params) => {
       const body = await readJson<{ paths?: string[] }>(request);
-      await workspaces.discardPaths(required(params, "projectId"), body.paths ?? []);
+      const paths = await authorizeHistoryPaths(request, required(params, "projectId"), body.paths ?? []);
+      await workspaces.discardPaths(required(params, "projectId"), paths!);
       return new Response(null, { status: 204 });
     }),
     route("POST", "/api/projects/:projectId/history/commit", async (request, params) => {
+      await authorizeHistoryPaths(request, required(params, "projectId"));
       const body = await readJson<{ message?: string }>(request);
       const message = (body.message ?? "").trim();
       if (!message) throw new ApiError(400, "history_message_required", "A commit message is required");
