@@ -4,6 +4,7 @@ import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { normalizeWorkspacePath } from "@fastwrite/shared";
 import { ApiError } from "../http";
+import { processResult } from "../jobs/process-result";
 import type { WorkspaceService } from "../workspace/workspace-service";
 
 export interface ServerCompileResult {
@@ -37,7 +38,8 @@ export class LatexCompileService {
     this.policy = { mode, network: "disabled", timeoutMs: Math.min(Math.max(policy.timeoutMs ?? Number(process.env.FASTWRITE_COMPILE_TIMEOUT_MS ?? 120_000), 5_000), 300_000), memoryMb: Math.min(Math.max(policy.memoryMb ?? Number(process.env.FASTWRITE_COMPILE_MEMORY_MB ?? 1024), 128), 4096), pids: Math.min(Math.max(policy.pids ?? Number(process.env.FASTWRITE_COMPILE_MAX_PIDS ?? 256), 32), 4096) };
   }
 
-  async compile(projectId: string): Promise<ServerCompileResult> {
+  async compile(projectId: string, signal?: AbortSignal): Promise<ServerCompileResult> {
+    signal?.throwIfAborted();
     this.workspaces.getProject(projectId);
     const executable = Bun.which("latexmk") ?? Bun.which("pdflatex");
     if (!executable) throw new ApiError(503, "latex_unavailable", "Local LaTeX compilation is unavailable: install latexmk or pdflatex on this machine.");
@@ -57,10 +59,9 @@ export class LatexCompileService {
         ? [executable, "-norc", "-pdf", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${compilerOutput}`, `-auxdir=${compilerOutput}`, `./${mainDocument}`]
         : [executable, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-output-directory=${compilerOutput}`, `./${mainDocument}`];
       const command = this.policy.mode === "bubblewrap" ? this.bubblewrapCommand(argumentsList, source, output) : argumentsList;
-      const child = Bun.spawn(command, { cwd: source, stdout: "pipe", stderr: "pipe", env: compileEnvironment(compilerOutput) });
-      const timeout = setTimeout(() => child.kill(), this.policy.timeoutMs);
-      const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-      clearTimeout(timeout);
+      signal?.throwIfAborted();
+      const child = Bun.spawn(command, { cwd: source, detached: true, windowsHide: true, stdout: "pipe", stderr: "pipe", env: compileEnvironment(compilerOutput) });
+      const { exitCode, stdout, stderr } = await processResult(child, this.policy.timeoutMs, signal);
       const log = [stdout, stderr].filter(Boolean).join("\n").slice(-1_000_000);
       const stem = basename(mainDocument, ".tex");
       const pdfPath = await findOutputFile(output, `${stem}.pdf`);
