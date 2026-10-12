@@ -2168,6 +2168,25 @@ function AssetPreview({
   path: string;
   name: string;
 }) {
+  const assetKey = JSON.stringify([projectId, path]);
+  const [preview, setPreview] = useState<{ key: string; url?: string; error?: string }>();
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectURL: string | undefined;
+    setPreview({ key: assetKey });
+    void api.projects.readAsset(projectId, path, controller.signal).then(blob => {
+      if (controller.signal.aborted) return;
+      objectURL = URL.createObjectURL(blob);
+      setPreview({ key: assetKey, url: objectURL });
+    }).catch(error => {
+      if (!controller.signal.aborted) setPreview({ key: assetKey, error: error instanceof Error ? error.message : "Could not load image" });
+    });
+    return () => {
+      controller.abort();
+      if (objectURL) URL.revokeObjectURL(objectURL);
+    };
+  }, [assetKey, projectId, path]);
+  const current = preview?.key === assetKey ? preview : undefined;
   return (
     <div className="asset-preview">
       <div className="editor-toolbar">
@@ -2177,10 +2196,9 @@ function AssetPreview({
         </div>
       </div>
       <div className="asset-preview__canvas">
-        <img
-          src={`/api/projects/${projectId}/asset?path=${encodeURIComponent(path)}`}
-          alt={name}
-        />
+        {current?.error ? <p role="alert">{current.error}</p> : current?.url ? (
+          <img src={current.url} alt={name} onError={() => setPreview({ key: assetKey, error: "Could not display image" })} />
+        ) : <p role="status">Loading image…</p>}
       </div>
     </div>
   );

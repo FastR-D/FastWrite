@@ -55,13 +55,13 @@ export class ApiClientError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   const token = localStorage.getItem("fastwrite.session-token");
   if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
   let response = await fetch(path, { ...init, headers });
   if (response.status === 401 && token && !path.startsWith("/api/auth/")) {
-    const refreshed = await fetch("/api/auth/refresh", { method: "POST" });
+    const refreshed = await fetch("/api/auth/refresh", { method: "POST", ...(init?.signal ? { signal: init.signal } : {}) });
     if (refreshed.ok) {
       const session = await refreshed.json() as { token: string };
       localStorage.setItem("fastwrite.session-token", session.token);
@@ -78,6 +78,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiClientError(response.status, body.error?.code ?? "request_failed", body.error?.message ?? `Request failed (${response.status})`, body.error?.details);
   }
+  return response;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await requestResponse(path, init);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
@@ -184,6 +189,10 @@ export const api = {
   },
   agentSkills: { list: (signal?: AbortSignal) => request<AgentTaskSkillDescriptor[]>("/api/agent-skills", signal ? { signal } : undefined), releases: (signal?: AbortSignal) => request<PublishedSkillDescriptor[]>("/api/skills/releases", signal ? { signal } : undefined), release: (id: string) => request<PublishedSkillDescriptor>(`/api/skills/releases/${encodeURIComponent(id)}`), evaluate: (id: string) => request<PublishedSkillDescriptor>(`/api/skills/releases/${encodeURIComponent(id)}/evaluate`, { method: "POST" }), rollback: (id: string, reason: string) => request<PublishedSkillDescriptor>(`/api/skills/releases/${encodeURIComponent(id)}/rollback`, jsonInit("POST", { reason })) },
   projects: {
+    readAsset: async (id: string, path: string, signal?: AbortSignal): Promise<Blob> => {
+      const response = await requestResponse(`/api/projects/${encodeURIComponent(id)}/asset?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined);
+      return response.blob();
+    },
     accessRequestInfo: (id: string) => request<{ id: string; name: string }>(`/api/access-requests/${encodeURIComponent(id)}`),
     requestAccess: (id: string, body: { role: "maintainer" | "editor" | "commenter" | "viewer"; message?: string }) => request<{ id: string; status: "pending" }>(`/api/projects/${encodeURIComponent(id)}/access-requests`, jsonInit("POST", body)),
     list: (signal?: AbortSignal) => request<PaperProject[]>("/api/projects", signal ? { signal } : undefined),
