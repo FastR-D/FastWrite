@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile, open, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { normalizePublicationTarget, paperSkillForProfile, type AccountUser, type AgentRun, type AgentTaskPlan, type AuditEvent, type ChangeSet, type ClaimEvidenceLink, type ClaimRelation, type CommentMessage, type CommentThread, type CompileRecord, type DraftPlan, type ExternalIdentity, type FastReadBundleReceipt, type GithubSyncRun, type HarnessProfile, type Invitation, type IssueResolution, type MetadataObservation, type PaperClaim, type PaperMemory, type PaperProject, type ProjectAclRule, type ProjectMember, type ProjectResearchWork, type ProjectShare, type ResearchIdentifier, type ResearchRun, type ResearchWork, type ReviewReport, type ReviewSnapshot, type ShareComment, type SourceEvidence, type Team, type TeamGroupBinding, type TeamMember, type UploadSession } from "@fastwrite/shared";
 import type { HarnessRun, HarnessSession, McpAuditRecord } from "@fastwrite/harness-protocol";
@@ -82,6 +82,7 @@ export class JsonDatabase {
   private mutationQueue: Promise<void> = Promise.resolve();
   private primaryPersistence?: (state: DatabaseState) => Promise<void>;
   private readonly path: string;
+  private persistedContents: string | null = null;
 
   constructor(dataDirectory: string) {
     this.path = join(dataDirectory, "database.json");
@@ -90,7 +91,8 @@ export class JsonDatabase {
   async initialize(): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true });
     try {
-      const parsed = JSON.parse(await readFile(this.path, "utf8")) as Partial<DatabaseState>;
+      this.persistedContents = await readFile(this.path, "utf8");
+      const parsed = JSON.parse(this.persistedContents) as Partial<DatabaseState>;
       const originalSchemaVersion = Number.isInteger(parsed.schemaVersion) ? parsed.schemaVersion! : 1;
       const migratedState: DatabaseState = {
         schemaVersion: originalSchemaVersion,
@@ -243,10 +245,24 @@ export class JsonDatabase {
   private async flush(): Promise<void> {
     const serialized = JSON.stringify(this.state, null, 2);
     const write = this.writeQueue.then(async () => {
-      const temporaryPath = `${this.path}.${process.pid}.tmp`;
+      const temporaryPath = `${this.path}.${process.pid}.${crypto.randomUUID()}.tmp`;
       await mkdir(dirname(this.path), { recursive: true });
-      await writeFile(temporaryPath, serialized, { encoding: "utf8", mode: 0o600 });
-      await rename(temporaryPath, this.path);
+      const lockPath = `${this.path}.write.lock`;
+      const lock = await open(lockPath, "wx", 0o600).catch((error) => {
+        if (error.code === "EEXIST") throw new Error("Database writer already active; run only one FastWrite server per data directory. Remove a stale database.json.write.lock only after stopping all processes.");
+        throw error;
+      });
+      try {
+        const current = await readFile(this.path, "utf8").catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+        if (current !== this.persistedContents) throw new Error("Database changed by another writer; restart FastWrite before writing. Stale state was not saved.");
+        await writeFile(temporaryPath, serialized, { encoding: "utf8", mode: 0o600 });
+        await rename(temporaryPath, this.path);
+        this.persistedContents = serialized;
+      } finally {
+        await lock.close();
+        await unlink(lockPath);
+        await unlink(temporaryPath).catch(() => undefined);
+      }
     });
     // Keep the queue usable after a transient filesystem failure (for example,
     // a test data directory being removed during shutdown). The caller still

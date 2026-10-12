@@ -35,6 +35,8 @@ bun start
 
 ## 开发说明
 
+当前运行时由单个服务进程处理任务队列和邮件；不要设置 `FASTWRITE_JOB_WORKER_MODE=external` 或另外启动 `worker:jobs` / `worker:mail`。这些入口现在会明确拒绝启动，避免独立进程使用过期 JSON 快照覆盖数据。PostgreSQL mirror/cutover 配置仍使用本地队列快照，不代表已经支持分布式 worker。每个数据目录仅运行一个服务；检测到其他写入者时会拒绝保存过期状态。若进程被强制终止留下 `database.json.write.lock`，先停止使用此目录的全部进程，再移除该锁文件并重启。
+
 写作质量接口：`POST /api/projects/:projectId/writing-checks` 执行确定性检查；`GET /api/projects/:projectId/argument-graph` 获取论证关系；`POST /api/projects/:projectId/adversarial-memo` 生成仅供参考的对抗预检意见。Claim 侧栏支持 stale claim 的 reanchor；Agent 生成候选会校验 Writing Guard 与 evidence dependencies；Review 报告会显示各 pass 的完成、失败或跳过状态。评测可运行 `bun run writing:eval`。
 
 先让Agent解决 BUG.md中问题，解决了的移到BUG-done.md。

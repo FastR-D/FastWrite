@@ -260,6 +260,7 @@ function harnessProvider(runs: HarnessRunService, kind: "codex" | "claude", cwd:
 export async function createApplication(dataDirectory = config.dataDirectory, options: ApplicationOptions = {}) {
   const metrics = options.metrics ?? new MetricsRegistry();
   const features = { ...config.features, ...options.features };
+  if (process.env.FASTWRITE_JOB_WORKER_MODE === "external") throw new Error("External workers are unsupported by this JSON-backed runtime. Unset FASTWRITE_JOB_WORKER_MODE to process jobs in the server.");
   const database = new JsonDatabase(dataDirectory);
   await database.initialize();
   const autoPostgres = options.postgresRepository ?? await configuredPostgresRepository(database.snapshot());
