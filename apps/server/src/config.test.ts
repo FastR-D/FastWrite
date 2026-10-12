@@ -1,5 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { agentProviderConfigurations, configuredHarness } from "./config";
+import { agentProviderConfigurations, bootstrapAdminConfiguration, configuredHarness } from "./config";
+
+describe("bootstrap administrator configuration", () => {
+  test("has no default credentials", () => {
+    expect(bootstrapAdminConfiguration({})).toBeUndefined();
+  });
+  test("requires both settings and a sufficiently long password", () => {
+    expect(() => bootstrapAdminConfiguration({ FASTWRITE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.test" })).toThrow("Set both");
+    expect(() => bootstrapAdminConfiguration({ FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD: "test-password-unique" })).toThrow("Set both");
+    expect(() => bootstrapAdminConfiguration({ FASTWRITE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.test", FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD: "            " })).toThrow("12");
+  });
+  test("preserves the explicitly chosen password", () => {
+    expect(bootstrapAdminConfiguration({ FASTWRITE_BOOTSTRAP_ADMIN_EMAIL: " admin@example.test ", FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD: " unique-test-password " })).toEqual({ email: "admin@example.test", password: " unique-test-password " });
+  });
+});
 
 describe("harness configuration", () => {
   test("uses one shared Harness configuration for every workflow", () => {

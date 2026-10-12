@@ -142,6 +142,7 @@ interface Route {
 }
 
 export interface ApplicationOptions {
+  bootstrapAdmin?: { email: string; password: string };
   agentProvider?: AgentProvider;
   texPackages?: TexPackageProvider;
   features?: Partial<typeof config.features>;
@@ -286,10 +287,10 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   if (postgresCutover && postgresMirror) await persistToPostgres();
   const comparePostgres = async () => postgresMirror && "dualReadCompare" in postgresMirror ? await (postgresMirror as import("./storage/postgres-repository").SqlPostgresRepository).dualReadCompare() : { equal: true, legacyHash: "", normalizedHash: "", mismatches: [] as string[] };
   const auth = new AuthService(database, config.collaborationRoomTokenSecret);
-  const bootstrapRequested = config.features.serverAuth || process.env.FASTWRITE_BOOTSTRAP_ADMIN_EMAIL || process.env.FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD;
-  if (bootstrapRequested) {
-    const bootstrapCreated = await auth.ensureBootstrapAdmin(config.bootstrapAdmin);
-    if (bootstrapCreated) console.warn(`FastWrite bootstrap admin created: ${config.bootstrapAdmin.email} (change FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD after first login)`);
+  const bootstrapAdmin = options.bootstrapAdmin ?? config.bootstrapAdmin;
+  if (features.serverAuth || bootstrapAdmin) {
+    const bootstrapCreated = await auth.ensureBootstrapAdmin(bootstrapAdmin);
+    if (bootstrapCreated) console.warn("FastWrite bootstrap admin created. Remove the bootstrap credentials from the environment; they do not reset existing passwords.");
   }
   const oidc = options.oidcProvider ?? (config.oidc ? new OidcIdentityProvider(config.oidc) : undefined);
   const cas = options.casProvider ?? (config.cas ? new CasIdentityProvider(config.cas) : undefined);

@@ -17,27 +17,30 @@ export class AuthService {
   private readonly roomTokenSecret: string;
   constructor(private readonly database: JsonDatabase, roomTokenSecret?: string) { this.roomTokenSecret = roomTokenSecret || randomBytes(32).toString("base64url"); }
 
-  async ensureBootstrapAdmin(input: { email: string; password: string }): Promise<boolean> {
+  async ensureBootstrapAdmin(input?: { email: string; password: string }): Promise<boolean> {
+    if (this.database.snapshot().users.some((user) => user.platformRole === "platform_admin" && user.status === "active")) return false;
+    if (!input) throw new Error("No active administrator exists. Set FASTWRITE_BOOTSTRAP_ADMIN_EMAIL and FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD before enabling server authentication");
     const email = normalizeEmail(input.email);
-    if (input.password.length < 12) throw new Error("Bootstrap admin password must be at least 12 characters");
-    if (this.database.snapshot().users.some((user) => user.emailNormalized === email)) return false;
+    if (input.password.trim().length < 12) throw new Error("Bootstrap admin password must contain at least 12 non-padding characters");
     const timestamp = new Date().toISOString();
     const user: AccountUser = { id: `user_${crypto.randomUUID()}`, emailNormalized: email, displayName: "FastWrite Administrator", platformRole: "platform_admin", status: "active", authzVersion: 1, createdAt: timestamp, updatedAt: timestamp };
     const passwordHash = await Bun.password.hash(input.password, { algorithm: "argon2id" });
-    await this.database.mutate((state) => {
+    return await this.database.mutate((state) => {
+      if (state.users.some((existing) => existing.platformRole === "platform_admin" && existing.status === "active")) return false;
+      if (state.users.some((existing) => existing.emailNormalized === email)) throw new Error("Bootstrap admin email is already in use; choose an unused email");
       state.users.push(user);
       state.externalIdentities.push({ id: `identity_${crypto.randomUUID()}`, userId: user.id, issuer: LOCAL_ISSUER, subject: email, email, createdAt: timestamp });
       state.localCredentials.push({ userId: user.id, passwordHash });
       state.auditEvents.push(audit(user.id, "auth.bootstrap_register", "user", user.id));
+      return true;
     });
-    return true;
   }
 
   async register(input: { email: string; password: string; displayName?: string }): Promise<AuthResult> {
     const email = normalizeEmail(input.email);
     if (input.password.length < 12) throw new ApiError(400, "password_too_short", "Password must be at least 12 characters");
     const timestamp = new Date().toISOString();
-    const user: AccountUser = { id: `user_${crypto.randomUUID()}`, emailNormalized: email, displayName: (input.displayName?.trim() || email.split("@")[0] || "User").slice(0, 100), platformRole: this.database.snapshot().users.length ? "user" : "platform_admin", status: "active", authzVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+    const user: AccountUser = { id: `user_${crypto.randomUUID()}`, emailNormalized: email, displayName: (input.displayName?.trim() || email.split("@")[0] || "User").slice(0, 100), platformRole: "user", status: "active", authzVersion: 1, createdAt: timestamp, updatedAt: timestamp };
     const passwordHash = await Bun.password.hash(input.password, { algorithm: "argon2id" });
     const token = randomToken(); const refreshToken = randomToken();
     await this.database.mutate((state) => {
