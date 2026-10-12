@@ -250,7 +250,7 @@ export const api = {
     get: (id: string, signal?: AbortSignal) => request<PaperProject>(`/api/projects/${id}`, signal ? { signal } : undefined),
     create: (body: { name: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget; initializeFromTemplate?: boolean; teamId?: string }) => request<PaperProject>("/api/projects", jsonInit("POST", body)),
     update: (id: string, body: Partial<Pick<PaperProject, "name" | "mainDocument">> & { venue?: TargetVenue; publicationTarget?: PublicationTarget | null }) => request<PaperProject>(`/api/projects/${id}`, jsonInit("PATCH", body)),
-    exportUrl: (id: string) => `/api/projects/${id}/export`,
+    exportUrl: (id: string) => `/api/projects/${encodeURIComponent(id)}/export`,
     checkpoint: (id: string) => request<{ createdAt: string }>(`/api/projects/${id}/history/checkpoint`, { method: "POST" }),
     history: (id: string, limit = 50, signal?: AbortSignal) => request<HistoryCommit[]>(`/api/projects/${id}/history?limit=${limit}`, signal ? { signal } : undefined),
     historySummary: (id: string, oid: string, signal?: AbortSignal) => request<HistorySummary>(`/api/projects/${id}/history/${encodeURIComponent(oid)}`, signal ? { signal } : undefined),
