@@ -16,7 +16,7 @@ async function fixture() {
 
 test("real root and subsequent changes distinguish rename, deletion, empty and binary files", async () => {
   const { root, workspace, history } = await fixture();
-  const original = "中文 name [1] : old.tex";
+  const original = process.platform === "win32" ? "中文 name [1] - old.tex" : "中文 name [1] : old.tex";
   const renamed = "中文 renamed [2].tex";
   await writeFile(join(workspace, original), "one\ntwo\nthree\n");
   await writeFile(join(workspace, "deleted.tex"), "delete me\n");
@@ -76,10 +76,22 @@ test("a reachable checkpoint older than 200 commits remains readable", async () 
   const { root, workspace, history } = await fixture();
   await writeFile(join(workspace, "main.tex"), "original");
   const first = (await history.snapshot(root, workspace, "first"))!;
-  for (let index = 0; index < 201; index++) {
-    await writeFile(join(workspace, "main.tex"), String(index));
-    await history.snapshot(root, workspace, `checkpoint ${index}`);
-  }
+  // This tests traversal beyond the page limit. Import real commits in one Git
+  // process so fixture creation does not depend on platform process-start cost.
+  const gitDirectory = `--git-dir=${join(root, "history.git")}`;
+  const head = Bun.spawn(["git", gitDirectory, "symbolic-ref", "HEAD"], { stdout: "pipe", stderr: "pipe" });
+  const [headRef, headError, headStatus] = await Promise.all([new Response(head.stdout).text(), new Response(head.stderr).text(), head.exited]);
+  expect(headStatus, headError).toBe(0);
+  const commits = Array.from({ length: 201 }, (_, index) => {
+    const message = `checkpoint ${index}`;
+    const content = String(index);
+    return `commit ${headRef.trim()}\nmark :${index + 1}\ncommitter FastWrite <history@fastwrite.local> ${1700000000 + index} +0000\ndata ${message.length}\n${message}\nfrom ${index === 0 ? first : `:${index}`}\nM 100644 inline main.tex\ndata ${content.length}\n${content}\n\n`;
+  }).join("");
+  const importer = Bun.spawn(["git", gitDirectory, "fast-import", "--quiet"], {
+    stdin: new TextEncoder().encode(commits), stdout: "ignore", stderr: "pipe"
+  });
+  const [importError, importStatus] = await Promise.all([new Response(importer.stderr).text(), importer.exited]);
+  expect(importStatus, importError).toBe(0);
   expect((await history.list(root, 200)).some(commit => commit.oid === first)).toBe(false);
   expect((await history.summary(root, first)).oid).toBe(first);
   expect(await history.fileAt(root, first, "main.tex")).toBe("original");
