@@ -55,19 +55,58 @@ export class ApiClientError extends Error {
   }
 }
 
+const refreshes = new Map<string, Promise<string | null>>();
+const sessionKey = "fastwrite.session-token";
+
+function refreshSession(expiredToken: string): Promise<string | null> {
+  const existing = refreshes.get(expiredToken);
+  if (existing) return existing;
+  const refresh = async () => {
+    if (localStorage.getItem(sessionKey) !== expiredToken) return localStorage.getItem(sessionKey);
+    const response = await fetch("/api/auth/refresh", { method: "POST" });
+    if (localStorage.getItem(sessionKey) !== expiredToken) return localStorage.getItem(sessionKey);
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) localStorage.removeItem(sessionKey);
+      return null;
+    }
+    const session = await response.json() as { token?: unknown };
+    if (typeof session.token !== "string" || !session.token) throw new ApiClientError(502, "invalid_session_response", "Invalid session refresh response");
+    if (localStorage.getItem(sessionKey) !== expiredToken) return localStorage.getItem(sessionKey);
+    localStorage.setItem(sessionKey, session.token);
+    return session.token;
+  };
+  // Cookies are shared across tabs; serialize their rotation as well as same-tab requests.
+  const promise = (async () => typeof navigator !== "undefined" && navigator.locks
+    ? await navigator.locks.request("fastwrite.session-refresh", refresh) : await refresh())()
+    .finally(() => { refreshes.delete(expiredToken); });
+  refreshes.set(expiredToken, promise);
+  return promise;
+}
+
+function waitForRefresh(promise: Promise<string | null>, signal?: AbortSignal | null): Promise<string | null> {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    promise.then(value => { signal.removeEventListener("abort", abort); if (!signal.aborted) resolve(value); }, error => { signal.removeEventListener("abort", abort); reject(error); });
+  });
+}
+
 export async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   const token = localStorage.getItem("fastwrite.session-token");
-  if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
+  const usesSession = !headers.has("authorization");
+  if (token && usesSession) headers.set("authorization", `Bearer ${token}`);
   let response = await fetch(path, { ...init, headers });
-  if (response.status === 401 && token && !path.startsWith("/api/auth/")) {
-    const refreshed = await fetch("/api/auth/refresh", { method: "POST", ...(init?.signal ? { signal: init.signal } : {}) });
-    if (refreshed.ok) {
-      const session = await refreshed.json() as { token: string };
-      localStorage.setItem("fastwrite.session-token", session.token);
-      headers.set("authorization", `Bearer ${session.token}`);
+  if (response.status === 401 && token && usesSession && !/^\/api\/auth\/(?:login|register|refresh|logout)(?:[/?]|$)/.test(path)) {
+    init?.signal?.throwIfAborted();
+    const refreshed = await waitForRefresh(refreshSession(token), init?.signal);
+    init?.signal?.throwIfAborted();
+    if (refreshed) {
+      headers.set("authorization", `Bearer ${refreshed}`);
       response = await fetch(path, { ...init, headers });
-    } else localStorage.removeItem("fastwrite.session-token");
+    }
   }
   if (!response.ok) {
     let body: { error?: { code?: string; message?: string; details?: unknown } } = {};

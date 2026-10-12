@@ -70,7 +70,7 @@ export function ProjectsPage() {
     api.auth
       .me()
       .then(setAccount)
-      .catch(() => localStorage.removeItem("fastwrite.session-token"));
+      .catch(() => undefined);
   }, []);
 
   const acceptInvitation = useCallback(async () => {

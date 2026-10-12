@@ -58,12 +58,37 @@ test("cancelling an asset preview aborts even while refreshing its session", asy
   const controller = new AbortController();
   let calls = 0;
   fetchMock.mockImplementation(async (_url, init) => {
-    expect(init?.signal).toBe(controller.signal);
-    if (++calls === 1) return new Response(null, { status: 401 });
+    if (++calls === 1) { expect(init?.signal).toBe(controller.signal); return new Response(null, { status: 401 }); }
+    expect(init?.signal).toBeUndefined();
     controller.abort();
-    init?.signal?.throwIfAborted();
-    throw new Error("unreachable");
+    return Response.json({ token: "refreshed-test-token" });
   });
   await expect(api.projects.readAsset("project", "image.png", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   expect(calls).toBe(2);
+});
+
+test("concurrent requests and auth/me share one refresh, with per-caller cancellation", async () => {
+  const controller = new AbortController(); let refreshCalls = 0;
+  let finish!: () => void; const barrier = new Promise<void>(resolve => { finish = resolve; });
+  fetchMock.mockImplementation(async (url, init) => {
+    if (String(url) === "/api/auth/refresh") { refreshCalls++; await barrier; return Response.json({ token: "fresh" }); }
+    if (new Headers(init?.headers).get("authorization") === "Bearer test-access-token") return new Response(null, { status: 401 });
+    return String(url) === "/api/auth/me" ? Response.json({ id: "user" }) : new Response("bytes");
+  });
+  const cancelled = api.projects.readAsset("project", "image.png", controller.signal).catch(error => error);
+  const asset = api.projects.readAsset("project", "second.png"); const me = api.auth.me();
+  await new Promise(resolve => setTimeout(resolve, 0)); controller.abort(); finish();
+  expect((await cancelled).name).toBe("AbortError");
+  expect(await (await asset).text()).toBe("bytes"); expect((await me).id).toBe("user");
+  expect(refreshCalls).toBe(1);
+});
+
+test.each([200, 401])("a late refresh response (%s) cannot replace or delete newer credentials", async status => {
+  fetchMock.mockImplementation(async url => {
+    if (String(url) === "/api/auth/refresh") { values.set("fastwrite.session-token", "new-login"); return Response.json({ token: "old-session" }, { status }); }
+    if (values.get("fastwrite.session-token") === "test-access-token") return new Response(null, { status: 401 });
+    return new Response("bytes");
+  });
+  await api.projects.readAsset("project", "image.png");
+  expect(values.get("fastwrite.session-token")).toBe("new-login");
 });
