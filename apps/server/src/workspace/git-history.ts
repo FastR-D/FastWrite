@@ -389,8 +389,12 @@ export class GitHistory {
   }
 }
 
+// Managed history must preserve file line endings regardless of the host Git
+// configuration. Command-scoped configuration also covers existing repositories.
+const GIT_COMMAND = ["git", "-c", "core.autocrlf=false"];
+
 async function runGitOutput(args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
-  const child = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "pipe", ...(env ? { env } : {}) });
+  const child = Bun.spawn([...GIT_COMMAND, ...args], { stdout: "pipe", stderr: "pipe", ...(env ? { env } : {}) });
   const output = await new Response(child.stdout).text();
   const error = (await new Response(child.stderr).text()).trim();
   if ((await child.exited) !== 0) throw new Error(error || "Git command failed");
@@ -402,7 +406,7 @@ async function exists(path: string): Promise<boolean> {
 }
 
 async function runGit(args: string[], allowed = [0]): Promise<number> {
-  const child = Bun.spawn(["git", ...args], { stdout: "ignore", stderr: "pipe" });
+  const child = Bun.spawn([...GIT_COMMAND, ...args], { stdout: "ignore", stderr: "pipe" });
   const stderr = new Response(child.stderr).text();
   const exitCode = await child.exited;
   const error = (await stderr).trim();
@@ -426,7 +430,7 @@ function parseCommits(output: string): HistoryCommit[] {
   return commits;
 }
 async function runGitBytes(args: string[]): Promise<Uint8Array> {
-  const child = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn([...GIT_COMMAND, ...args], { stdout: "pipe", stderr: "pipe" });
   const [output, error, status] = await Promise.all([new Response(child.stdout).arrayBuffer().then(buffer => new Uint8Array(buffer)), new Response(child.stderr).text(), child.exited]);
   if (status !== 0) throw new Error(error || "Git command failed");
   return output;
