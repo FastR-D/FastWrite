@@ -35,6 +35,8 @@ bun start
 
 ## 开发说明
 
+原始 Claude Harness 已内置 CLI 执行桥接，无需注入 SDK 才能发送消息。它要求 Claude Code 2.1.286 或更新版本，支持文本流、会话恢复和取消；使用 `--bare` 并关闭工具、MCP 和项目配置自动加载。此模式需要按 Claude 的提供商要求配置凭据（如 `ANTHROPIC_API_KEY`），不使用订阅登录。审批、自动加载技能及 MCP 能力会报告为不支持；需要这些能力时可注入完整的 `ClaudeSdkBridge`。CLI 参数与事件格式参考 [Claude 官方程序化调用文档](https://code.claude.com/docs/en/headless)。FastWrite 写作 API 的 `FASTWRITE_HARNESS_*` 配置与原始 CLI 凭据是分别配置的。
+
 当前运行时由单个服务进程处理任务队列和邮件；不要设置 `FASTWRITE_JOB_WORKER_MODE=external` 或另外启动 `worker:jobs` / `worker:mail`。这些入口现在会明确拒绝启动，避免独立进程使用过期 JSON 快照覆盖数据。PostgreSQL mirror/cutover 配置仍使用本地队列快照，不代表已经支持分布式 worker。每个数据目录仅运行一个服务；检测到其他写入者时会拒绝保存过期状态。若进程被强制终止留下 `database.json.write.lock`，先停止使用此目录的全部进程，再移除该锁文件并重启。
 
 写作质量接口：`POST /api/projects/:projectId/writing-checks` 执行确定性检查；`GET /api/projects/:projectId/argument-graph` 获取论证关系；`POST /api/projects/:projectId/adversarial-memo` 生成仅供参考的对抗预检意见。Claim 侧栏支持 stale claim 的 reanchor；Agent 生成候选会校验 Writing Guard 与 evidence dependencies；Review 报告会显示各 pass 的完成、失败或跳过状态。评测可运行 `bun run writing:eval`。
