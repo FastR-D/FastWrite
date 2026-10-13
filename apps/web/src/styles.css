@@ -703,11 +703,12 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .review-issue--major { border-left-color: #d36b21; }
 .review-issue--minor { border-left-color: #d5a02c; }
 .review-issue--suggestion { border-left-color: var(--blue-500); }
-.review-issue > header { min-height: 33px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border-bottom: 1px solid var(--slate-100); background: var(--slate-25); }
+.review-issue > header { min-height: 33px; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 6px 10px; border-bottom: 1px solid var(--slate-100); background: var(--slate-25); }
 .review-issue > header span { color: var(--red-600); font-size: 8px; font-weight: 750; text-transform: uppercase; }
 .review-issue > header small { padding-right: 7px; border-right: 1px solid var(--border); color: var(--text-muted); font-size: 8px; text-transform: uppercase; }
 .review-issue > header strong { font-size: 11px; }
-.review-issue > header strong { min-width: 0; flex: 1; }
+.review-issue > header > strong { min-width: 0; flex: 1 1 180px; overflow-wrap: anywhere; }
+.review-issue > header .review-issue-status { width: 124px; flex: 0 0 124px; }
 .review-issue > header > input[type="checkbox"] { width: 13px; height: 13px; margin: 0; accent-color: var(--blue-600); }
 .issue-priority { display: flex; align-items: center; gap: 3px; color: var(--text-muted); font-size: 8px; }
 .issue-priority input { width: 42px; height: 22px; padding: 0 3px; border: 1px solid var(--slate-300); border-radius: 3px; background: var(--surface); font-size: 8px; }
