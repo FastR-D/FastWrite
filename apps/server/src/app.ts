@@ -1208,18 +1208,18 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       const result = validateLatexCandidate(change.after);
       return json({ status: result.status, message: result.message, changeSetId });
     }),
-    route("GET", "/api/projects/:projectId/drafts", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(drafts.list(projectId)); }),
+    route("GET", "/api/projects/:projectId/drafts", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); return json(drafts.list(projectId)); }),
     route("POST", "/api/projects/:projectId/drafts", async (request, params) => {
-      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces); await collaboration.flushProject(projectId);
+      const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId, "agent:propose"); await collaboration.flushProject(projectId);
       return json(await drafts.plan(projectId, await readJson<DraftRequest>(request), request.signal), 201);
     }),
     route("POST", "/api/projects/:projectId/drafts/:draftId/confirm", async (request, params) => {
-      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces);
+      const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId, "agent:propose");
       const body = await readJson<{ outline: DraftOutlineSection[] }>(request);
       return json(await drafts.confirm(projectId, required(params, "draftId"), body.outline, request.signal), 201);
     }),
     route("POST", "/api/projects/:projectId/drafts/:draftId/cancel", async (request, params) => {
-      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
+      const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); authorize(request, projectId, "project:write");
       return json(await drafts.cancel(projectId, required(params, "draftId")));
     }),
     route("GET", "/api/projects/:projectId/reviews", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); const reports = reviews.list(projectId); return json(current ? filterVisibleReviewReports(reports, projectId, current, authorization, database) : reports); }),
@@ -1282,11 +1282,11 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       const payload = JSON.stringify({ project: { id: project.id, version: project.version, mainDocument: project.mainDocument, skill: project.skill, publicationTarget: project.publicationTarget }, generatedAt: new Date().toISOString(), runs, changeSets }, null, 2);
       return new Response(payload, { headers: { "content-type": "application/json; charset=utf-8", "content-disposition": `attachment; filename="fastwrite-provenance-${projectId}.json"` } });
     }),
-    route("POST", "/api/projects/:projectId/agent-tasks", async (request, params) => { const projectId = required(params, "projectId"); await collaboration.flushProject(projectId); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces); return json(await agentTasks.plan(projectId, await readJson<AgentTaskRequest>(request), request.signal), 201); }),
-    route("POST", "/api/projects/:projectId/agent-tasks/:planId/confirm", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces); return json(await agentTasks.confirm(projectId, required(params, "planId"), request.signal), 201); }),
+    route("POST", "/api/projects/:projectId/agent-tasks", async (request, params) => { const projectId = required(params, "projectId"); await collaboration.flushProject(projectId); await authorizeProjectRecords(request, projectId, "agent:propose"); return json(await agentTasks.plan(projectId, await readJson<AgentTaskRequest>(request), request.signal), 201); }),
+    route("POST", "/api/projects/:projectId/agent-tasks/:planId/confirm", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId, "agent:propose"); return json(await agentTasks.confirm(projectId, required(params, "planId"), request.signal), 201); }),
     route("POST", "/api/projects/:projectId/agent-tasks/:planId/cancel", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); authorize(request, projectId, "project:write"); return json(await agentTasks.cancel(projectId, required(params, "planId"))); }),
     route("GET", "/api/projects/:projectId/issue-resolutions", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); return json(agentTasks.resolutions(projectId)); }),
-    route("POST", "/api/projects/:projectId/issue-resolutions/:resolutionId/rereview", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await agentTasks.rereview(projectId, required(params, "resolutionId"), request.signal)); }),
+    route("POST", "/api/projects/:projectId/issue-resolutions/:resolutionId/rereview", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId, "review:run"); return json(await agentTasks.rereview(projectId, required(params, "resolutionId"), request.signal)); }),
     route("POST", "/api/projects/:projectId/issue-resolutions/:resolutionId/reopen", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); authorize(request, projectId, "project:write"); return json(await agentTasks.reopen(projectId, required(params, "resolutionId"))); }),
     route("GET", "/api/projects/:projectId/compile-results/latest", async (request, params) => {
       const projectId = required(params, "projectId");

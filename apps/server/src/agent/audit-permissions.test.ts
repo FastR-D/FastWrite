@@ -11,7 +11,7 @@ test("project-wide AI records do not disclose restricted prompts or rationales, 
     const opened = await json(base + "/file?path=private.tex", owner.token);
     const revision = await json(base + "/revisions", owner.token, "POST", { instruction: "PRIVATE_OBJECTIVE_MARKER", selection: { path: "private.tex", from: 0, to: opened.content.length, text: opened.content, fileVersion: opened.file.version } });
     const plan = await json(base + "/agent-tasks", owner.token, "POST", { objective: "PRIVATE_TASK_MARKER", scope: { type: "project" } });
-    const endpoints = ["/agent-runs", "/agent-tasks", "/provenance", "/provenance/export", "/issue-resolutions", "/compile-results/latest", "/experiments"];
+    const endpoints = ["/drafts", "/agent-runs", "/agent-tasks", "/provenance", "/provenance/export", "/issue-resolutions", "/compile-results/latest", "/experiments"];
     for (const endpoint of endpoints) expect((await request(base + endpoint, member.token)).status).toBe(200);
     const rule = await deny("private.tex");
     expect((await request(base + "/change-sets/" + revision.changeSet.id, member.token)).status).toBe(403);
