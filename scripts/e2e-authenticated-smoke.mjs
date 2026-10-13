@@ -49,7 +49,7 @@ try {
   await editor().focus(); await editor().press("ControlOrMeta+End"); await editor().press("Enter"); await page.keyboard.type("% DISCARD_REGRESSION_MARKER");
   await expect.poll(async () => (await api("/file?path=main.tex")).content).toContain("DISCARD_REGRESSION_MARKER");
   await page.getByRole("button", { name: "Git", exact: true }).click();
-  await page.getByRole("button", { name: "Discard changes in main.tex", exact: true }).click();
+  await page.getByRole("button", { name: "放弃文件更改： main.tex", exact: true }).click();
   await expect.poll(async () => (await api("/file?path=main.tex")).content).toBe(original.content);
   await expect(page.locator(".monaco-editor .view-lines")).not.toContainText("DISCARD_REGRESSION_MARKER");
   await editor().focus(); await editor().press("ControlOrMeta+End"); await editor().press("Enter"); await page.keyboard.type("% AFTER_DISCARD");
@@ -82,7 +82,7 @@ try {
   const archive = await readFile(await (await archiveDownload).path()); assert.deepEqual([...archive.subarray(0, 2)], [31, 139]);
   console.log("PASS: authenticated provenance and workspace downloads produce valid files");
 
-  const editorTabs = page.getByRole("group", { name: "Open editors controls", exact: true });
+  const editorTabs = page.getByRole("group", { name: "已打开的编辑器 controls", exact: true });
   await editorTabs.getByRole("tab", { name: "设置", exact: true }).focus();
   await page.keyboard.press("Home"); await editor().waitFor({ state: "attached" });
   await page.keyboard.press("End"); await page.getByRole("button", { name: "导出", exact: true }).waitFor();
@@ -106,7 +106,7 @@ try {
 
   await page.waitForFunction(id => Object.keys(localStorage).some(key => key.startsWith("fastwrite.workspace-file:v2:") && key.endsWith(`:${id}:main.tex`)), projectId);
   await page.route("**/api/**", route => route.abort("internetdisconnected")); await page.reload();
-  await page.getByText("Offline workspace snapshot loaded.", { exact: false }).waitFor(); await editor().waitFor({ state: "attached" });
+  await page.getByText("已加载离线工作区快照", { exact: false }).waitFor(); await editor().waitFor({ state: "attached" });
   assert.equal(await page.getByText("无法打开此论文", { exact: true }).count(), 0);
   await page.unroute("**/api/**");
   await page.route("**/api/projects/**", route => route.fulfill({ status: 403, contentType: "application/json", body: '{"error":{"code":"denied","message":"Access denied"}}' })); await page.reload();
@@ -120,6 +120,9 @@ try {
   assert.ok(memberResponse.ok()); const member = await memberResponse.json();
   const invitation = await api("/invitations", "POST", { email: "draft-member@example.test", role: "editor" });
   assert.ok((await memberContext.request.post(setup.origin + "/api/invitations/" + invitation.token + "/accept", { headers: { authorization: `Bearer ${member.token}` } })).ok());
+  await api("/files", "POST", { path: "restricted.tex", content: "OWNER_ONLY_FILE" });
+  await api("/acl/new", "PUT", { pathPrefix: "restricted.tex", subjectType: "user", subjectId: member.user.id, action: "read", effect: "deny" });
+  assert.equal((await memberContext.request.get(setup.origin + `/api/projects/${projectId}/compile-results/latest`, { headers: { authorization: `Bearer ${member.token}` } })).status(), 403);
   await memberContext.close();
   await page.goto(projectUrl); await editor().waitFor({ state: "attached" });
   await page.route("**/api/projects/**/file?*", route => route.request().method() === "PUT" ? route.abort("internetdisconnected") : route.continue());
@@ -133,15 +136,16 @@ try {
   await page.unroute("**/api/projects/**/file?*");
   await page.getByRole("button", { name: "FastWrite Administrator", exact: true }).click();
   const signIn = async email => {
-    await page.getByRole("button", { name: "Sign in", exact: true }).first().click();
-    const dialog = page.getByRole("dialog", { name: "Sign in", exact: true });
-    await dialog.getByLabel("Email", { exact: true }).fill(email);
-    await dialog.getByLabel("Password", { exact: true }).fill("fastwrite-e2e-only-password");
-    await dialog.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByRole("button", { name: "登录", exact: true }).first().click();
+    const dialog = page.getByRole("dialog", { name: "登录", exact: true });
+    await dialog.getByLabel("邮箱", { exact: true }).fill(email);
+    await dialog.getByLabel("密码", { exact: true }).fill("fastwrite-e2e-only-password");
+    await dialog.getByRole("button", { name: "登录", exact: true }).click();
     await dialog.waitFor({ state: "detached" });
   };
   await signIn("draft-member@example.test");
   await page.goto(projectUrl); await editor().waitFor({ state: "attached" });
+  console.log("PASS: restricted aggregate metadata does not block an authorized source editor");
   await expect(page.locator(".monaco-editor .view-lines")).not.toContainText("ACCOUNT_A_PRIVATE_DRAFT");
   assert.ok(!(await api("/file?path=main.tex")).content.includes("ACCOUNT_A_PRIVATE_DRAFT"));
   await page.goto(setup.origin + "/projects");

@@ -92,12 +92,12 @@ pw open "http://127.0.0.1:$E2E_PORT/projects" --browser "$E2E_BROWSER"
 run_accessibility
 
 run_code 'async (page) => {
-  await page.getByRole("button", { name: "Sign in", exact: true }).first().click();
-  const dialog = page.getByRole("dialog", { name: "Sign in", exact: true });
-  await dialog.getByLabel("Email", { exact: true }).fill("e2e-admin@example.test");
-  await dialog.getByLabel("Password", { exact: true }).fill("fastwrite-e2e-only-password");
-  await dialog.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: "New paper", exact: true }).waitFor();
+  await page.getByRole("button", { name: "登录", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "登录", exact: true });
+  await dialog.getByLabel("邮箱", { exact: true }).fill("e2e-admin@example.test");
+  await dialog.getByLabel("密码", { exact: true }).fill("fastwrite-e2e-only-password");
+  await dialog.getByRole("button", { name: "登录", exact: true }).click();
+  await page.getByRole("button", { name: "新建论文", exact: true }).waitFor();
   const token = await page.evaluate(() => localStorage.getItem("fastwrite.session-token"));
   if (!token) throw new Error("UI login did not establish a session");
   // The API fixtures below use page.request and need the same identity as the UI.
@@ -107,9 +107,9 @@ run_code 'async (page) => {
 }'
 
 run_code 'async (page) => {
-  await page.getByRole("button", { name: "New paper" }).click();
-  await page.getByRole("textbox", { name: "Project name" }).fill("E2E Smoke Paper");
-  await page.getByRole("button", { name: "Create paper" }).click();
+  await page.getByRole("button", { name: "新建论文" }).click();
+  await page.getByRole("textbox", { name: "项目名称" }).fill("E2E Smoke Paper");
+  await page.getByRole("button", { name: "创建论文" }).click();
   await page.waitForURL(/\/projects\/paper_/);
   const projectId = page.url().split("/").pop();
   const apiRoot = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId;
@@ -128,13 +128,13 @@ run_code 'async (page) => {
   });
   if (!saved.ok()) throw new Error("Could not update the multi-file SyncTeX fixture");
   await page.reload();
-  await page.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor({ state: "attached" });
+  await page.getByRole("textbox", { name: "源文件编辑器： main.tex" }).waitFor({ state: "attached" });
 }'
 
 run_code 'async (page) => {
   const toolbar = page.locator(".pdf-toolbar");
   const idleBox = await toolbar.boundingBox();
-  await page.locator(".pdf-pane .compile-strip").getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
+  await page.locator(".pdf-pane .compile-strip").getByText("编译成功", { exact: true }).waitFor({ timeout: 90000 });
   await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 90000 });
   const successBox = await toolbar.boundingBox();
   for (const box of [successBox]) {
@@ -145,46 +145,46 @@ run_code 'async (page) => {
 }'
 
 run_code 'async (page) => {
-  const filesButton = page.getByRole("navigation", { name: "Workspace views" }).getByRole("button", { name: "Files", exact: true });
+  const filesButton = page.getByRole("navigation", { name: "工作区视图" }).getByRole("button", { name: "文件", exact: true });
   if (await filesButton.getAttribute("aria-pressed") !== "true") await filesButton.click();
   await page.locator("span[title=\"sections\"]").click();
   await page.locator("span[title=\"sections/method.tex\"]").click();
-  const methodEditor = page.getByRole("textbox", { name: "Source editor for sections/method.tex" });
+  const methodEditor = page.getByRole("textbox", { name: "源文件编辑器： sections/method.tex" });
   await methodEditor.waitFor({ state: "attached" });
   await methodEditor.focus({ force: true });
   await methodEditor.press("ControlOrMeta+End");
   await page.waitForTimeout(100);
-  await page.getByRole("button", { name: "Locate editor selection in PDF" }).click();
+  await page.getByRole("button", { name: "在 PDF 中定位编辑器选区" }).click();
   const highlight = page.locator(".synctex-highlight");
   await highlight.waitFor();
   const point = await highlight.boundingBox();
   if (!point) throw new Error("Source-to-PDF SyncTeX did not create a visible highlight");
   await page.locator("span[title=\"main.tex\"]").click();
-  await page.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor({ state: "attached" });
+  await page.getByRole("textbox", { name: "源文件编辑器： main.tex" }).waitFor({ state: "attached" });
   await page.mouse.dblclick(point.x + point.width / 2, point.y + point.height / 2);
-  await page.getByRole("textbox", { name: "Source editor for sections/method.tex" }).waitFor({ state: "attached" });
+  await page.getByRole("textbox", { name: "源文件编辑器： sections/method.tex" }).waitFor({ state: "attached" });
 }'
 run_accessibility
 
 run_code 'async (page) => {
-  await page.getByRole("button", { name: "Review", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Paper Review" });
-  await dialog.getByRole("button", { name: "Compact review window" }).click();
+  await page.getByRole("button", { name: "审稿", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "论文审稿" });
+  await dialog.getByRole("button", { name: "紧凑审稿窗口" }).click();
   const compact = await dialog.boundingBox();
-  await dialog.getByRole("button", { name: "Wide review window" }).click();
+  await dialog.getByRole("button", { name: "宽屏审稿窗口" }).click();
   const wide = await dialog.boundingBox();
-  await dialog.getByRole("button", { name: "Fullscreen review window" }).click();
+  await dialog.getByRole("button", { name: "全屏审稿窗口" }).click();
   const fullscreen = await dialog.boundingBox();
   if (!compact || !wide || !fullscreen || !(compact.width < wide.width && wide.width < fullscreen.width) || fullscreen.height <= wide.height) {
     throw new Error("Paper Review size controls did not produce compact, wide, and fullscreen layouts");
   }
-  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
 }
 '
 
 run_code 'async (page) => {
   await page.locator("span[title=\"main.tex\"]").click();
-  const editor = page.getByRole("textbox", { name: "Source editor for main.tex" });
+  const editor = page.getByRole("textbox", { name: "源文件编辑器： main.tex" });
   await editor.waitFor({ state: "attached" });
   const projectId = page.url().split("/").pop();
   const fileUrl = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId + "/file?path=main.tex";
@@ -202,9 +202,9 @@ run_code 'async (page) => {
   await editor.focus({ force: true });
   await editor.press("ControlOrMeta+A");
   await page.keyboard.insertText(content);
-  const agentButton = page.getByRole("button", { name: "Agent", exact: true });
+  const agentButton = page.getByRole("button", { name: "智能助手", exact: true });
   await agentButton.focus();
-  if (await page.evaluate(() => document.activeElement?.textContent?.trim()) !== "Agent") {
+  if (await page.evaluate(() => document.activeElement?.textContent?.trim()) !== "智能助手") {
     throw new Error("Could not move focus outside the editor before testing the global save shortcut");
   }
   await agentButton.press("ControlOrMeta+s");
@@ -219,9 +219,9 @@ run_code 'async (page) => {
   if (!saved?.content.includes(marker) || saved.file.version <= opened.file.version) {
     throw new Error("Global Ctrl/Cmd-S did not immediately save a new paper version through the Workspace API");
   }
-  await page.getByText("Saved", { exact: true }).waitFor();
+  await page.getByText("已保存", { exact: true }).waitFor();
   await page.locator("span[title=\"sections/method.tex\"]").click();
-  await page.getByRole("textbox", { name: "Source editor for sections/method.tex" }).waitFor({ state: "attached" });
+  await page.getByRole("textbox", { name: "源文件编辑器： sections/method.tex" }).waitFor({ state: "attached" });
 }
 '
 
@@ -265,7 +265,7 @@ run_code 'async (page) => {
     });
   });
 
-  const editor = page.getByRole("textbox", { name: "Source editor for sections/method.tex" });
+  const editor = page.getByRole("textbox", { name: "源文件编辑器： sections/method.tex" });
   await editor.waitFor({ state: "attached" });
   await editor.focus({ force: true });
   await editor.press("ControlOrMeta+A");
@@ -273,10 +273,10 @@ run_code 'async (page) => {
   const initialBrowserName = page.context().browser()?.browserType().name() || "browser";
   const initialBrowserSuffix = initialBrowserName === "chromium" ? "" : "-" + initialBrowserName;
   await page.screenshot({ path: "output/playwright/workspace-revise-chat-1440x900" + initialBrowserSuffix + ".png", fullPage: true });
-  const shortcut = page.getByRole("button", { name: "Academic polish" });
+  const shortcut = page.getByRole("button", { name: "学术润色" });
   await shortcut.focus();
   await shortcut.press("Enter");
-  const proposal = page.locator(".revise-message--assistant").filter({ has: page.getByRole("button", { name: "Accept" }) });
+  const proposal = page.locator(".revise-message--assistant").filter({ has: page.getByRole("button", { name: "接受" }) });
   await proposal.waitFor();
 
   for (const viewport of [
@@ -297,9 +297,9 @@ run_code 'async (page) => {
   }
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  const reject = page.getByRole("button", { name: "Reject" });
+  const reject = page.getByRole("button", { name: "拒绝" });
   await reject.click();
-  await page.getByRole("textbox", { name: "Revision message" }).waitFor();
+  await page.getByRole("textbox", { name: "修改要求" }).waitFor();
   await page.unroute("**/api/projects/*/revisions");
   await page.unroute("**/api/projects/*/change-sets/revise-e2e/reject");
 }'
@@ -538,10 +538,10 @@ run_code 'async (page) => {
   await page.route("**/api/projects/*/agent-runs", async route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([agentRun]) }));
   await page.route("**/api/projects/*/issue-resolutions", async route => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
 
-  await page.getByRole("button", { name: "Agent", exact: true }).click();
-  const agentPanel = page.getByRole("region", { name: "Agent workspace" });
+  await page.getByRole("button", { name: "智能助手", exact: true }).click();
+  const agentPanel = page.getByRole("region", { name: "智能助手工作区" });
   await agentPanel.waitFor();
-  const objective = agentPanel.getByLabel("What should Agent do?");
+  const objective = agentPanel.getByLabel("希望智能助手做什么？");
   const commandButtons = ["/draft", "/continue", "/revise"].map(label => agentPanel.getByRole("button", { name: label, exact: true }));
   const commandBoxes = await Promise.all(commandButtons.map(button => button.boundingBox()));
   const commandContainer = await agentPanel.locator(".agent-command-buttons").boundingBox();
@@ -555,73 +555,73 @@ run_code 'async (page) => {
   if (!(await objective.inputValue()).startsWith("/revise Create an initial")) throw new Error("Revise command did not preserve the Agent objective");
   await agentPanel.getByRole("button", { name: "/draft", exact: true }).click();
   await objective.fill("Refine the paper one file at a time");
-  const creatingAgentPlan = agentPanel.getByRole("button", { name: "Create plan", exact: true }).click();
-  await agentPanel.getByText("Planning Agent task", { exact: true }).waitFor();
+  const creatingAgentPlan = agentPanel.getByRole("button", { name: "创建计划", exact: true }).click();
+  await agentPanel.getByText("正在规划智能助手任务", { exact: true }).waitFor();
   await creatingAgentPlan;
-  const confirmingAgentPlan = agentPanel.getByRole("button", { name: "Confirm plan", exact: true }).click();
-  await agentPanel.getByText("Process sections/method.tex", { exact: true }).waitFor();
+  const confirmingAgentPlan = agentPanel.getByRole("button", { name: "确认计划", exact: true }).click();
+  await agentPanel.getByText("处理 sections/method.tex", { exact: true }).waitFor();
   await confirmingAgentPlan;
-  await agentPanel.getByRole("button", { name: "main.tex: 2 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "main.tex: 2 项待审核，0 项已接受，0 项已拒绝", exact: true }).waitFor();
   const overviewCounts = agentPanel.locator(".agent-review-overview .review-counts b");
   const overviewLabels = await overviewCounts.allTextContents();
   const overviewColors = await overviewCounts.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
   if (overviewLabels.join("|") !== "Pending 3|Accepted 0|Rejected 0" || new Set(overviewColors).size !== 3) {
     throw new Error("Agent review overview does not show three complete, distinctly colored status totals");
   }
-  await agentPanel.getByRole("button", { name: "Reject pending & complete", exact: true }).click();
-  const nextAgentObjective = agentPanel.getByLabel("What should Agent do?");
+  await agentPanel.getByRole("button", { name: "拒绝待审核更改并完成", exact: true }).click();
+  const nextAgentObjective = agentPanel.getByLabel("希望智能助手做什么？");
   await nextAgentObjective.waitFor();
   if (await nextAgentObjective.inputValue()) throw new Error("Reject pending & complete carried the rejected objective into the next Agent task");
   await nextAgentObjective.fill("Refine the paper one file at a time");
-  await agentPanel.getByRole("button", { name: "Create plan", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "Confirm plan", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "main.tex: 2 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "创建计划", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "确认计划", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "main.tex: 2 项待审核，0 项已接受，0 项已拒绝", exact: true }).waitFor();
   if (await agentPanel.locator(".draft-diff__file .review-counts").count() !== 1) {
     throw new Error("Agent file review repeats the same Pending, Accepted, and Rejected header");
   }
-  await agentPanel.getByRole("button", { name: "Reject pending file hunks", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "sections/method.tex: 1 pending, 0 accepted, 0 rejected", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "Reject pending file hunks", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "Complete review", exact: true }).waitFor();
-  await agentPanel.getByRole("button", { name: "Leave review", exact: true }).click();
-  await page.getByRole("button", { name: "Agent", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "Complete review", exact: true }).click();
-  const composerAfterRestoredComplete = agentPanel.getByLabel("What should Agent do?");
+  await agentPanel.getByRole("button", { name: "拒绝此文件的待审核修改块", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "sections/method.tex: 1 项待审核，0 项已接受，0 项已拒绝", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "拒绝此文件的待审核修改块", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "完成审核", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "退出审核", exact: true }).click();
+  await page.getByRole("button", { name: "智能助手", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "完成审核", exact: true }).click();
+  const composerAfterRestoredComplete = agentPanel.getByLabel("希望智能助手做什么？");
   await composerAfterRestoredComplete.waitFor();
   if (await composerAfterRestoredComplete.inputValue()) throw new Error("Completing a restored Agent review did not open an empty next-task composer");
   await composerAfterRestoredComplete.fill("Refine the paper one file at a time");
-  await agentPanel.getByRole("button", { name: "Create plan", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "Confirm plan", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "main.tex: 2 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "创建计划", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "确认计划", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "main.tex: 2 项待审核，0 项已接受，0 项已拒绝", exact: true }).waitFor();
   const fileCounts = agentPanel.locator(".draft-diff__file > header .review-counts b");
   const fileLabels = await fileCounts.allTextContents();
   const fileColors = await fileCounts.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
   if (fileLabels.join("|") !== "Pending 2/2|Accepted 0/2|Rejected 0/2" || new Set(fileColors).size !== 3) {
     throw new Error("Agent file review does not show three complete, distinctly colored status totals");
   }
-  await agentPanel.getByRole("button", { name: "Reject", exact: true }).first().click();
-  await agentPanel.getByRole("button", { name: "main.tex: 1 pending, 0 accepted, 1 rejected", exact: true }).waitFor();
-  const acceptPendingFile = agentPanel.getByRole("button", { name: "Accept pending file hunks", exact: true });
+  await agentPanel.getByRole("button", { name: "拒绝", exact: true }).first().click();
+  await agentPanel.getByRole("button", { name: "main.tex: 1 项待审核，0 项已接受，1 项已拒绝", exact: true }).waitFor();
+  const acceptPendingFile = agentPanel.getByRole("button", { name: "接受此文件的待审核修改块", exact: true });
   if (await acceptPendingFile.count() !== 1) {
     await page.screenshot({ path: "output/playwright/workspace-agent-review-after-reject.png", fullPage: true });
     throw new Error("Accept pending file hunks is missing after rejecting one hunk: " + await agentPanel.locator(".hunk-review").innerText());
   }
   await acceptPendingFile.click();
-  await agentPanel.getByRole("button", { name: "main.tex: 0 pending, 1 accepted, 1 rejected", exact: true }).waitFor();
-  await agentPanel.getByRole("button", { name: "Change to reject", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "main.tex: 0 pending, 0 accepted, 2 rejected", exact: true }).waitFor();
-  await agentPanel.getByRole("button", { name: "Change to accept", exact: true }).first().click();
-  await agentPanel.getByRole("button", { name: "main.tex: 0 pending, 1 accepted, 1 rejected", exact: true }).waitFor();
-  await agentPanel.getByRole("button", { name: "sections/method.tex: 1 pending, 0 accepted, 0 rejected", exact: true }).click();
-  if (await agentPanel.getByRole("button", { name: "Edit proposal", exact: true }).count()) throw new Error("Agent review still exposes whole-file proposal editing");
-  await agentPanel.getByRole("button", { name: "Edit hunk", exact: true }).click();
-  const hunkEditor = agentPanel.getByLabel("Edit hunk 1 for sections/method.tex");
+  await agentPanel.getByRole("button", { name: "main.tex: 0 项待审核，1 项已接受，1 项已拒绝", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "改为拒绝", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "main.tex: 0 项待审核，0 项已接受，2 项已拒绝", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "改为接受", exact: true }).first().click();
+  await agentPanel.getByRole("button", { name: "main.tex: 0 项待审核，1 项已接受，1 项已拒绝", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "sections/method.tex: 1 项待审核，0 项已接受，0 项已拒绝", exact: true }).click();
+  if (await agentPanel.getByRole("button", { name: "编辑建议内容", exact: true }).count()) throw new Error("Agent review still exposes whole-file proposal editing");
+  await agentPanel.getByRole("button", { name: "编辑修改块", exact: true }).click();
+  const hunkEditor = agentPanel.getByLabel("编辑修改块 1 for sections/method.tex");
   await hunkEditor.fill("This sentence is grounded in bounded and unmanaged evidence.");
-  await agentPanel.getByRole("button", { name: "Save hunk", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "保存修改块", exact: true }).click();
   await agentPanel.locator(".hunk-review").getByText("unmanaged", { exact: true }).waitFor();
-  await agentPanel.getByRole("button", { name: "Leave review", exact: true }).click();
-  await page.getByRole("button", { name: "Agent", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "sections/method.tex: 1 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "退出审核", exact: true }).click();
+  await page.getByRole("button", { name: "智能助手", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "sections/method.tex: 1 项待审核，0 项已接受，0 项已拒绝", exact: true }).waitFor();
   for (const viewport of [{ width: 1440, height: 900, name: "1440x900" }, { width: 720, height: 800, name: "720x800" }]) {
     await page.setViewportSize(viewport);
     const reviewBox = await agentPanel.locator(".draft-diff").boundingBox();
@@ -637,10 +637,10 @@ run_code 'async (page) => {
   const externalMarker = "% External edit while Agent review is open";
   const externalSave = await page.request.put(apiRoot + "/file?path=sections%2Fmethod.tex", { data: { content: methodBeforeConflict.content + "\n" + externalMarker, baseVersion: methodBeforeConflict.file.version } });
   if (!externalSave.ok()) throw new Error("Could not create the Agent conflict fixture");
-  await agentPanel.getByRole("button", { name: "Accept all & complete", exact: true }).click();
-  const conflictDialog = page.getByRole("dialog", { name: "File changed during review" });
+  await agentPanel.getByRole("button", { name: "接受全部并完成", exact: true }).click();
+  const conflictDialog = page.getByRole("dialog", { name: "审核期间文件已发生更改" });
   await conflictDialog.waitFor();
-  const overwriteDiff = conflictDialog.getByLabel("Overwrite diff for sections/method.tex");
+  const overwriteDiff = conflictDialog.getByLabel("覆盖差异： sections/method.tex");
   const removedText = (await overwriteDiff.locator("del").allTextContents()).join("");
   const insertedText = (await overwriteDiff.locator("ins").allTextContents()).join("");
   const compactRemoved = removedText.replace(/\s/g, "");
@@ -652,17 +652,17 @@ run_code 'async (page) => {
     await page.setViewportSize(viewport);
     const dialogBox = await conflictDialog.boundingBox();
     const diffBox = await overwriteDiff.boundingBox();
-    const confirmBox = await conflictDialog.getByRole("button", { name: "Overwrite with reviewed result", exact: true }).boundingBox();
+    const confirmBox = await conflictDialog.getByRole("button", { name: "使用审核结果覆盖", exact: true }).boundingBox();
     if (!dialogBox || !diffBox || !confirmBox || diffBox.x < dialogBox.x || diffBox.x + diffBox.width > dialogBox.x + dialogBox.width + 1 || confirmBox.y + confirmBox.height > dialogBox.y + dialogBox.height + 1) {
       throw new Error("Agent conflict dialog overlaps or overflows at " + viewport.name);
     }
     await page.screenshot({ path: "output/playwright/workspace-agent-conflict-" + viewport.name + ".png", fullPage: true });
   }
   await page.setViewportSize({ width: 1440, height: 900 });
-  await conflictDialog.getByRole("button", { name: "Overwrite with reviewed result", exact: true }).click();
-  await agentPanel.getByRole("button", { name: "Rollback", exact: true }).waitFor();
-  await agentPanel.getByRole("button", { name: "New task", exact: true }).click();
-  const composerAfterAcceptedFinish = agentPanel.getByLabel("What should Agent do?");
+  await conflictDialog.getByRole("button", { name: "使用审核结果覆盖", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "回滚", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "新任务", exact: true }).click();
+  const composerAfterAcceptedFinish = agentPanel.getByLabel("希望智能助手做什么？");
   await composerAfterAcceptedFinish.waitFor();
   if (await composerAfterAcceptedFinish.inputValue()) throw new Error("Finishing an accepted Agent review did not open an empty next-task composer");
   const overwrittenMethod = await (await page.request.get(apiRoot + "/file?path=sections%2Fmethod.tex")).json();
@@ -670,7 +670,7 @@ run_code 'async (page) => {
     throw new Error("Confirmed Agent overwrite did not apply the reviewed hunk result");
   }
   await page.screenshot({ path: "output/playwright/workspace-agent-composer.png", fullPage: true });
-  await page.getByRole("button", { name: "Revise", exact: true }).click();
+  await page.getByRole("button", { name: "修改", exact: true }).click();
   await page.unroute("**/api/projects/*/agent-tasks");
   await page.unroute("**/api/projects/*/agent-tasks/agent-plan-review-e2e/confirm");
   await page.unroute("**/api/projects/*/change-sets/agent-change-review-e2e");
@@ -684,11 +684,11 @@ run_code 'async (page) => {
 }'
 
 run_code 'async (page) => {
-  await page.getByRole("button", { name: "Agent", exact: true }).click();
-  const agentPanel = page.getByRole("region", { name: "Agent workspace" });
+  await page.getByRole("button", { name: "智能助手", exact: true }).click();
+  const agentPanel = page.getByRole("region", { name: "智能助手工作区" });
   await agentPanel.waitFor();
-  await agentPanel.getByLabel("What should Agent do?").fill("Inspect cancellation behavior without creating changes");
-  await page.getByRole("button", { name: "Revise", exact: true }).click();
+  await agentPanel.getByLabel("希望智能助手做什么？").fill("Inspect cancellation behavior without creating changes");
+  await page.getByRole("button", { name: "修改", exact: true }).click();
 }'
 
 run_code 'async (page) => {
@@ -734,16 +734,16 @@ run_code 'async (page) => {
     await route.fallback();
   });
 
-  await page.getByRole("button", { name: "Memory" }).click();
-  const memoryDialog = page.getByRole("dialog", { name: "Paper Memory" });
-  await memoryDialog.getByRole("button", { name: "Generate Memory" }).click();
-  await memoryDialog.getByText("threat-model: Trust boundary", { exact: true }).waitFor();
-  await memoryDialog.getByRole("button", { name: "Apply reviewed memory" }).click();
-  await memoryDialog.getByText("Reviewed memory is current", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "论文记忆" }).click();
+  const memoryDialog = page.getByRole("dialog", { name: "论文记忆" });
+  await memoryDialog.getByRole("button", { name: "生成记忆" }).click();
+  await memoryDialog.getByText("威胁模型： Trust boundary", { exact: true }).waitFor();
+  await memoryDialog.getByRole("button", { name: "应用已审核的记忆" }).click();
+  await memoryDialog.getByText("已审核的记忆为最新版本", { exact: true }).waitFor();
   const browserName = page.context().browser()?.browserType().name() || "browser";
   const browserSuffix = browserName === "chromium" ? "" : "-" + browserName;
   await page.screenshot({ path: "output/playwright/workspace-memory-1440x900" + browserSuffix + ".png", fullPage: true });
-  await memoryDialog.getByRole("button", { name: "Close", exact: true }).click();
+  await memoryDialog.getByRole("button", { name: "关闭", exact: true }).click();
 
   await page.route("**/api/projects/*/reviews", async route => {
     if (route.request().method() === "GET") {
@@ -862,48 +862,48 @@ run_code 'async (page) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(resolution) });
   });
 
-  await page.getByRole("button", { name: "Review", exact: true }).click();
-  const reviewDialog = page.getByRole("dialog", { name: "Paper Review" });
-  await page.getByRole("button", { name: /Review paper|Continue source-only/ }).click();
+  await page.getByRole("button", { name: "审稿", exact: true }).click();
+  const reviewDialog = page.getByRole("dialog", { name: "论文审稿" });
+  await page.getByRole("button", { name: /审查论文|继续仅审查源文件/ }).click();
   await reviewDialog.locator(".review-run-progress li").filter({ hasText: "Collect section evidence" }).waitFor();
   await reviewDialog.getByText("Threat-model boundary needs explicit evidence", { exact: true }).waitFor();
   await page.screenshot({ path: "output/playwright/workspace-review-1440x900" + browserSuffix + ".png", fullPage: true });
-  await reviewDialog.getByRole("article").getByRole("button", { name: "Revise locally", exact: true }).click();
-  const localRevision = page.getByRole("textbox", { name: "Revision message" });
+  await reviewDialog.getByRole("article").getByRole("button", { name: "局部修改", exact: true }).click();
+  const localRevision = page.getByRole("textbox", { name: "修改要求" });
   await reviewDialog.waitFor({ state: "hidden" });
   await page.waitForFunction(() => (document.querySelector("textarea[aria-label=\"Revision message\"]")?.value || "").includes("Threat-model boundary needs explicit evidence"));
   await localRevision.focus();
   await page.locator(".source-editor .fastwrite-monaco-selection").first().waitFor({ timeout: 5000 });
-  await page.getByRole("button", { name: "Review", exact: true }).click();
-  const reopenedReview = page.getByRole("dialog", { name: "Paper Review" });
-  await reopenedReview.getByRole("article").getByRole("button", { name: "Fix with Agent", exact: true }).click();
+  await page.getByRole("button", { name: "审稿", exact: true }).click();
+  const reopenedReview = page.getByRole("dialog", { name: "论文审稿" });
+  await reopenedReview.getByRole("article").getByRole("button", { name: "使用智能助手修复", exact: true }).click();
 
-  const revisionPanel = page.getByRole("region", { name: "Agent workspace" });
+  const revisionPanel = page.getByRole("region", { name: "智能助手工作区" });
   await revisionPanel.waitFor();
-  await revisionPanel.getByRole("button", { name: "Create plan" }).click();
+  await revisionPanel.getByRole("button", { name: "创建计划" }).click();
   await revisionPanel.getByText("Clarify the attacker boundary", { exact: true }).waitFor();
-  await revisionPanel.getByRole("button", { name: "Confirm plan" }).click();
+  await revisionPanel.getByRole("button", { name: "确认计划" }).click();
   const hunkEvidence = revisionPanel.locator(".hunk-evidence");
   await hunkEvidence.waitFor();
   if (!(await hunkEvidence.textContent()).includes("Make the claim match the explicit attacker model.")) throw new Error("Revision Diff omitted its Issue rationale");
   await page.screenshot({ path: "output/playwright/workspace-revision-evidence-1440x900" + browserSuffix + ".png", fullPage: true });
-  await revisionPanel.getByRole("button", { name: "Edit hunk", exact: true }).click();
-  const proposalEditor = revisionPanel.getByLabel("Edit hunk 1 for main.tex");
+  await revisionPanel.getByRole("button", { name: "编辑修改块", exact: true }).click();
+  const proposalEditor = revisionPanel.getByLabel("编辑修改块 1 for main.tex");
   await proposalEditor.fill(revisionChangeSet.changes[0].after.replace("evaluate guarantees only within this boundary", "evaluate guarantees only within this explicitly stated boundary"));
   await page.screenshot({ path: "output/playwright/workspace-revision-manual-edit-1440x900" + browserSuffix + ".png", fullPage: true });
-  await revisionPanel.getByRole("button", { name: "Save hunk", exact: true }).click();
+  await revisionPanel.getByRole("button", { name: "保存修改块", exact: true }).click();
   await revisionPanel.locator(".hunk-card").waitFor();
-  await revisionPanel.getByRole("button", { name: "Accept all & complete", exact: true }).click();
-  await revisionPanel.getByText("needs review", { exact: true }).waitFor();
-  await revisionPanel.getByRole("button", { name: "Compile current version" }).click();
-  await page.locator(".pdf-pane .compile-strip").getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
-  const rereview = revisionPanel.getByRole("button", { name: "Targeted re-review" });
+  await revisionPanel.getByRole("button", { name: "接受全部并完成", exact: true }).click();
+  await revisionPanel.getByText("待审核", { exact: true }).waitFor();
+  await revisionPanel.getByRole("button", { name: "编译当前版本" }).click();
+  await page.locator(".pdf-pane .compile-strip").getByText("编译成功", { exact: true }).waitFor({ timeout: 90000 });
+  const rereview = revisionPanel.getByRole("button", { name: "定向复审" });
   await rereview.waitFor();
   await rereview.click();
-  await revisionPanel.getByText("resolved", { exact: true }).waitFor();
+  await revisionPanel.getByText("已解决", { exact: true }).waitFor();
   await page.screenshot({ path: "output/playwright/workspace-revision-resolved-1440x900" + browserSuffix + ".png", fullPage: true });
-  if (await revisionPanel.getByRole("button", { name: "Done", exact: true }).count()) throw new Error("Completed Agent review still exposes a Done action that conflicts with New task");
-  await revisionPanel.getByRole("button", { name: "New task", exact: true }).click();
+  if (await revisionPanel.getByRole("button", { name: "完成", exact: true }).count()) throw new Error("Completed Agent review still exposes a Done action that conflicts with New task");
+  await revisionPanel.getByRole("button", { name: "新任务", exact: true }).click();
 
   await page.unroute("**/api/projects/*/memory**");
   await page.unroute("**/api/projects/*/reviews");
@@ -929,7 +929,7 @@ run_code 'async (page) => {
     await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ ...request, suggestion: " This claim is scoped to the stated attacker model." }) });
   });
   await page.locator("span[title=\"main.tex\"]").click();
-  const editor = page.getByRole("textbox", { name: "Source editor for main.tex" });
+  const editor = page.getByRole("textbox", { name: "源文件编辑器： main.tex" });
   await editor.waitFor();
   const current = (await (await page.request.get(fileUrl)).json()).content;
   const typingStarted = Date.now();
@@ -940,14 +940,14 @@ run_code 'async (page) => {
   if (typingLatency > 500) throw new Error("Completion integration blocked normal editor input for " + typingLatency + "ms");
   await page.waitForTimeout(350);
   if (completionRequests !== 0) throw new Error("Completion request ignored the input debounce window");
-  const preview = page.getByRole("status").filter({ hasText: "Writing suggestion available" });
+  const preview = page.getByRole("status").filter({ hasText: "有可用的写作建议" });
   await preview.waitFor({ timeout: 5000 });
   const browserName = page.context().browser()?.browserType().name() || "browser";
   const browserSuffix = browserName === "chromium" ? "" : "-" + browserName;
   await page.screenshot({ path: "output/playwright/workspace-completion-1440x900" + browserSuffix + ".png", fullPage: true });
   await editor.press("Tab");
-  await page.getByText("Undo completion", { exact: true }).waitFor();
-  await page.getByText("Saved", { exact: true }).waitFor();
+  await page.getByText("撤销补全", { exact: true }).waitFor();
+  await page.getByText("已保存", { exact: true }).waitFor();
   let acceptedContent = "";
   for (let attempt = 0; attempt < 30; attempt += 1) {
     acceptedContent = (await (await page.request.get(fileUrl)).json()).content;
@@ -958,7 +958,7 @@ run_code 'async (page) => {
   const metrics = await page.evaluate(() => JSON.parse(localStorage.getItem("fastwrite.completion.metrics.v1") || "{}"));
   if (!metrics.suggested || !metrics.accepted || Object.values(metrics).some(value => typeof value !== "number")) throw new Error("Completion metrics were not privacy-safe counters");
 
-  const toggle = page.getByRole("checkbox", { name: "Complete" });
+  const toggle = page.getByRole("checkbox", { name: "补全" });
   await toggle.press("Space");
   if (await toggle.isChecked()) throw new Error("Completion toggle did not switch off");
   const beforeDisabledEdit = completionRequests;
@@ -974,7 +974,7 @@ run_code 'async (page) => {
 run_code 'async (page) => {
   const openStarted = Date.now();
   await page.locator("span[title=\"large-notes.md\"]").click();
-  const editor = page.getByRole("textbox", { name: "Source editor for large-notes.md" });
+  const editor = page.getByRole("textbox", { name: "源文件编辑器： large-notes.md" });
   await editor.waitFor({ timeout: 5000 });
   if (Date.now() - openStarted > 2500) throw new Error("Large file blocked the workspace while opening");
   await editor.focus();
@@ -987,7 +987,7 @@ run_code 'async (page) => {
 
 run_code 'async (page) => {
   await page.locator("span[title=\"main.tex\"]").click();
-  const editor = page.getByRole("textbox", { name: "Source editor for main.tex" });
+  const editor = page.getByRole("textbox", { name: "源文件编辑器： main.tex" });
   await editor.waitFor();
   await editor.focus();
   await editor.press("ControlOrMeta+A");
@@ -995,9 +995,9 @@ run_code 'async (page) => {
   const errorIcon = page.locator(".compile-status-icon--error");
   await errorIcon.waitFor({ timeout: 90000 });
   if (await errorIcon.getAttribute("aria-label") !== "Compilation error") throw new Error("Compilation failure does not expose an unambiguous error icon");
-  await page.getByRole("tab", { name: /^Problems/ }).click();
+  await page.getByRole("tab", { name: /^问题/ }).click();
   const diagnostics = page.locator(".bottom-panel-problems");
-  await diagnostics.getByText("Compilation failed", { exact: true }).waitFor();
+  await diagnostics.getByText("编译失败", { exact: true }).waitFor();
   await diagnostics.getByText(/Undefined control sequence/).first().waitFor();
   if (await page.locator(".react-pdf__Page__canvas").count() < 1) {
     throw new Error("Previous PDF disappeared after a failed compile");
@@ -1015,15 +1015,15 @@ run_code 'async (page) => {
     await page.screenshot({ path: "output/playwright/workspace-pdf-error-" + viewport.name + browserSuffix + ".png", fullPage: true });
   }
   await page.setViewportSize({ width: 1280, height: 800 });
-  const fixButton = page.locator(".pdf-pane").getByRole("button", { name: "Fix with Agent" });
+  const fixButton = page.locator(".pdf-pane").getByRole("button", { name: "使用智能助手修复" });
   await fixButton.waitFor();
   const fixBox = await fixButton.boundingBox();
   const pdfBox = await page.locator(".pdf-pane").boundingBox();
   if (!fixBox || !pdfBox || fixBox.x < pdfBox.x || fixBox.x + fixBox.width > pdfBox.x + pdfBox.width) throw new Error("Fix with Agent is clipped in the PDF failure state");
-  await page.getByRole("button", { name: "Hide panel", exact: true }).click();
+  await page.getByRole("button", { name: "隐藏面板", exact: true }).click();
   await fixButton.click();
-  await page.getByRole("region", { name: "Agent workspace" }).waitFor();
-  const agentObjective = page.getByRole("textbox", { name: "What should Agent do?" });
+  await page.getByRole("region", { name: "智能助手工作区" }).waitFor();
+  const agentObjective = page.getByRole("textbox", { name: "希望智能助手做什么？" });
   await agentObjective.waitFor();
   await page.waitForFunction(() =>
     (document.querySelector(".agent-task-form textarea")?.value || "").startsWith("/revise ")
@@ -1040,11 +1040,11 @@ run_code 'async (page) => {
   await page.screenshot({ path: "output/playwright/workspace-compile-repair-agent-720x800" + browserSuffix + ".png", fullPage: true });
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.getByRole("button", { name: "Revise", exact: true }).click();
+  await page.getByRole("button", { name: "修改", exact: true }).click();
   await editor.focus();
   await editor.press("ControlOrMeta+A");
   await page.keyboard.insertText("\\documentclass{article}\n\\begin{document}\nCompilation repaired.\n\\end{document}");
-  await page.getByText("Saved", { exact: true }).waitFor();
+  await page.getByText("已保存", { exact: true }).waitFor();
   await page.locator(".compile-strip--success").waitFor({ timeout: 90000 });
   await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 90000 });
 }'
@@ -1090,14 +1090,14 @@ run_code 'async (page) => {
     requestBody = route.request().postDataJSON();
     await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(imported) });
   });
-  await page.getByRole("main").getByRole("button", { name: "Import paper", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Import a paper" });
-  await dialog.getByRole("tab", { name: "GitHub repository" }).click();
-  await dialog.getByLabel("Repository URL").fill("https://github.com/example/security-paper");
+  await page.getByRole("main").getByRole("button", { name: "导入论文", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "导入论文" });
+  await dialog.getByRole("tab", { name: "GitHub 仓库" }).click();
+  await dialog.getByLabel("仓库地址").fill("https://github.com/example/security-paper");
   await dialog.getByLabel(/Branch, tag or commit/).fill("camera-ready");
   await dialog.getByLabel(/Project name/).fill("Imported Security Paper");
   await dialog.getByLabel(/Main document/).fill("paper.tex");
-  await dialog.getByRole("combobox", { name: "Research domain" }).click();
+  await dialog.getByRole("combobox", { name: "研究领域" }).click();
   await dialog.getByRole("option", { name: "网络与信息安全", exact: true }).click();
   await page.waitForTimeout(350);
   const axeUrl = await page.evaluate(() => location.origin + "/__e2e__/axe.min.js");
@@ -1111,9 +1111,9 @@ run_code 'async (page) => {
   if (violations.length) {
     throw new Error(violations.map(item => item.id + ": " + item.nodes.map(node => node.target.join(" ") + " " + node.html + " " + node.failureSummary).join(", ")).join("\n"));
   }
-  await dialog.getByRole("button", { name: "Import paper", exact: true }).click();
+  await dialog.getByRole("button", { name: "导入论文", exact: true }).click();
   await page.waitForURL(new RegExp("/projects/" + imported.id + "$"));
-  await page.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor({ state: "attached" });
+  await page.getByRole("textbox", { name: "源文件编辑器： main.tex" }).waitFor({ state: "attached" });
   const expected = {
     repository: "https://github.com/example/security-paper",
     ref: "camera-ready",

@@ -305,7 +305,12 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       api.projects.get(projectId, controller.signal),
       api.projects.treeLevel(projectId, "", controller.signal),
       api.projects.outline(projectId, controller.signal),
-      api.compileResults.latest(projectId, controller.signal),
+      api.compileResults.latest(projectId, controller.signal).catch(error => {
+        // A project-wide compile summary can include files this reader cannot
+        // access. Its absence must not prevent opening their permitted files.
+        if (error instanceof ApiClientError && error.status === 403) return null;
+        throw error;
+      }),
       api.claims.list(projectId),
       api.claims.cockpit(projectId),
     ])
