@@ -13,7 +13,7 @@ interface GithubLocation {
 export class GithubService {
   constructor(private readonly dataDirectory: string, private readonly workspaces: WorkspaceService) {}
 
-  async import(request: GithubImportRequest): Promise<PaperProject> {
+  async import(request: GithubImportRequest, personalOwnerUserId?: string): Promise<PaperProject> {
     const location = parseGithubRepository(request.repository);
     const requestedRef = request.ref?.trim() || "HEAD";
     if (requestedRef !== "HEAD" && (!/^[\w./-]{1,200}$/.test(requestedRef) || requestedRef.startsWith("-") || requestedRef.includes("..") || requestedRef.includes("@{"))) {
@@ -52,6 +52,7 @@ export class GithubService {
         ...(request.mainDocument ? { mainDocument: request.mainDocument } : {}),
         venue: request.venue ?? "network-information-security",
         ...(request.publicationTarget ? { publicationTarget: request.publicationTarget } : {}),
+        ...(personalOwnerUserId ? { personalOwnerUserId } : {}),
         source: {
           type: "github",
           repository: `https://github.com/${location.owner}/${location.repository}`,

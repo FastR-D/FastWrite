@@ -6,6 +6,7 @@ import * as encoding from "lib0/encoding";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
 import { readSyncMessage, writeSyncStep1, writeUpdate, messageYjsSyncStep2 } from "y-protocols/sync";
 import { api } from "../../api/client";
+import { appPath } from "../appBase";
 import type { DocumentEntry } from "./documentRegistry";
 
 const LOCAL = Symbol("local-monaco-edit");
@@ -201,7 +202,7 @@ export class CollaborationProvider {
       this.tokenExpiresAt = Date.parse(grant.expiresAt);
       if (this.disposed) return;
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-      const socket = new WebSocket(`${protocol}//${location.host}/api/collaboration/socket?clientId=${this.clientId}&token=${encodeURIComponent(grant.token)}`);
+      const socket = new WebSocket(`${protocol}//${location.host}${appPath("/api/collaboration/socket")}?clientId=${this.clientId}&token=${encodeURIComponent(grant.token)}`);
       this.socket = socket; socket.binaryType = "arraybuffer";
       socket.onopen = () => { this.attempts = 0; const encoder = encoding.createEncoder(); encoding.writeVarUint(encoder, 0); writeSyncStep1(encoder, this.doc); socket.send(encoding.toUint8Array(encoder)); this.onAwareness(null, LOCAL); };
       socket.onmessage = event => {

@@ -1,5 +1,6 @@
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import styles from "./Link.module.css";
+import { appPath } from "../../../lib/appBase";
 
 export type LinkTarget =
   | { kind: "internal"; href: string }
@@ -39,6 +40,7 @@ export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>,
 
 export function Link({ href, children, variant = "text", className = "", onClick, download, ...rest }: LinkProps) {
   const target = linkTarget(href);
+  const resolvedHref = target.kind === "internal" ? appPath(href) : href;
   /*
    * The button variant reuses the global button classes so it matches the
    * export/download anchors elsewhere in the app. The text variant needs its
@@ -53,7 +55,7 @@ export function Link({ href, children, variant = "text", className = "", onClick
   return (
     <a
       {...rest}
-      href={href}
+      href={resolvedHref}
       className={classes}
       {...(download !== undefined ? { download } : {})}
       {...(target.kind === "external" && download === undefined ? { rel: "noreferrer noopener", target: "_blank" } : {})}
@@ -72,7 +74,7 @@ export function Link({ href, children, variant = "text", className = "", onClick
         // the hash jump, and a new tab is what the user asked for.
         if (target.kind !== "internal" || event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
         event.preventDefault();
-        window.history.pushState(null, "", href);
+        window.history.pushState(null, "", resolvedHref);
         window.dispatchEvent(new PopStateEvent("popstate"));
       }}
     >

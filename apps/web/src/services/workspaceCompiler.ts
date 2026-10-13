@@ -20,9 +20,7 @@ export async function compileWorkspace(projectId: string, mainDocument: string, 
       onProgress?.(`Reading workspace files (${completed}/${Math.max(0, files.length - 1)})…`);
       return;
     }
-    const response = await fetch(`/api/projects/${projectId}/asset?path=${encodeURIComponent(file.path)}`, signal ? { signal } : undefined);
-    if (!response.ok) throw new Error(`Could not read '${file.path}' for compilation`);
-    addCompileFile(additionalFiles, file.path, mainDocument, new Uint8Array(await response.arrayBuffer()));
+    addCompileFile(additionalFiles, file.path, mainDocument, new Uint8Array(await api.projects.readAsset(projectId, file.path, signal)));
     completed += 1;
     onProgress?.(`Reading workspace files (${completed}/${Math.max(0, files.length - 1)})…`);
   }));

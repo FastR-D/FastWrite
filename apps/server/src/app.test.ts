@@ -30,6 +30,7 @@ describe("workspace API", () => {
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(response.headers.get("content-security-policy")).toContain("style-src 'self' 'unsafe-inline'");
     expect(response.headers.get("content-security-policy")).toContain("default-src 'self';");
+    expect(response.headers.get("content-security-policy")).toContain("img-src 'self' blob:");
     expect(response.headers.get("x-request-id")).toMatch(/^req_/);
   });
 

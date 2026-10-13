@@ -88,6 +88,7 @@ import { LocalObjectStore, createS3ObjectStore, type ObjectStore } from "./stora
 import { LocalModelProvider } from "./agent/local-model-provider";
 import { createNotification } from "./notifications/notification-service";
 import { MetricsRegistry } from "./metrics";
+import { webFileResponse, webMimeType } from "./web-static";
 
 const PROJECT_ACTIONS: ProjectAction[] = ["project:read", "project:write", "project:invite", "project:manage", "comment:write", "compile:run", "review:run", "agent:propose", "changeset:approve", "harness:use", "github:sync"];
 
@@ -401,7 +402,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
         void mailDelivery.dispatchPending();
         return response;
       }
-      const response = withRuntimeHeaders(await serveWeb(url.pathname));
+      const response = withRuntimeHeaders(await serveWeb(request, url.pathname));
       metrics.observe(request.method, url.pathname, response.status);
       return response;
     } catch (error) {
@@ -466,6 +467,14 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       if (!state.projectMembers.some((item) => item.projectId === project.id && item.userId === current.user.id)) state.projectMembers.push({ projectId: project.id, userId: current.user.id, role: "owner", createdAt: timestamp, updatedAt: timestamp });
       state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: current.user.id, action: "project.create", resourceType: "project", resourceId: project.id, createdAt: timestamp });
     });
+  };
+  const authorizeUpload = (request: Request, uploadId: string) => {
+    const current = principal(request, authEnabled);
+    const session = uploads.get(uploadId);
+    if ((session.ownerUserId && session.ownerUserId !== current?.user.id) || (authEnabled && !session.ownerUserId)) {
+      throw new ApiError(403, "upload_access_denied", "You do not have permission to access this upload session");
+    }
+    return session;
   };
   return [
     route("GET", "/api/health", async () => json({ status: "ok", version: "0.1.0" })),
@@ -848,17 +857,19 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       return json(!authEnabled ? workspaces.listProjects() : workspaces.listProjects().filter((project) => current && authorization.projectRole(current.user.id, project.id)));
     }),
     route("POST", "/api/projects", async (request) => {
+      const current = principal(request, authEnabled);
       const body = await readJson<CreateProjectRequest>(request);
+      if (body.teamId && current) authorization.requireTeamRole(current, body.teamId, ["owner", "admin"]);
       if (body.initializeFromTemplate) {
         if (!body.publicationTarget) throw new ApiError(400, "template_target_required", "Select a conference or journal before using its template");
         const venue = body.venue ?? body.publicationTarget.domain;
         const template = await latexTemplates.materialize(body.name, venue, body.publicationTarget);
         const project = await workspaces.importStagingDirectory({ stagingDirectory: template.stagingDirectory, name: body.name, mainDocument: template.mainDocument, venue, publicationTarget: body.publicationTarget, source: { type: "local", displayName: template.displayName } });
-        await assignProjectOwner(project, principal(request, false), body.teamId);
+        await assignProjectOwner(project, current, body.teamId);
         return json(project, 201);
       }
       const project = await workspaces.createEmpty(body.name, body.mainDocument, body.venue, body.publicationTarget);
-      await assignProjectOwner(project, principal(request, false), body.teamId);
+      await assignProjectOwner(project, current, body.teamId);
       return json(project, 201);
     }),
     route("GET", "/api/projects/:projectId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(workspaces.getProject(projectId)); }),
@@ -1266,6 +1277,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       return json(rolledBack);
     }),
     route("POST", "/api/upload-sessions", async (request) => {
+      const current = principal(request, authEnabled);
       const body = await readJson<{
         projectName: string;
         mainDocument: string;
@@ -1274,22 +1286,32 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
         sourceName: string;
         entries: UploadManifestEntry[];
       }>(request);
-      return json(await uploads.create(body), 201);
+      return json(await uploads.create(body, current?.user.id), 201);
     }),
-    route("GET", "/api/upload-sessions/:uploadId", async (_request, params) => json(uploads.get(required(params, "uploadId")))),
+    route("GET", "/api/upload-sessions/:uploadId", async (request, params) => json(authorizeUpload(request, required(params, "uploadId")))),
     route("PUT", "/api/upload-sessions/:uploadId/files", async (request, params, url) => {
-      return json(await uploads.uploadFile(required(params, "uploadId"), requiredQuery(url, "path"), await request.arrayBuffer()));
+      const uploadId = required(params, "uploadId");
+      authorizeUpload(request, uploadId);
+      return json(await uploads.uploadFile(uploadId, requiredQuery(url, "path"), await request.arrayBuffer()));
     }),
-    route("POST", "/api/upload-sessions/:uploadId/complete", async (_request, params) => {
-      return json(await uploads.complete(required(params, "uploadId")), 201);
+    route("POST", "/api/upload-sessions/:uploadId/complete", async (request, params) => {
+      const uploadId = required(params, "uploadId");
+      authorizeUpload(request, uploadId);
+      const project = await uploads.complete(uploadId);
+      const current = principal(request, authEnabled);
+      if (current) authorization.requireProject(current, project.id, "project:read");
+      return json(project, 201);
     }),
-    route("DELETE", "/api/upload-sessions/:uploadId", async (_request, params) => {
-      await uploads.cancel(required(params, "uploadId"));
+    route("DELETE", "/api/upload-sessions/:uploadId", async (request, params) => {
+      const uploadId = required(params, "uploadId");
+      authorizeUpload(request, uploadId);
+      await uploads.cancel(uploadId);
       return new Response(null, { status: 204 });
     }),
     route("POST", "/api/project-imports/github", async (request) => {
+      const current = principal(request, authEnabled);
       const body = await readJson<GithubImportRequest>(request);
-      return json(await github.import(body), 201);
+      return json(await github.import(body, current?.user.id), 201);
     })
   ];
 }
@@ -1517,41 +1539,26 @@ async function authorizeMcpWorkspaceInput(projectId: string, principal: Principa
 function textPathsForAuthorization(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPathsForAuthorization(node.children) : node.kind === "text" ? [node.path] : []); }
 function workspacePathsForAuthorization(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? workspacePathsForAuthorization(node.children) : [node.path]); }
 
-async function serveWeb(pathname: string): Promise<Response> {
+async function serveWeb(request: Request, pathname: string): Promise<Response> {
   const requested = pathname === "/" ? "index.html" : pathname.replace(/^\//, "");
   const candidate = join(config.webDirectory, requested);
   if (existsSync(candidate) && (await stat(candidate)).isFile()) {
-    const headers: Record<string, string> = { "content-type": mimeType(extname(candidate)) };
-    if (/^bundles\//.test(requested) || /^(?:busytex\.wasm|worker\.js)$/.test(requested)) headers["cache-control"] = "public, max-age=3600";
-    return new Response(Bun.file(candidate), { headers });
+    return webFileResponse(request, requested, Bun.file(candidate), existsSync(`${candidate}.gz`) ? Bun.file(`${candidate}.gz`) : undefined);
   }
   const embedded = embeddedWebFile(requested);
-  if (embedded) return new Response(embedded, { headers: webHeaders(requested) });
+  if (embedded) return webFileResponse(request, requested, embedded, embeddedWebFile(`${requested}.gz`));
+  if (/^(?:assets|bundles)\//.test(requested) || /\.(?:js|mjs|css|map|json|png|jpe?g|gif|webp|svg|wasm|woff2?|ttf|ico|pdf|gz|data)$/.test(requested)) {
+    return json({ error: { code: "web_asset_not_found", message: "Web asset not found" } }, 404);
+  }
   const index = join(config.webDirectory, "index.html");
-  if (existsSync(index)) return new Response(Bun.file(index), { headers: { "content-type": "text/html; charset=utf-8" } });
+  if (existsSync(index)) return webFileResponse(request, "index.html", Bun.file(index), existsSync(`${index}.gz`) ? Bun.file(`${index}.gz`) : undefined);
   const embeddedIndex = embeddedWebFile("index.html");
-  if (embeddedIndex) return new Response(embeddedIndex, { headers: { "content-type": "text/html; charset=utf-8" } });
+  if (embeddedIndex) return webFileResponse(request, "index.html", embeddedIndex, embeddedWebFile("index.html.gz"));
   return json({ error: { code: "web_not_built", message: "Web client is not built. Run the development server or build the project." } }, 404);
 }
 
-function webHeaders(path: string): Record<string, string> {
-  const headers: Record<string, string> = { "content-type": mimeType(extname(path)) };
-  if (/^bundles\//.test(path) || /^(?:busytex\.wasm|worker\.js)$/.test(path)) headers["cache-control"] = "public, max-age=3600";
-  return headers;
-}
-
 export function mimeType(extension: string): string {
-  return ({
-    ".html": "text/html; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".mjs": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".svg": "image/svg+xml",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".woff2": "font/woff2",
-    ".wasm": "application/wasm"
-  } as Record<string, string>)[extension] ?? "application/octet-stream";
+  return webMimeType(extension);
 }
 
 function requestCookie(request: Request, name: string): string { return request.headers.get("cookie")?.split(";").map(item => item.trim()).find(item => item.startsWith(name + "="))?.slice(name.length + 1) ?? ""; }

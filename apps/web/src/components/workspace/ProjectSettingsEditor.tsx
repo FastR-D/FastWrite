@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { isIgnoredWorkspacePath, WRITING_PROFILES, type AgentWireApi, type PaperProject, type ProjectAclAction, type PublicationTarget, type PublishedSkillDescriptor, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
 import { api } from "../../api/client";
-import { Button, Field, Icon, icons, Select, TextField, Link } from "../ui";
+import { Button, Field, Icon, icons, Select, TextField } from "../ui";
+import { ProjectExportButton } from "./ProjectExportButton";
 import { PublicationTargetFields } from "../ui/PublicationTargetFields";
 import { harnessSettingsSaveDecision, type HarnessSettingsBaseline, type HarnessSettingsDraft } from "./harnessSettings";
 import styles from "./ProjectSettingsEditor.module.css";
@@ -11,12 +12,13 @@ interface ProjectSettingsEditorProps {
   project: PaperProject;
   tree: WorkspaceTreeNode[];
   onSaved: (project: PaperProject) => void | Promise<void>;
+  beforeExport?: () => Promise<void>;
 }
 interface RememberedHarnessSettings { baseURL?: string; model?: string; wireAPI?: AgentWireApi }
 type AclRule = { id: string; pathPrefix: string; subjectType: "user" | "project_role" | "team_role" | "idp_group"; subjectId: string; action: ProjectAclAction; effect: "allow" | "deny" };
 const ACL_ACTIONS: ProjectAclAction[] = ["read", "comment", "edit", "manage", "run_ai", "manage_harness", "export", "sync_github"];
 
-export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSettingsEditorProps) {
+export function ProjectSettingsEditor({ project, tree, onSaved, beforeExport }: ProjectSettingsEditorProps) {
   const [category, setCategory] = useState("general");
   const [query, setQuery] = useState("");
   const [saved, setSaved] = useState(false);
@@ -244,7 +246,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
             <h2 id="backup-settings-title">History & Export</h2>
             <p className={styles.description}>Keep a local history of your work and download a portable copy.</p>
         <div className="settings-export"><div><strong>Automatic Git history</strong><span>Accepted saves create local Git checkpoints in the FastWrite project history.</span></div></div>
-        <div className="settings-export"><div><strong>Workspace snapshot</strong><span>Download all source files as a portable tar.gz archive.</span></div><Link variant="button" href={api.projects.exportUrl(project.id)} download><Icon name={icons.cloudDownload} />Export</Link></div>
+        <div className="settings-export"><div><strong>Workspace snapshot</strong><span>Download all source files as a portable tar.gz archive.</span></div><ProjectExportButton projectId={project.id} {...(beforeExport ? { beforeExport } : {})} onError={setError} /></div>
           </section>
         </div>
       </div>

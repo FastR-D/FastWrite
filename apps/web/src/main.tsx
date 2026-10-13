@@ -7,7 +7,7 @@ import "vscrui/dist/_name_.css";
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {
-    void navigator.serviceWorker.register("/sw.js").then((registration) => {
+    void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL }).then((registration) => {
       if (navigator.onLine) void registration.update().catch(() => undefined);
     }).catch(() => undefined);
   });

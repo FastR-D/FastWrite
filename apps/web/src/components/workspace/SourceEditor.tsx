@@ -140,7 +140,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       smoothScrolling: true,
       roundedSelection: true,
       fontFamily: 'ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
+      fontSize: 14,
       lineHeight: 22,
       glyphMargin: false,
       folding: false,

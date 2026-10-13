@@ -32,6 +32,7 @@ import { AddFileDialog } from "../components/workspace/AddFileDialog";
 import { OutlineTree } from "../components/workspace/OutlineTree";
 import type { CompileStateReport } from "../components/workspace/PdfPane";
 import { ProjectSettingsEditor } from "../components/workspace/ProjectSettingsEditor";
+import { ProjectExportButton } from "../components/workspace/ProjectExportButton";
 import { RenameFileDialog } from "../components/workspace/RenameFileDialog";
 import type { SourceEditorHandle } from "../components/workspace/SourceEditor";
 import { AiWorkspace } from "../components/workspace/AiWorkspace";
@@ -122,7 +123,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     254,
   );
   const [pdfWidth, setPdfWidth] = useStoredNumber(`fastwrite.workbench-layout:${projectId}:pdf-width`, 440);
-  const [aiHeight, setAiHeight] = useStoredNumber(`fastwrite.workbench-layout:${projectId}:bottom-height`, 322);
+  const [aiHeight, setAiHeight] = useStoredNumber(`fastwrite.workbench-layout:${projectId}:bottom-height`, 280);
   const [outlineHeight, setOutlineHeight] = useStoredNumber(
     `fastwrite.workbench-layout:${projectId}:outline-height`,
     250,
@@ -689,6 +690,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           >
             Find
           </Button>
+          <ProjectExportButton projectId={project.id} size="small" beforeExport={prepareCompile} onError={setTabError} />
           <Button
             size="small"
             variant="secondary"
@@ -983,7 +985,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           {tabError ? <p role="alert">{tabError}</p> : null}
           <section className="editor-region" id="source-editor-area">
             {settingsOpen ? <div ref={settingsPanelRef} id="settings-editor-panel" className="settings-tab-panel" role="tabpanel" aria-label="Settings" hidden={!settingsActive}>
-              <ProjectSettingsEditor key={projectId} project={project} tree={settingsTree} onSaved={async (updated) => {
+              <ProjectSettingsEditor key={projectId} project={project} tree={settingsTree} beforeExport={prepareCompile} onSaved={async (updated) => {
                 setProject(updated);
                 await refreshWorkspace(undefined, selectedPath ?? updated.mainDocument);
               }} />
@@ -2168,6 +2170,21 @@ function AssetPreview({
   path: string;
   name: string;
 }) {
+  const [preview, setPreview] = useState<{ path: string; url?: string; error?: string } | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    let url: string | undefined;
+    setPreview(null);
+    void api.projects.assetBlob(projectId, path, controller.signal).then((blob) => {
+      if (controller.signal.aborted) return;
+      url = URL.createObjectURL(blob);
+      setPreview({ path, url });
+    }).catch((failure) => {
+      if (!controller.signal.aborted) setPreview({ path, error: failure instanceof Error ? failure.message : "Could not load this image" });
+    });
+    return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
+  }, [projectId, path]);
+  const current = preview?.path === path ? preview : null;
   return (
     <div className="asset-preview">
       <div className="editor-toolbar">
@@ -2177,10 +2194,7 @@ function AssetPreview({
         </div>
       </div>
       <div className="asset-preview__canvas">
-        <img
-          src={`/api/projects/${projectId}/asset?path=${encodeURIComponent(path)}`}
-          alt={name}
-        />
+        {current?.error ? <p className="form-error" role="alert">{current.error}</p> : current?.url ? <img src={current.url} alt={name} /> : <p role="status">Loading image…</p>}
       </div>
     </div>
   );

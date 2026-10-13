@@ -7,6 +7,7 @@ import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
 import type { WorkspaceService } from "../workspace/workspace-service";
 import { resolveWorkspacePath } from "../workspace/path";
+import { ProjectQueue } from "../workspace/project-queue";
 
 interface CreateUploadInput {
   projectName: string;
@@ -19,6 +20,7 @@ interface CreateUploadInput {
 
 export class UploadService {
   private readonly uploadsDirectory: string;
+  private readonly sessionQueue = new ProjectQueue();
 
   constructor(
     dataDirectory: string,
@@ -32,7 +34,7 @@ export class UploadService {
     await mkdir(this.uploadsDirectory, { recursive: true });
   }
 
-  async create(input: CreateUploadInput): Promise<UploadSession> {
+  async create(input: CreateUploadInput, ownerUserId?: string): Promise<UploadSession> {
     if (!input.projectName.trim()) throw new ApiError(400, "project_name_required", "Project name is required");
     if (input.entries.length === 0) throw new ApiError(400, "empty_upload", "The selected directory is empty");
     if (input.entries.length > config.maxEntries) throw new ApiError(413, "too_many_files", `A project can contain at most ${config.maxEntries} entries`);
@@ -58,6 +60,7 @@ export class UploadService {
     const createdAt = new Date();
     const session: UploadSession = {
       id: `upload_${crypto.randomUUID()}`,
+      ...(ownerUserId ? { ownerUserId } : {}),
       projectName: input.projectName.trim(),
       mainDocument,
       venue: input.venue,
@@ -87,77 +90,88 @@ export class UploadService {
   }
 
   async uploadFile(id: string, requestedPath: string, body: ArrayBuffer): Promise<UploadSession> {
-    const session = this.getMutableSession(id);
-    this.assertWritable(session);
-    const path = normalizeWorkspacePath(requestedPath);
-    const manifest = session.entries.find((entry) => entry.kind === "file" && entry.path === path);
-    if (!manifest) throw new ApiError(404, "manifest_entry_not_found", "The file is not part of this upload session");
-    if (body.byteLength !== manifest.size) {
-      throw new ApiError(400, "size_mismatch", `Expected ${manifest.size} bytes but received ${body.byteLength}`);
-    }
-    if (manifest.checksum) {
-      const actual = Buffer.from(await crypto.subtle.digest("SHA-256", body)).toString("hex");
-      if (actual !== manifest.checksum.toLowerCase()) throw new ApiError(400, "checksum_mismatch", `Checksum mismatch for '${path}'`);
-    }
-    const absolutePath = resolveWorkspacePath(this.stagingDirectory(id), path).absolutePath;
-    await mkdir(dirname(absolutePath), { recursive: true });
-    await writeFile(absolutePath, new Uint8Array(body));
-    await this.database.mutate((state) => {
-      const stored = state.uploadSessions.find((candidate) => candidate.id === id)!;
-      if (!stored.receivedPaths.includes(path)) {
-        stored.receivedPaths.push(path);
-        stored.receivedBytes += body.byteLength;
+    this.assertWritable(this.getMutableSession(id));
+    return this.sessionQueue.run(id, async () => {
+      const session = this.getMutableSession(id);
+      this.assertWritable(session);
+      const path = normalizeWorkspacePath(requestedPath);
+      const manifest = session.entries.find((entry) => entry.kind === "file" && entry.path === path);
+      if (!manifest) throw new ApiError(404, "manifest_entry_not_found", "The file is not part of this upload session");
+      if (body.byteLength !== manifest.size) {
+        throw new ApiError(400, "size_mismatch", `Expected ${manifest.size} bytes but received ${body.byteLength}`);
       }
-      stored.status = "uploading";
+      if (manifest.checksum) {
+        const actual = Buffer.from(await crypto.subtle.digest("SHA-256", body)).toString("hex");
+        if (actual !== manifest.checksum.toLowerCase()) throw new ApiError(400, "checksum_mismatch", `Checksum mismatch for '${path}'`);
+      }
+      const absolutePath = resolveWorkspacePath(this.stagingDirectory(id), path).absolutePath;
+      await mkdir(dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, new Uint8Array(body));
+      await this.database.mutate((state) => {
+        const stored = state.uploadSessions.find((candidate) => candidate.id === id)!;
+        if (!stored.receivedPaths.includes(path)) {
+          stored.receivedPaths.push(path);
+          stored.receivedBytes += body.byteLength;
+        }
+        stored.status = "uploading";
+      });
+      return this.get(id);
     });
-    return this.get(id);
   }
 
   async complete(id: string) {
-    const session = this.getMutableSession(id);
-    this.assertWritable(session);
-    const missing = session.entries.filter((entry) => entry.kind === "file" && !session.receivedPaths.includes(entry.path));
-    if (missing.length > 0) throw new ApiError(409, "upload_incomplete", `${missing.length} files have not been uploaded`, { paths: missing.slice(0, 20).map((entry) => entry.path) });
-    for (const entry of session.entries.filter((candidate) => candidate.kind === "file")) {
-      const info = await stat(resolveWorkspacePath(this.stagingDirectory(id), entry.path).absolutePath);
-      if (info.size !== entry.size) throw new ApiError(409, "size_mismatch", `Stored size does not match for '${entry.path}'`);
-    }
-    await this.database.mutate((state) => {
-      const stored = state.uploadSessions.find((candidate) => candidate.id === id)!;
-      stored.status = "completing";
+    return this.sessionQueue.run(id, async () => {
+      const existing = this.get(id);
+      if (existing.status === "completed" && existing.projectId) return this.workspaces.getProject(existing.projectId);
+      const session = this.getMutableSession(id);
+      this.assertWritable(session);
+      const missing = session.entries.filter((entry) => entry.kind === "file" && !session.receivedPaths.includes(entry.path));
+      if (missing.length > 0) throw new ApiError(409, "upload_incomplete", `${missing.length} files have not been uploaded`, { paths: missing.slice(0, 20).map((entry) => entry.path) });
+      for (const entry of session.entries.filter((candidate) => candidate.kind === "file")) {
+        const info = await stat(resolveWorkspacePath(this.stagingDirectory(id), entry.path).absolutePath);
+        if (info.size !== entry.size) throw new ApiError(409, "size_mismatch", `Stored size does not match for '${entry.path}'`);
+      }
+      await this.database.mutate((state) => {
+        const stored = state.uploadSessions.find((candidate) => candidate.id === id)!;
+        stored.status = "completing";
+      });
+      try {
+        const project = await this.workspaces.importStagingDirectory({
+          stagingDirectory: this.stagingDirectory(id),
+          name: session.projectName,
+          mainDocument: session.mainDocument,
+          venue: session.venue,
+          ...(session.publicationTarget ? { publicationTarget: session.publicationTarget } : {}),
+          ...(session.ownerUserId ? { personalOwnerUserId: session.ownerUserId } : {}),
+          source: { type: "local", displayName: session.sourceName }
+        });
+        await this.database.mutate((state) => {
+          const stored = state.uploadSessions.find((candidate) => candidate.id === id)!;
+          stored.status = "completed";
+          stored.projectId = project.id;
+        });
+        return project;
+      } catch (error) {
+        await this.database.mutate((state) => {
+          const stored = state.uploadSessions.find((candidate) => candidate.id === id)!;
+          stored.status = "failed";
+          stored.error = error instanceof Error ? error.message : String(error);
+        });
+        throw error;
+      }
     });
-    try {
-      const project = await this.workspaces.importStagingDirectory({
-        stagingDirectory: this.stagingDirectory(id),
-        name: session.projectName,
-        mainDocument: session.mainDocument,
-        venue: session.venue,
-        ...(session.publicationTarget ? { publicationTarget: session.publicationTarget } : {}),
-        source: { type: "local", displayName: session.sourceName }
-      });
-      await this.database.mutate((state) => {
-        const stored = state.uploadSessions.find((candidate) => candidate.id === id)!;
-        stored.status = "completed";
-        stored.projectId = project.id;
-      });
-      return project;
-    } catch (error) {
-      await this.database.mutate((state) => {
-        const stored = state.uploadSessions.find((candidate) => candidate.id === id)!;
-        stored.status = "failed";
-        stored.error = error instanceof Error ? error.message : String(error);
-      });
-      throw error;
-    }
   }
 
   async cancel(id: string): Promise<void> {
-    const session = this.getMutableSession(id);
-    if (session.status === "completed") throw new ApiError(409, "upload_completed", "A completed upload cannot be cancelled");
-    await rm(this.stagingDirectory(id), { recursive: true, force: true });
-    await this.database.mutate((state) => {
-      const stored = state.uploadSessions.find((candidate) => candidate.id === id)!;
-      stored.status = "cancelled";
+    this.assertCancellable(this.getMutableSession(id));
+    return this.sessionQueue.run(id, async () => {
+      const session = this.getMutableSession(id);
+      this.assertCancellable(session);
+      await rm(this.stagingDirectory(id), { recursive: true, force: true });
+      await this.database.mutate((state) => {
+        const stored = state.uploadSessions.find((candidate) => candidate.id === id)!;
+        stored.status = "cancelled";
+      });
     });
   }
 
@@ -176,5 +190,10 @@ export class UploadService {
     if (["completed", "cancelled", "failed", "completing"].includes(session.status)) {
       throw new ApiError(409, "upload_not_writable", `Upload session is ${session.status}`);
     }
+  }
+
+  private assertCancellable(session: UploadSession): void {
+    if (session.status === "completed") throw new ApiError(409, "upload_completed", "A completed upload cannot be cancelled");
+    if (session.status === "completing") throw new ApiError(409, "upload_not_writable", "An upload being completed cannot be cancelled");
   }
 }

@@ -13,6 +13,7 @@ import { FastCASDialog } from "../components/FastCASDialog";
 import { Button, Checkbox, Dialog, Divider, Field, Icon, IconButton, Link, MultiSelect, NumberField, Select, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { PublicationTargetFields } from "../components/ui/PublicationTargetFields";
 import { navigate, projectPath } from "../lib/navigation";
+import { appPath } from "../lib/appBase";
 import { publicationTargetAbbreviation } from "../lib/labels";
 
 export function ProjectsPage() {
@@ -86,7 +87,7 @@ export function ProjectsPage() {
     try {
       await api.invitations.accept(invitationToken);
       setInvitationState("accepted");
-      window.history.replaceState({}, "", "/projects");
+      window.history.replaceState({}, "", appPath("/projects"));
       await loadProjects();
     } catch (failure) {
       setInvitationState("error");
@@ -450,11 +451,11 @@ function AccountDialog({
     >
       <form id="account-auth-form" className="form-stack" onSubmit={(event) => { event.preventDefault(); if (!loading && email.trim() && password) void submit(); }}>
         {mode === "login" && (providers.oidc || providers.cas || providers.fastcas) ? <div className="form-stack">
-          {providers.fastcas ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/login?returnTo=/projects")}>Continue with FastCAS</Button> : null}
-          {providers.oidc ? <Button type="button" variant="secondary" onClick={() => { window.location.assign(`/api/auth/oidc/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`); }}>Continue with organization sign-in</Button> : null}
-          {providers.cas ? <Button type="button" variant="secondary" onClick={() => { window.location.assign("/api/auth/cas/login"); }}>Continue with campus CAS</Button> : null}
+          {providers.fastcas ? <Button type="button" variant="secondary" onClick={() => window.location.assign(appPath(`/api/auth/fastcas/login?returnTo=${encodeURIComponent(appPath("/projects"))}`))}>Continue with FastCAS</Button> : null}
+          {providers.oidc ? <Button type="button" variant="secondary" onClick={() => { window.location.assign(appPath(`/api/auth/oidc/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`)); }}>Continue with organization sign-in</Button> : null}
+          {providers.cas ? <Button type="button" variant="secondary" onClick={() => { window.location.assign(appPath("/api/auth/cas/login")); }}>Continue with campus CAS</Button> : null}
         </div> : null}
-        {mode === "register" && providers.fastcasSignup ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/signup?returnTo=/projects")}>Create a new account with FastCAS</Button> : null}
+        {mode === "register" && providers.fastcasSignup ? <Button type="button" variant="secondary" onClick={() => window.location.assign(appPath(`/api/auth/fastcas/signup?returnTo=${encodeURIComponent(appPath("/projects"))}`))}>Create a new account with FastCAS</Button> : null}
         {mode === "register" ? (
           <Field label="Name">
             <TextField

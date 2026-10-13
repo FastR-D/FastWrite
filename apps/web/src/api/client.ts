@@ -48,6 +48,8 @@ import type {
   ,ResearchWork, ResearchRun, ProjectResearchWork, ProjectResearchWorkDetails, PaperClaim, SourceEvidence, FastReadBundleReceipt, ClaimEvidenceLink, EvidenceCockpit, CitationReviewer, PublishedSkillDescriptor
   ,AlignmentFinding, SupportAccessRequest
 } from "@fastwrite/shared";
+import { attachmentFilename, type DownloadFile } from "./download";
+import { appPath } from "../lib/appBase";
 
 export class ApiClientError extends Error {
   constructor(public readonly status: number, public readonly code: string, message: string, public readonly details?: unknown) {
@@ -55,18 +57,18 @@ export class ApiClientError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   const token = localStorage.getItem("fastwrite.session-token");
   if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
-  let response = await fetch(path, { ...init, headers });
+  let response = await fetch(appPath(path), { ...init, headers });
   if (response.status === 401 && token && !path.startsWith("/api/auth/")) {
-    const refreshed = await fetch("/api/auth/refresh", { method: "POST" });
+    const refreshed = await fetch(appPath("/api/auth/refresh"), { method: "POST" });
     if (refreshed.ok) {
       const session = await refreshed.json() as { token: string };
       localStorage.setItem("fastwrite.session-token", session.token);
       headers.set("authorization", `Bearer ${session.token}`);
-      response = await fetch(path, { ...init, headers });
+      response = await fetch(appPath(path), { ...init, headers });
     } else localStorage.removeItem("fastwrite.session-token");
   }
   if (!response.ok) {
@@ -78,6 +80,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiClientError(response.status, body.error?.code ?? "request_failed", body.error?.message ?? `Request failed (${response.status})`, body.error?.details);
   }
+  return response;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await requestResponse(path, init);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
@@ -190,7 +197,16 @@ export const api = {
     get: (id: string, signal?: AbortSignal) => request<PaperProject>(`/api/projects/${id}`, signal ? { signal } : undefined),
     create: (body: { name: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget; initializeFromTemplate?: boolean; teamId?: string }) => request<PaperProject>("/api/projects", jsonInit("POST", body)),
     update: (id: string, body: Partial<Pick<PaperProject, "name" | "mainDocument">> & { venue?: TargetVenue; publicationTarget?: PublicationTarget | null }) => request<PaperProject>(`/api/projects/${id}`, jsonInit("PATCH", body)),
-    exportUrl: (id: string) => `/api/projects/${id}/export`,
+    exportArchive: async (id: string, signal?: AbortSignal): Promise<DownloadFile> => {
+      const response = await requestResponse(`/api/projects/${encodeURIComponent(id)}/export`, signal ? { signal } : undefined);
+      const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+      if (contentType !== "application/gzip" && contentType !== "application/x-gzip" && contentType !== "application/octet-stream") {
+        throw new ApiClientError(response.status, "invalid_export", "The server did not return a source archive. Please try exporting again.");
+      }
+      const blob = await response.blob();
+      if (!blob.size) throw new ApiClientError(response.status, "empty_export", "The source archive is empty. Please try exporting again.");
+      return { blob, filename: attachmentFilename(response.headers.get("content-disposition"), "fastwrite-source.tar.gz") };
+    },
     checkpoint: (id: string) => request<{ createdAt: string }>(`/api/projects/${id}/history/checkpoint`, { method: "POST" }),
     history: (id: string, limit = 50, signal?: AbortSignal) => request<HistoryCommit[]>(`/api/projects/${id}/history?limit=${limit}`, signal ? { signal } : undefined),
     historySummary: (id: string, oid: string, signal?: AbortSignal) => request<HistorySummary>(`/api/projects/${id}/history/${encodeURIComponent(oid)}`, signal ? { signal } : undefined),
@@ -222,7 +238,7 @@ export const api = {
     historyFile: (id: string, oid: string, path: string, signal?: AbortSignal) => request<{ path: string; content: string }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/file?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined),
     restoreHistory: (id: string, oid: string, paths: string[], expectedVersion?: number) => request<{ oid?: string; restored: string[] }>(`/api/projects/${id}/history/${encodeURIComponent(oid)}/restore`, jsonInit("POST", { paths, ...(expectedVersion !== undefined ? { expectedVersion } : {}) })),
     provenance: (id: string, signal?: AbortSignal) => request<unknown>(`/api/projects/${id}/provenance`, signal ? { signal } : undefined),
-    provenanceExport: (id: string) => request<unknown>(`/api/projects/${id}/provenance/export`),
+    provenanceExport: (id: string) => request<unknown>(`/api/projects/${encodeURIComponent(id)}/provenance/export`),
     createShare: (id: string, permission: "read" | "comment") => request<{ id: string; token: string; permission: "read" | "comment"; createdAt: string }>(`/api/projects/${id}/shares`, jsonInit("POST", { permission })),
     shares: (id: string) => request<Array<{ id: string; permission: "read" | "comment"; label?: string; expiresAt?: string; revokedAt?: string; createdAt: string }>>(`/api/projects/${id}/shares`),
     revokeShare: (id: string, shareId: string) => request<void>(`/api/projects/${id}/shares/${shareId}`, { method: "DELETE" }),
@@ -255,6 +271,14 @@ export const api = {
     outline: (id: string, signal?: AbortSignal) => request<OutlineItem[]>(`/api/projects/${id}/outline`, signal ? { signal } : undefined),
     search: (id: string, query: string, signal?: AbortSignal) => request<{ query: string; matches: Array<{ path: string; line: number; excerpt: string }>; truncated: boolean }>(`/api/projects/${id}/search?query=${encodeURIComponent(query)}`, signal ? { signal } : undefined),
     readFile: (id: string, path: string, signal?: AbortSignal) => request<FileContentResponse>(`/api/projects/${id}/file?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined),
+    readAsset: async (id: string, path: string, signal?: AbortSignal): Promise<ArrayBuffer> => {
+      const response = await requestResponse(`/api/projects/${encodeURIComponent(id)}/asset?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined);
+      return response.arrayBuffer();
+    },
+    assetBlob: async (id: string, path: string, signal?: AbortSignal): Promise<Blob> => {
+      const response = await requestResponse(`/api/projects/${encodeURIComponent(id)}/asset?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined);
+      return response.blob();
+    },
     saveFile: (id: string, path: string, body: SaveFileRequest, signal?: AbortSignal) => request<SaveFileResponse>(`/api/projects/${id}/file?path=${encodeURIComponent(path)}`, jsonInit("PUT", body, signal)),
     createFile: (id: string, path: string, content = "") => request<PaperFile>(`/api/projects/${id}/files`, jsonInit("POST", { path, content })),
     addFile: (id: string, path: string, file: File, signal?: AbortSignal) => request<PaperFile>(`/api/projects/${id}/assets?path=${encodeURIComponent(path)}`, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: file, ...(signal ? { signal } : {}) }),

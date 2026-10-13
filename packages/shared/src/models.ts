@@ -277,6 +277,7 @@ export interface UploadManifestEntry {
 
 export interface UploadSession {
   id: string;
+  ownerUserId?: string;
   projectName: string;
   mainDocument: string;
   venue: TargetVenue;
