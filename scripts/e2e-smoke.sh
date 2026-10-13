@@ -871,7 +871,7 @@ run_code 'async (page) => {
   await reviewDialog.getByRole("article").getByRole("button", { name: "局部修改", exact: true }).click();
   const localRevision = page.getByRole("textbox", { name: "修改要求" });
   await reviewDialog.waitFor({ state: "hidden" });
-  await page.waitForFunction(() => (document.querySelector("textarea[aria-label=\"Revision message\"]")?.value || "").includes("Threat-model boundary needs explicit evidence"));
+  await page.waitForFunction(() => (document.querySelector("textarea[aria-label=\"修改要求\"]")?.value || "").includes("Threat-model boundary needs explicit evidence"));
   await localRevision.focus();
   await page.locator(".source-editor .fastwrite-monaco-selection").first().waitFor({ timeout: 5000 });
   await page.getByRole("button", { name: "审稿", exact: true }).click();
@@ -994,7 +994,7 @@ run_code 'async (page) => {
   await page.keyboard.insertText("\\documentclass{article}\n\\begin{document}\n\\undefinedFastWriteCommand\n\\end{document}");
   const errorIcon = page.locator(".compile-status-icon--error");
   await errorIcon.waitFor({ timeout: 90000 });
-  if (await errorIcon.getAttribute("aria-label") !== "Compilation error") throw new Error("Compilation failure does not expose an unambiguous error icon");
+  if (await errorIcon.getAttribute("aria-label") !== "编译错误") throw new Error("Compilation failure does not expose an unambiguous error icon");
   await page.getByRole("tab", { name: /^问题/ }).click();
   const diagnostics = page.locator(".bottom-panel-problems");
   await diagnostics.getByText("编译失败", { exact: true }).waitFor();
