@@ -62,7 +62,7 @@ export function withRuntimeHeaders(response: Response): Response {
   for (const [name, value] of Object.entries(CROSS_ORIGIN_HEADERS)) headers.set(name, value);
   // Monaco generates inline line-position styles and theme stylesheets at runtime.
   // Keep script execution restricted while allowing those rendering styles.
-  if (!headers.has("content-security-policy")) headers.set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; worker-src 'self' blob:; connect-src 'self' blob: ws: wss:");
+  if (!headers.has("content-security-policy")) headers.set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; worker-src 'self' blob:; connect-src 'self' blob: ws: wss:");
   if (!headers.has("x-request-id")) headers.set("X-Request-ID", `req_${crypto.randomUUID()}`);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
