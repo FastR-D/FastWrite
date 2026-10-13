@@ -15,7 +15,7 @@ describe("harness core", () => {
     const adapter: HarnessAdapter = {
       kind: "codex",
       async getStatus() { return { kind: "codex", state: "ready" }; },
-      async getCapabilities() { return { streaming: false, sessions: false, resume: false, approvals: false, skills: false, mcp: false }; },
+      async getCapabilities() { return { streaming: false, sessions: false, resume: false, approvals: false, skills: false, mcp: false, images: false }; },
       async createSession() { return { harness: "codex", sessionId: "test", cwd: "/tmp" }; },
       async resumeSession(session) { return session; },
       async *sendMessage() { yield { type: "run.completed", runId: "run" }; },

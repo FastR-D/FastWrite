@@ -1,3 +1,4 @@
+import type { ReferencePaperService } from "../references/service";
 import type { AgentRun, AgentTaskIntent, AgentTaskPlan, AgentTaskPlanResponse, AgentTaskRequest, ChangeSet, ComplianceFinding, IssueResolution, PaperClaim, ReviewIssue, TextChange, WorkspaceTreeNode } from "@fastwrite/shared";
 import { isTextFile, normalizeWorkspacePath } from "@fastwrite/shared";
 import { ApiError } from "../http";
@@ -39,10 +40,11 @@ function scopeTerms(content: string): string[] { return [...new Set((content.toL
 function textPaths(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []); }
 
 export class AgentTaskService {
-  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider | AgentGateway, private readonly memories?: MemoryService, private readonly reviewProvider?: AgentProvider | AgentGateway, private readonly compliance?: ComplianceService) {}
+  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly skills: SkillRegistry, private readonly provider?: AgentProvider | AgentGateway, private readonly memories?: MemoryService, private readonly reviewProvider?: AgentProvider | AgentGateway, private readonly compliance?: ComplianceService,
+    private readonly references?: ReferencePaperService) {}
   private unwrap(provider?: AgentProvider | AgentGateway): AgentProvider | undefined { return provider as AgentProvider | undefined; }
 
-  async plan(projectId: string, request: AgentTaskRequest, requestSignal?: AbortSignal): Promise<AgentTaskPlanResponse & { resolution?: IssueResolution }> {
+  async plan(projectId: string, request: AgentTaskRequest, requestSignal?: AbortSignal, actorUserId?: string): Promise<AgentTaskPlanResponse & { resolution?: IssueResolution }> {
     const agent = this.unwrap(this.provider);
     if (!agent?.planAgentTask) throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable Agent tasks");
     if (!request.objective?.trim()) throw new ApiError(400, "agent_objective_missing", "Describe the revision objective");
@@ -65,14 +67,16 @@ export class AgentTaskService {
     const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };
     const complianceFindings = project.publicationTarget && this.compliance ? (await this.compliance.check(projectId, { verifyCitationsOnline: false })).findings : [];
     const taskInstructions = taskSkills.map((item) => `\n\n# Task Skill: ${item.descriptor.id} v${item.descriptor.version}\n${item.instructions}`).join("");
+    const styleReferenceContext = await this.references?.resolve(projectId, request.references, requestSignal, false, actorUserId);
     const input = this.input(normalizedRequest, visibleDocuments, issues, project.skill, withMemory(`${workflowInstructions}\n\n${skill.instructions}${taskInstructions}`, memory.content), skill.venueInstructions, complianceFindings);
+    if (styleReferenceContext) input.styleReferenceContext = styleReferenceContext;
     const createdAt = now();
     const searchMatches = searchDocumentPaths(visibleDocuments, objective);
-    const run: AgentRun = { id: `run_${crypto.randomUUID()}`, projectId, type: "agent", status: "running", objective, skill: structuredClone(project.skill), ...(project.publicationTarget ? { publicationTarget: structuredClone(project.publicationTarget) } : {}), createdAt, updatedAt: createdAt, auditTrail: [
+    const run: AgentRun = { id: `run_${crypto.randomUUID()}`, projectId, type: "agent", ...(styleReferenceContext ? { styleReferenceContext } : {}), status: "running", objective, skill: structuredClone(project.skill), ...(project.publicationTarget ? { publicationTarget: structuredClone(project.publicationTarget) } : {}), createdAt, updatedAt: createdAt, auditTrail: [
       { id: `audit_${crypto.randomUUID()}`, action: "context-read", summary: `Read ${documents.length} project source files within the context budget; LaTeX comments were omitted from Agent context`, paths: documents.map((document) => document.path), createdAt },
       { id: `audit_${crypto.randomUUID()}`, action: "context-search", summary: `Searched indexed source context; ${searchMatches.length} files matched objective terms`, ...(searchMatches.length ? { paths: searchMatches } : {}), createdAt }
     ], ...(memory.version ? { memoryVersion: memory.version } : {}) };
-    run.auditTrail?.push(...taskSkills.map((item) => ({ id: `audit_${crypto.randomUUID()}`, action: "skill-loaded" as const, summary: `Loaded Agent Task Skill ${item.descriptor.id} v${item.descriptor.version}`, createdAt })));
+    run.auditTrail?.push(...taskSkills.map((item) => ({ id: `audit_${crypto.randomUUID()}`, action: "skill-loaded" as const, summary: `已加载任务技能 ${item.descriptor.id} v${item.descriptor.version}`, createdAt })));
     await this.database.mutate((state) => state.agentRuns.push(run));
     try {
       const rawOutput: unknown = await runAgentOperation((signal) => agent.planAgentTask!(input, signal), { signal: requestSignal, label: "Agent planning" });
@@ -85,7 +89,7 @@ export class AgentTaskService {
       if (!affectedFiles.length || affectedFiles.some((path) => !allowedPath(path)) || (request.scope.type === "file" && affectedFiles.some((path) => path !== request.scope.path)) || affectedFiles.some((path) => request.scope.forbiddenPaths?.includes(path))) throw new ApiError(502, "agent_plan_invalid", "Agent returned files outside the requested scope");
       const sectionContracts = request.scope.path ? [{ path: request.scope.path, purpose: objective, requiredClaimIds: (output.evidenceDependencies ?? []).flatMap((item) => item.requiredClaimIds), allowedEvidenceIds: [], requiredTablesOrFigures: [], terminology: [], openQuestions: output.missingEvidence ?? [] }] : undefined;
       const taskSkillRecords = taskSkills.map((item) => ({ id: item.descriptor.id, version: item.descriptor.version, digest: createHash("sha256").update(item.instructions).digest("hex") }));
-      const plan: AgentTaskPlan = { id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { ...normalizedRequest, objective, scope: request.scope, intent, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, ...(taskSkillRecords.length ? { taskSkills: taskSkillRecords } : {}), intent, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, ...(sectionContracts ? { sectionContracts } : {}), ...(output.sectionBudget ? { sectionBudget: output.sectionBudget } : {}), ...(output.venueChecks ? { venueChecks: output.venueChecks } : {}), ...(output.evidenceDependencies ? { evidenceDependencies: output.evidenceDependencies } : {}), ...(output.missingEvidence ? { missingEvidence: output.missingEvidence } : {}), createdAt, updatedAt: now() };
+      const plan: AgentTaskPlan = { ...(styleReferenceContext ? { styleReferenceContext } : {}), id: `agent_plan_${crypto.randomUUID()}`, projectId, agentRunId: run.id, status: "proposed", request: { ...normalizedRequest, objective, scope: request.scope, intent, ...(issues.length ? { issueIds: issues.map((issue) => issue.id) } : {}) }, ...(taskSkillRecords.length ? { taskSkills: taskSkillRecords } : {}), intent, steps: output.steps, affectedFiles, risks: output.risks, validation: output.validation, ...(sectionContracts ? { sectionContracts } : {}), ...(output.sectionBudget ? { sectionBudget: output.sectionBudget } : {}), ...(output.venueChecks ? { venueChecks: output.venueChecks } : {}), ...(output.evidenceDependencies ? { evidenceDependencies: output.evidenceDependencies } : {}), ...(output.missingEvidence ? { missingEvidence: output.missingEvidence } : {}), createdAt, updatedAt: now() };
       const reports = this.database.snapshot().reviewReports.filter((report) => report.projectId === projectId);
       const reviewSnapshotIds = [...new Set(issues.flatMap((issue) => reports.find((report) => report.issues.some((candidate) => candidate.id === issue.id))?.snapshotId ?? []))];
       const resolution: IssueResolution | undefined = issues.length ? {
@@ -106,7 +110,7 @@ export class AgentTaskService {
         state.agentTaskPlans.push(plan);
         if (resolution) state.issueResolutions.push(resolution);
         for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "planned");
-        const stored = state.agentRuns.find((item) => item.id === run.id)!; stored.status = "waiting-approval"; stored.steps = output.steps.map((label, index) => ({ id: `step-${index + 1}`, label, status: "pending" })); stored.auditTrail?.push({ id: `audit_${crypto.randomUUID()}`, action: "plan-created", summary: `Planned ${output.steps.length} steps affecting ${affectedFiles.length} files`, paths: affectedFiles, createdAt: now() }); stored.updatedAt = now(); return stored;
+        const stored = state.agentRuns.find((item) => item.id === run.id)!; stored.status = "waiting-approval"; stored.steps = output.steps.map((label, index) => ({ id: `step-${index + 1}`, label, status: "pending" })); stored.auditTrail?.push({ id: `audit_${crypto.randomUUID()}`, action: "plan-created", summary: `已规划 ${output.steps.length} 个步骤，涉及 ${affectedFiles.length} 个文件`, paths: affectedFiles, createdAt: now() }); stored.updatedAt = now(); return stored;
       });
       return { run: updatedRun, plan, ...(resolution ? { resolution } : {}) };
     } catch (error) { await this.fail(run.id, error); throw error instanceof ApiError ? error : new ApiError(502, "agent_failed", error instanceof Error ? error.message : "Agent planning failed"); }
@@ -138,9 +142,10 @@ export class AgentTaskService {
     const visibleDocuments = agentVisibleDocuments(documents);
     const taskInstructions = taskSkills.map((item) => `\n\n# Task Skill: ${item.descriptor.id} v${item.descriptor.version}\n${item.instructions}`).join("");
     const input = this.input(plan.request, visibleDocuments, issues, plannedSkill, withMemory(`${workflowInstructions}\n\n${skill.instructions}${taskInstructions}`, memory.content), skill.venueInstructions);
+    if (plan.styleReferenceContext) input.styleReferenceContext = plan.styleReferenceContext;
     const generationConcurrency = agent.fileGenerationConcurrency?.() ?? plan.affectedFiles.length;
-    const generationMode = generationConcurrency <= 1 ? "sequentially" : "in parallel";
-    await this.database.mutate((state) => { const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "generating"; stored.affectedFiles = [...plan.affectedFiles]; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "running"; delete run.error; run.steps = plan.affectedFiles.map((path, index) => ({ id: `generate-file-${index + 1}`, label: executionStepLabel(path), status: "running" })); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "execution-started", summary: `Started checking scoped context and updating ${plan.affectedFiles.length} planned files ${generationMode}`, paths: plan.affectedFiles, createdAt: now() }); for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "in_revision"); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.status = "in-revision"; resolution.updatedAt = now(); } });
+    const generationMode = generationConcurrency <= 1 ? "顺序" : "并行";
+    await this.database.mutate((state) => { const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "generating"; stored.affectedFiles = [...plan.affectedFiles]; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "running"; delete run.error; run.steps = plan.affectedFiles.map((path, index) => ({ id: `generate-file-${index + 1}`, label: executionStepLabel(path), status: "running" })); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "execution-started", summary: `开始检查任务范围内的上下文，并${generationMode}更新 ${plan.affectedFiles.length} 个计划文件`, paths: plan.affectedFiles, createdAt: now() }); for (const issue of issues) this.mutateIssue(state.reviewReports.flatMap((report) => report.issues), issue.id, "in_revision"); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.status = "in-revision"; resolution.updatedAt = now(); } });
     try {
       const generated = await mapWithConcurrency(plan.affectedFiles, generationConcurrency, async (path, index) => {
         const scopedDocuments = generationDocuments(visibleDocuments, path, project.mainDocument, issues, plan.request.objective);
@@ -151,7 +156,7 @@ export class AgentTaskService {
           const current = run.steps?.[index];
           if (current) current.status = "completed";
           run.auditTrail ??= [];
-          run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "generation-progress", summary: `Checked scoped context and updated file ${index + 1} of ${plan.affectedFiles.length}: ${path}`, paths: [path], createdAt: now() });
+          run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "generation-progress", summary: `已检查任务范围内的上下文并更新文件 ${index + 1}/${plan.affectedFiles.length}：${path}`, paths: [path], createdAt: now() });
           run.updatedAt = now();
         });
         return { targetPath: path, files };
@@ -215,7 +220,7 @@ export class AgentTaskService {
       const changedLines = effectiveChanges.reduce((total, change) => total + (change.hunks ?? []).reduce((count, hunk) => count + hunk.before.split("\n").length + hunk.after.split("\n").length, 0), 0);
       if (plan.request.scope.maxChangedLines !== undefined && changedLines > plan.request.scope.maxChangedLines) throw new ApiError(422, "agent_scope_exceeded", `Agent proposed ${changedLines} changed lines; the scope allows at most ${plan.request.scope.maxChangedLines}`);
       const changeSet: ChangeSet = { id: `change_${crypto.randomUUID()}`, projectId, agentRunId: plan.agentRunId, status: "proposed", approvalMode: "explicit-finish", summary: plan.request.objective, rationale: files.map((file) => `${file.path}: ${file.rationale}`).join("\n"), changes: effectiveChanges, createdAt: now(), updatedAt: now() };
-      const result = await this.database.mutate((state) => { state.changeSets.push(changeSet); const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "waiting-approval"; stored.changeSetId = changeSet.id; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "waiting-approval"; run.changeSetId = changeSet.id; run.steps?.forEach((step) => { step.status = "completed"; }); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "changes-proposed", summary: `Proposed ${effectiveChanges.flatMap((change) => change.hunks ?? []).length} hunks across ${effectiveChanges.length} files`, paths: effectiveChanges.map((change) => change.path), createdAt: now() }); run.updatedAt = now(); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.changeSetId = changeSet.id; resolution.updatedAt = now(); } return { run, plan: stored, resolution }; });
+      const result = await this.database.mutate((state) => { state.changeSets.push(changeSet); const stored = state.agentTaskPlans.find((item) => item.id === planId)!; stored.status = "waiting-approval"; stored.changeSetId = changeSet.id; stored.updatedAt = now(); const run = state.agentRuns.find((item) => item.id === plan.agentRunId)!; run.status = "waiting-approval"; run.changeSetId = changeSet.id; run.steps?.forEach((step) => { step.status = "completed"; }); run.auditTrail ??= []; run.auditTrail.push({ id: `audit_${crypto.randomUUID()}`, action: "changes-proposed", summary: `已生成 ${effectiveChanges.length} 个文件的 ${effectiveChanges.flatMap((change) => change.hunks ?? []).length} 个候选修改块`, paths: effectiveChanges.map((change) => change.path), createdAt: now() }); run.updatedAt = now(); const resolution = state.issueResolutions.find((item) => item.agentRunId === run.id); if (resolution) { resolution.changeSetId = changeSet.id; resolution.updatedAt = now(); } return { run, plan: stored, resolution }; });
       return { run: result.run, plan: result.plan, changeSet, ...(result.resolution ? { resolution: result.resolution } : {}) };
     } catch (error) { await this.fail(plan.agentRunId, error); throw error instanceof ApiError ? error : new ApiError(502, "agent_failed", error instanceof Error ? error.message : "Agent generation failed"); }
   }
@@ -332,7 +337,7 @@ function agentVisibleDocuments<T extends { path: string; content: string }>(docu
 }
 
 function executionStepLabel(path: string): string {
-  return `Process ${path}`;
+  return `处理 ${path}`;
 }
 
 async function mapWithConcurrency<T, R>(items: T[], requestedConcurrency: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {

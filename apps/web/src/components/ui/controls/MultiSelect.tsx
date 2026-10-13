@@ -26,7 +26,7 @@ export interface MultiSelectProps {
   className?: string;
 }
 
-export function MultiSelect({ options, value, onChange, label, emptyMessage = "Nothing available", invalid, className = "", "aria-describedby": describedBy }: MultiSelectProps) {
+export function MultiSelect({ options, value, onChange, label, emptyMessage = "暂无可选项", invalid, className = "", "aria-describedby": describedBy }: MultiSelectProps) {
   const wiring = useFieldWiring();
   const resolvedDescribedBy = describedBy ?? wiring?.describedBy;
   const resolvedInvalid = invalid ?? wiring?.invalid ?? false;

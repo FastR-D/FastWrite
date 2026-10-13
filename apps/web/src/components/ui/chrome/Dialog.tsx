@@ -93,11 +93,11 @@ export function Dialog({ open, title, description, children, footer, headerActio
             <h2 id={titleId}>{title}</h2>
             {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
-          <div className={`${styles.headerActions} dialog__header-actions`}>{headerActions}<IconButton label="Close dialog" icon={<Icon name={icons.close} />} onClick={onClose} /></div>
+          <div className={`${styles.headerActions} dialog__header-actions`}>{headerActions}<IconButton label="关闭对话框" icon={<Icon name={icons.close} />} onClick={onClose} /></div>
         </header>
         <div className={`${styles.body} dialog__body`}>{children}</div>
         {footer ? <footer className={`${styles.footer} dialog__footer`}>{footer}</footer> : null}
-        {resizable ? <div className={`${styles.widthHandle} dialog__width-handle`} role="separator" aria-label={`Resize ${title} window`} aria-orientation="vertical" aria-valuemin={Math.min(560, Math.max(0, window.innerWidth - 32))} aria-valuemax={Math.max(0, window.innerWidth - 32)} aria-valuenow={Math.min(resizedWidth, Math.max(0, window.innerWidth - 32))} tabIndex={0} onPointerDown={startResize} onKeyDown={(event) => {
+        {resizable ? <div className={`${styles.widthHandle} dialog__width-handle`} role="separator" aria-label={`调整“${title}”窗口大小`} aria-orientation="vertical" aria-valuemin={Math.min(560, Math.max(0, window.innerWidth - 32))} aria-valuemax={Math.max(0, window.innerWidth - 32)} aria-valuenow={Math.min(resizedWidth, Math.max(0, window.innerWidth - 32))} tabIndex={0} onPointerDown={startResize} onKeyDown={(event) => {
           if (event.key === "ArrowLeft") { event.preventDefault(); updateWidth(resizedWidth - 40); }
           else if (event.key === "ArrowRight") { event.preventDefault(); updateWidth(resizedWidth + 40); }
           else if (event.key === "Home") { event.preventDefault(); updateWidth(560); }

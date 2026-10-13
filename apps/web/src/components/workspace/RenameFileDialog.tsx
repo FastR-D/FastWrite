@@ -31,7 +31,7 @@ export function RenameFileDialog({ open, projectId, path, onClose, onRenamed }: 
       await api.projects.renameFile(projectId, path, normalized);
       await onRenamed(normalized);
     } catch (renameError) {
-      setError(renameError instanceof Error ? renameError.message : "Could not rename file");
+      setError(renameError instanceof Error ? renameError.message : "无法重命名文件");
     } finally {
       setLoading(false);
     }
@@ -40,12 +40,12 @@ export function RenameFileDialog({ open, projectId, path, onClose, onRenamed }: 
   return (
     <Dialog
       open={open}
-      title="Rename file"
-      description="Move the file by including a directory in its new workspace-relative path."
+      title="重命名文件"
+      description="在新的工作区相对路径中填写目录，即可移动文件。"
       onClose={onClose}
-      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon={<Icon name={icons.edit} />} loading={loading} disabled={!nextPath.trim() || nextPath.trim() === path} onClick={() => void rename()}>Rename</Button></>}
+      footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" icon={<Icon name={icons.edit} />} loading={loading} disabled={!nextPath.trim() || nextPath.trim() === path} onClick={() => void rename()}>重命名</Button></>}
     >
-      <Field label="New path">
+      <Field label="新路径">
         <TextField value={nextPath} onChange={setNextPath} autoFocus />
       </Field>
       {error ? <div className="form-error" role="alert">{error}</div> : null}

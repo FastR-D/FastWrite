@@ -4,7 +4,7 @@ import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { normalizeWorkspacePath } from "@fastwrite/shared";
 import { ApiError } from "../http";
-import { processResult } from "../jobs/process-result";
+import { runCompilerProcess } from "./run-compiler-process";
 import type { WorkspaceService } from "../workspace/workspace-service";
 
 export interface ServerCompileResult {
@@ -59,17 +59,15 @@ export class LatexCompileService {
         ? [executable, "-norc", "-pdf", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${compilerOutput}`, `-auxdir=${compilerOutput}`, `./${mainDocument}`]
         : [executable, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-output-directory=${compilerOutput}`, `./${mainDocument}`];
       const command = this.policy.mode === "bubblewrap" ? this.bubblewrapCommand(argumentsList, source, output) : argumentsList;
-      signal?.throwIfAborted();
-      const child = Bun.spawn(command, { cwd: source, detached: true, windowsHide: true, stdout: "pipe", stderr: "pipe", env: compileEnvironment(compilerOutput) });
-      const { exitCode, stdout, stderr } = await processResult(child, this.policy.timeoutMs, signal);
-      const log = [stdout, stderr].filter(Boolean).join("\n").slice(-1_000_000);
+      const { exitCode, log } = await runCompilerProcess(command, { cwd: source, ...(signal ? { signal } : {}), timeoutMs: this.policy.timeoutMs, env: compileEnvironment(compilerOutput) });
       const stem = basename(mainDocument, ".tex");
       const pdfPath = await findOutputFile(output, `${stem}.pdf`);
       const syncPath = await findOutputFile(output, `${stem}.synctex.gz`);
       if (exitCode !== 0) return { ...identity, success: false, engine: "server", log, error: describeLatexFailure(exitCode, log), workspacePaths: await listWorkspacePaths(source) };
       const pdf = pdfPath ? await readFile(pdfPath).catch(() => null) : null;
-      if (!pdf) return { ...identity, success: false, engine: "server", log, error: "LaTeX completed without producing a PDF.", workspacePaths: await listWorkspacePaths(source) };
+      if (!pdf) return { ...identity, success: false, engine: "server", log, error: "LaTeX 编译结束，但未生成 PDF。", workspacePaths: await listWorkspacePaths(source) };
       const syncTexData = syncPath ? await readFile(syncPath).then((data) => promisify(gunzip)(data).then((value) => value.toString("utf8"))).catch(() => undefined) : undefined;
+      if (signal?.aborted) throw new ApiError(409, "compile_cancelled", "Compilation cancelled");
       return { ...identity, success: true, engine: "server", log, pdfBase64: pdf.toString("base64"), ...(syncTexData ? { syncTexData } : {}), workspacePaths: await listWorkspacePaths(source) };
     } finally {
       await rm(temporary, { recursive: true, force: true }).catch(() => undefined);
@@ -104,8 +102,8 @@ async function findOutputFile(root: string, filename: string): Promise<string | 
 
 function describeLatexFailure(exitCode: number, log: string): string {
   const missingPackage = /File [`']([^`']+\.sty)[`'] not found\./.exec(log)?.[1];
-  if (missingPackage) return `Local LaTeX is missing ${missingPackage}. Install that TeX package on this machine, then recompile.`;
-  return `Local LaTeX exited with status ${exitCode}. See the compiler log for details.`;
+  if (missingPackage) return `本地 LaTeX 缺少 ${missingPackage}，请在此设备上安装对应的 TeX 包后重新编译。`;
+  return `本地 LaTeX 编译失败（退出码 ${exitCode}），请查看编译日志。`;
 }
 
 async function listWorkspacePaths(root: string, relative = ""): Promise<string[]> {

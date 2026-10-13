@@ -1,3 +1,4 @@
+import type { ReferencePaper, ReferenceSettings } from "@fastwrite/shared";
 import { mkdir, readFile, rename, writeFile, open, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { normalizePublicationTarget, paperSkillForProfile, type AccountUser, type AgentRun, type AgentTaskPlan, type AuditEvent, type ChangeSet, type ClaimEvidenceLink, type ClaimRelation, type CommentMessage, type CommentThread, type CompileRecord, type DraftPlan, type ExternalIdentity, type FastReadBundleReceipt, type GithubSyncRun, type HarnessProfile, type Invitation, type IssueResolution, type MetadataObservation, type PaperClaim, type PaperMemory, type PaperProject, type ProjectAclRule, type ProjectMember, type ProjectResearchWork, type ProjectShare, type ResearchIdentifier, type ResearchRun, type ResearchWork, type ReviewReport, type ReviewSnapshot, type ShareComment, type SourceEvidence, type Team, type TeamGroupBinding, type TeamMember, type UploadSession } from "@fastwrite/shared";
@@ -12,6 +13,8 @@ export interface FileVersionRecord {
 }
 
 export interface DatabaseState {
+  referencePapers: ReferencePaper[];
+  referenceSettings: ReferenceSettings[];
   schemaVersion: number;
   projects: PaperProject[];
   uploadSessions: UploadSession[];
@@ -73,8 +76,8 @@ export interface DatabaseState {
   experimentRuns: Array<{ id: string; projectId: string; projectVersion: number; scriptPath: string; status: "queued" | "running" | "completed" | "failed" | "cancelled"; authorization: "user-approved"; inputSnapshotHash?: string; result?: { success: boolean; exitCode: number; log: string; artifactPaths: string[]; runId: string }; jobId?: string; createdAt: string; updatedAt: string }>;
 }
 
-export const CURRENT_SCHEMA_VERSION = 15;
-const EMPTY_DATABASE: DatabaseState = { schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], researchScreening: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [], users: [], externalIdentities: [], fastcasTransactions: [], fastcasLinks: [], fastcasEvents: [], sessions: [], teams: [], teamMembers: [], teamGroupBindings: [], projectMembers: [], projectAclRules: [], invitations: [], accessRequests: [], notifications: [], notificationPreferences: [], notificationDeliveries: [], auditEvents: [], harnessProfiles: [], encryptedSecrets: [], localCredentials: [], collaborationDocuments: [], yDocumentSnapshots: [], yDocumentUpdates: [], commentThreads: [], commentMessages: [], skillReleaseOverrides: [], jobs: [], supportAccessRequests: [], experimentRuns: [] };
+export const CURRENT_SCHEMA_VERSION = 16;
+const EMPTY_DATABASE: DatabaseState = { referencePapers: [], referenceSettings: [], schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], researchScreening: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [], users: [], externalIdentities: [], fastcasTransactions: [], fastcasLinks: [], fastcasEvents: [], sessions: [], teams: [], teamMembers: [], teamGroupBindings: [], projectMembers: [], projectAclRules: [], invitations: [], accessRequests: [], notifications: [], notificationPreferences: [], notificationDeliveries: [], auditEvents: [], harnessProfiles: [], encryptedSecrets: [], localCredentials: [], collaborationDocuments: [], yDocumentSnapshots: [], yDocumentUpdates: [], commentThreads: [], commentMessages: [], skillReleaseOverrides: [], jobs: [], supportAccessRequests: [], experimentRuns: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
@@ -95,6 +98,8 @@ export class JsonDatabase {
       const parsed = JSON.parse(this.persistedContents) as Partial<DatabaseState>;
       const originalSchemaVersion = Number.isInteger(parsed.schemaVersion) ? parsed.schemaVersion! : 1;
       const migratedState: DatabaseState = {
+        referencePapers: parsed.referencePapers ?? [],
+        referenceSettings: parsed.referenceSettings ?? [],
         schemaVersion: originalSchemaVersion,
         projects: parsed.projects ?? [],
         uploadSessions: parsed.uploadSessions ?? [],
@@ -173,8 +178,13 @@ export class JsonDatabase {
     catch (error) { this.state = previous; throw error; }
   }
 
-  async mutate<T>(mutation: (state: DatabaseState) => T): Promise<T> {
-    const operation = this.mutationQueue.then(() => this.applyMutation(mutation));
+  // A guard runs at queue entry, before a snapshot is changed. It must not await
+  // another mutation on this database, which would wait behind itself.
+  async mutate<T>(mutation: (state: DatabaseState) => T, guard?: () => void | Promise<void>): Promise<T> {
+    const operation = this.mutationQueue.then(async () => {
+      await guard?.();
+      return this.applyMutation(mutation);
+    });
     this.mutationQueue = operation.then(() => undefined, () => undefined);
     return operation;
   }
@@ -199,6 +209,9 @@ export class JsonDatabase {
   async deleteProject(projectId: string): Promise<void> {
     await this.mutate((state) => {
       state.projects = state.projects.filter((item) => item.id !== projectId);
+      state.referencePapers = state.referencePapers.filter(item => item.projectId !== projectId);
+      state.referenceSettings = state.referenceSettings.filter(item => item.projectId !== projectId);
+      state.jobs = state.jobs.filter(item => item.policy?.projectId !== projectId);
       state.uploadSessions = state.uploadSessions.filter((item) => item.projectId !== projectId);
       state.agentRuns = state.agentRuns.filter((item) => item.projectId !== projectId);
       state.changeSets = state.changeSets.filter((item) => item.projectId !== projectId);
@@ -333,6 +346,9 @@ function migrate(state: DatabaseState): DatabaseState {
   if (state.schemaVersion < 13) { state.teamGroupBindings ??= []; state.schemaVersion = 13; }
   if (state.schemaVersion < 14) { state.skillReleaseOverrides ??= []; state.schemaVersion = 14; }
   if (state.schemaVersion < 15) state.schemaVersion = 15;
+  state.referencePapers ??= [];
+  state.referenceSettings ??= [];
+  if (state.schemaVersion < 16) state.schemaVersion = 16;
   state.researchScreening ??= [];
   if (state.schemaVersion > CURRENT_SCHEMA_VERSION) throw new Error(`Unsupported database schema version ${state.schemaVersion}`);
   return state;

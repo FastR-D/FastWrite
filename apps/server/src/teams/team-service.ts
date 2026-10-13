@@ -155,7 +155,7 @@ export class TeamService {
       if (state.accessRequests.some((item) => item.projectId === projectId && item.requesterUserId === principal.user.id && item.status === "pending")) throw new ApiError(409, "access_request_pending", "You already have a pending access request");
       state.accessRequests.push(request);
       const ownerIds = new Set(state.projectMembers.filter((member) => member.projectId === projectId && member.role === "owner").map((member) => member.userId)); if (project.personalOwnerUserId) ownerIds.add(project.personalOwnerUserId);
-      for (const userId of ownerIds) createNotification(state, { userId, type: "access_request", title: `${principal.user.displayName} requested access`, ...(message ? { body: message } : {}), projectId, accessRequestId: request.id });
+      for (const userId of ownerIds) createNotification(state, { userId, type: "access_request", title: `${principal.user.displayName} 申请访问项目`, ...(message ? { body: message } : {}), projectId, accessRequestId: request.id });
       state.auditEvents.push(audit(principal.user.id, "project.access_request.create", "project", projectId));
       return request;
     });
@@ -174,7 +174,7 @@ export class TeamService {
       const request = state.accessRequests.find((item) => item.id === requestId && item.projectId === projectId); if (!request) throw new ApiError(404, "access_request_not_found", "Access request not found"); if (request.status !== "pending") throw new ApiError(409, "access_request_decided", "Access request has already been decided");
       request.status = approved ? "approved" : "rejected"; request.decidedByUserId = principal.user.id; request.decidedAt = now; request.updatedAt = now;
       if (approved) { const member = state.projectMembers.find((item) => item.projectId === projectId && item.userId === request.requesterUserId); if (member) { member.role = request.requestedRole; member.updatedAt = now; } else state.projectMembers.push({ projectId, userId: request.requesterUserId, role: request.requestedRole, createdAt: now, updatedAt: now }); }
-      createNotification(state, { userId: request.requesterUserId, type: "access_request_decision", title: approved ? "Project access approved" : "Project access request declined", projectId, accessRequestId: request.id });
+      createNotification(state, { userId: request.requesterUserId, type: "access_request_decision", title: approved ? "项目访问申请已批准" : "项目访问申请已拒绝", projectId, accessRequestId: request.id });
       state.auditEvents.push(audit(principal.user.id, approved ? "project.access_request.approve" : "project.access_request.reject", "project", projectId));
       return request;
     });

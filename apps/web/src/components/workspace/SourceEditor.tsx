@@ -1,6 +1,7 @@
+import type { ReferenceSelection } from "@fastwrite/shared";
 import type { NavigationRequest } from "../../lib/editor/navigationController";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type MutableRefObject } from "react";
-import * as monaco from "monaco-editor";
+import * as monaco from "../../lib/editor/monacoRuntime";
 import { configureMonaco } from "../../lib/editor/monaco";
 import { Button, Checkbox, Icon, icons } from "../ui";
 import type { CompletionKind, CompletionResponse, FileContentResponse, SourceLocation, TextSelection } from "@fastwrite/shared";
@@ -28,6 +29,7 @@ function recordCompletionMetric(event: CompletionMetricEvent, kind: CompletionKi
 }
 
 interface SourceEditorProps {
+  references?: ReferenceSelection[];
   registry: DocumentRegistry;
   projectId: string;
   document: FileContentResponse;
@@ -43,7 +45,10 @@ export interface SourceEditorHandle {
   flush: () => Promise<void>;
 }
 
-export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ registry, projectId, document, targetLine, targetSelection, onSelection, onCursor, onDirtyChange, onDocumentState }, ref) {
+export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ references, registry, projectId, document, targetLine, targetSelection, onSelection, onCursor, onDirtyChange, onDocumentState }, ref) {
+  const referenceKey = JSON.stringify(references ?? []);
+  const referenceKeyRef = useRef(referenceKey);
+  referenceKeyRef.current = referenceKey;
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
@@ -85,7 +90,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   const [acceptedCompletion, setAcceptedCompletion] = useState<{ from: number; text: string } | null>(null);
   const [completionEnabled, setCompletionEnabled] = useState(() => localStorage.getItem("fastwrite.completion.enabled") !== "false");
   const [collaborationEnabled, setCollaborationEnabled] = useState(() => localStorage.getItem("fastwrite.collaboration.enabled") === "true");
-  const [collaborationStatus, setCollaborationStatus] = useState("Initializing collaboration");
+  const [collaborationStatus, setCollaborationStatus] = useState("正在初始化协作");
   const [collaborators, setCollaborators] = useState<Array<{ clientId: string; name: string; color?: string; path: string; line?: number }>>([]);
   const completionKind: CompletionKind = "auto";
 
@@ -107,6 +112,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     completionAbortRef.current = null;
     setCompletionLoading(false);
   };
+  useEffect(() => { cancelCompletion(); setCompletion(null); setCompletionError(""); }, [referenceKey]);
 
   const flush = () => registry.flush();
 
@@ -131,7 +137,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     const editor = monaco.editor.create(host, {
       model: null,
       theme: currentTheme() === "dark" ? "fastwrite-github-dark" : "fastwrite-github",
-      ariaLabel: `Source editor for ${documentRef.current.file.path}`,
+      ariaLabel: `源文件编辑器： ${documentRef.current.file.path}`,
       automaticLayout: true,
       minimap: { enabled: false },
       wordWrap: "on",
@@ -197,11 +203,11 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     versionRef.current = session.serverVersion;
     setCollaborators(entry.collaboration?.peers() ?? []);
     const provider = entry.collaboration;
-    if (provider) setCollaborationStatus(provider.error ? "Collaboration needs attention" : provider.state === "initializing" ? "Initializing collaboration" : provider.state === "offline" ? "Offline · local changes retained" : registry.dirtyEntry(entry) ? "Local changes · awaiting persistence" : provider.state === "persisted" ? "Persisted to file" : provider.state === "connecting" ? "Connecting" : "Connected");
+    if (provider) setCollaborationStatus(provider.error ? "协作状态需要处理" : provider.state === "initializing" ? "正在初始化协作" : provider.state === "offline" ? "离线 · 已保留本地更改" : registry.dirtyEntry(entry) ? "本地更改 · 等待保存" : provider.state === "persisted" ? "已写入文件" : provider.state === "connecting" ? "连接中" : "已连接");
     setRecoveryCount(entry.recoveries.length);
     const error = session.error ?? entry.collaboration?.error ?? entry.draftError;
     setStatus(error ? error instanceof ApiClientError && error.status === 409 ? "conflict" : !navigator.onLine || error instanceof TypeError ? "offline" : "error" : session.saving ? "saving" : registry.dirtyEntry(entry) ? "dirty" : "saved");
-    setMessage(error instanceof Error ? error.message : entry.recoveries.length ? "Saved local drafts are available for comparison." : "");
+    setMessage(error instanceof Error ? error.message : entry.recoveries.length ? "可比较已保存的本地草稿。" : "");
   }), [registry]);
 
   useEffect(() => {
@@ -230,7 +236,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       completionDecorationsRef.current?.clear();
       setAcceptedCompletion(null);
     }
-    editor.updateOptions({ ariaLabel: `Source editor for ${document.file.path}` });
+    editor.updateOptions({ ariaLabel: `源文件编辑器： ${document.file.path}` });
     versionRef.current = entry.session.serverVersion;
     setStatus(entry.session.error ? "error" : entry.session.saving ? "saving" : registry.dirtyEntry(entry) ? "dirty" : "saved");
     setMessage(entry.session.error instanceof Error ? entry.session.error.message : "");
@@ -238,7 +244,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
 
     if (!shouldCompleteRef.current || !completionEnabled) return;
     shouldCompleteRef.current = false;
-    const expected = { path: document.file.path, cursor: cursorRef.current, fileVersion: versionRef.current, kind: completionKind };
+    const expected = { ...(references ? { references } : {}), path: document.file.path, cursor: cursorRef.current, fileVersion: versionRef.current, kind: completionKind };
     completionTimerRef.current = window.setTimeout(async () => {
       const controller = new AbortController();
       const startedAt = performance.now();
@@ -247,14 +253,14 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       setCompletionError("");
       try {
         const result = await api.completions.suggest(projectId, expected, controller.signal);
-        if (result.suggestion && result.path === currentPathRef.current && result.fileVersion === versionRef.current && result.cursor === cursorRef.current) {
+        if (!controller.signal.aborted && referenceKey === referenceKeyRef.current && result.suggestion && result.path === currentPathRef.current && result.fileVersion === versionRef.current && result.cursor === cursorRef.current) {
           setCompletion(result);
           recordCompletionMetric("suggested", result.kind, performance.now() - startedAt);
         }
       } catch (error) {
         const stillCurrent = expected.path === currentPathRef.current && expected.fileVersion === versionRef.current && expected.cursor === cursorRef.current;
         if (stillCurrent && (error as DOMException).name !== "AbortError" && !(error instanceof ApiClientError && error.status === 409)) {
-          setCompletionError(error instanceof Error ? error.message : "Completion unavailable");
+          setCompletionError(error instanceof Error ? error.message : "补全暂不可用");
           recordCompletionMetric("error", completionKind);
         }
       } finally {
@@ -264,7 +270,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
         }
       }
     }, 500);
-  }, [completionEnabled, document.content, document.file.path, document.file.version, editorReady, projectId, saveEpoch, registry, collaborationEnabled]);
+  }, [completionEnabled, document.content, document.file.path, document.file.version, editorReady, projectId, saveEpoch, registry, collaborationEnabled, referenceKey]);
 
   useEffect(() => {
     const reconnect = () => { for (const { session } of sessionsRef.current.values()) if (session.dirty) void session.flush().catch(() => undefined); };
@@ -281,7 +287,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   useEffect(() => {
     const model = modelRef.current; const decorations = collaboratorDecorationsRef.current;
     if (!model || !decorations || !collaborationEnabled) { decorations?.clear(); return; }
-    decorations.set(collaborators.filter((item) => item.path === document.file.path && item.line).map((item) => { const lineNumber = Math.max(1, Math.min(item.line!, model.getLineCount())); return { range: new monaco.Range(lineNumber, 1, lineNumber, 1), options: { isWholeLine: true, className: "fastwrite-remote-line", glyphMarginClassName: "fastwrite-remote-cursor", hoverMessage: { value: `${item.name} is editing here` }, before: { content: `${item.name} `, inlineClassName: "fastwrite-remote-label" } } }; }));
+    decorations.set(collaborators.filter((item) => item.path === document.file.path && item.line).map((item) => { const lineNumber = Math.max(1, Math.min(item.line!, model.getLineCount())); return { range: new monaco.Range(lineNumber, 1, lineNumber, 1), options: { isWholeLine: true, className: "fastwrite-remote-line", glyphMarginClassName: "fastwrite-remote-cursor", hoverMessage: { value: `${item.name} 正在此处编辑` }, before: { content: `${item.name} `, inlineClassName: "fastwrite-remote-label" } } }; }));
   }, [collaborationEnabled, collaborators, document.file.path, document.file.version, editorReady]);
 
   useEffect(() => {
@@ -392,22 +398,22 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       <div className="editor-toolbar">
         <div className="editor-toolbar__file"><span>{document.file.name}</span><code>{document.file.path}</code></div>
         <div className="editor-toolbar__actions">
-          <Checkbox id="completion-enabled" name="completion-enabled" variant="pill" icon={completionLoading ? <Icon name={icons.loading} spin /> : <Icon name={icons.sparkle} />} checked={completionEnabled} onChange={changeCompletionEnabled} title={completionError || "Skill-guided writing completion"}>
-            Complete
+          <Checkbox id="completion-enabled" name="completion-enabled" variant="pill" icon={completionLoading ? <Icon name={icons.loading} spin /> : <Icon name={icons.sparkle} />} checked={completionEnabled} onChange={changeCompletionEnabled} title={completionError || "技能指导的写作补全"}>
+            补全
           </Checkbox>
         <Checkbox id="collaboration-enabled" name="collaboration-enabled" variant="pill" checked={collaborationEnabled} onChange={(enabled) => {
           const entry = registry.get(document.file.path);
-          if (entry) void registry.setCollaboration(entry, enabled).then(() => { setCollaborationEnabled(enabled); localStorage.setItem("fastwrite.collaboration.enabled", String(enabled)); }).catch(error => { setStatus("error"); setMessage(error instanceof Error ? error.message : "Could not switch synchronization mode"); });
-        }} title="Synchronize this file through Yjs collaboration">Collaborate{collaborators.length ? ` · ${collaborators.length}` : ""}</Checkbox>
-          {acceptedCompletion ? <Button variant="ghost" className="editor-undo-completion" type="button" onClick={undoCompletion} icon={<Icon name={icons.discard} />}>Undo completion</Button> : null}
+          if (entry) void registry.setCollaboration(entry, enabled).then(() => { setCollaborationEnabled(enabled); localStorage.setItem("fastwrite.collaboration.enabled", String(enabled)); }).catch(error => { setStatus("error"); setMessage(error instanceof Error ? error.message : "无法切换同步模式"); });
+        }} title="通过 Yjs 协作同步此文件">启用协作{collaborators.length ? ` · ${collaborators.length}` : ""}</Checkbox>
+          {acceptedCompletion ? <Button variant="ghost" className="editor-undo-completion" type="button" onClick={undoCompletion} icon={<Icon name={icons.discard} />}>撤销补全</Button> : null}
           {collaborationEnabled ? <span className="collaboration-status" role="status">{collaborationStatus}</span> : null}
-          <Button variant="secondary" type="button" onClick={() => { cancelCompletion(); setCompletion(null); setRecoveryOpen(true); }}>Compare / recover{recoveryCount ? ` (${recoveryCount})` : ""}</Button>
+          <Button variant="secondary" type="button" onClick={() => { cancelCompletion(); setCompletion(null); setRecoveryOpen(true); }}>比较与恢复{recoveryCount ? ` (${recoveryCount})` : ""}</Button>
           <SaveIndicator status={status} />
         </div>
       </div>
       <div ref={hostRef} className="monaco-editor-host" />
       {recoveryOpen && registry.get(document.file.path) ? <DocumentRecoveryDialog registry={registry} entry={registry.get(document.file.path)!} onClose={() => setRecoveryOpen(false)} /> : null}
-      {completion ? <span className="sr-only" role="status">Writing suggestion available. Press Tab to accept or Escape to ignore.</span> : null}
+      {completion ? <span className="sr-only" role="status">有可用的写作建议，按 Tab 接受，按 Esc 忽略。</span> : null}
       {message ? <div className={`editor-message editor-message--${status}`} role="alert"><Icon name={icons.info} /> {message}</div> : null}
     </div>
   );
@@ -459,7 +465,7 @@ function rangeFromOffsets(model: monaco.editor.ITextModel, from: number, to: num
 
 function SaveIndicator({ status }: { status: SaveStatus }) {
   const content = {
-    saved: [<Icon key="icon" name={icons.check} />, "Saved"], dirty: [<Icon key="icon" name={icons.circleFilled} />, "Unsaved"], saving: [<Icon key="icon" name={icons.loading} spin />, "Saving"], error: [<Icon key="icon" name={icons.info} />, "Save failed"], conflict: [<Icon key="icon" name={icons.info} />, "Conflict"], offline: [<Icon key="icon" name={icons.circleFilled} />, "Offline - queued"]
+    saved: [<Icon key="icon" name={icons.check} />, "已保存"], dirty: [<Icon key="icon" name={icons.circleFilled} />, "未保存"], saving: [<Icon key="icon" name={icons.loading} spin />, "正在保存"], error: [<Icon key="icon" name={icons.info} />, "保存失败"], conflict: [<Icon key="icon" name={icons.info} />, "冲突"], offline: [<Icon key="icon" name={icons.circleFilled} />, "离线 · 已加入队列"]
   }[status];
   return <span className={`save-indicator save-indicator--${status}`}>{content}</span>;
 }

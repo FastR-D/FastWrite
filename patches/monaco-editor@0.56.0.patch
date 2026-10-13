@@ -1,0 +1,12 @@
+diff --git a/esm/vs/index.js b/esm/vs/index.js
+index 1234567..abcdefg 100644
+--- a/esm/vs/index.js
++++ b/esm/vs/index.js
+@@ -57,7 +57,6 @@ import './languages/definitions/pgsql/register.js';
+ import './languages/definitions/r/register.js';
+ import './languages/definitions/razor/register.js';
+ import './languages/definitions/redis/register.js';
+-import './languages/definitions/redshift/register.js';
+ import './languages/definitions/restructuredtext/register.js';
+ import './languages/definitions/ruby/register.js';
+ import './languages/definitions/rust/register.js';

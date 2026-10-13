@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import * as monaco from "monaco-editor";
+import * as monaco from "../../lib/editor/monacoRuntime";
 import type { GithubSyncResolution, GithubSyncResolutionChoice, GithubSyncRun, PaperProject } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { Button, Dialog, Field, Icon, TextArea, icons } from "../ui";
@@ -54,7 +54,7 @@ export function GithubSyncDialog({ open, project, compileState, onClose, onFlush
       setStage("completed");
       return;
     }
-    setError(next.error ?? "GitHub Sync failed");
+    setError(next.error ?? "GitHub 同步失败");
     setStage("error");
   };
 
@@ -70,7 +70,7 @@ export function GithubSyncDialog({ open, project, compileState, onClose, onFlush
       setStage("syncing");
       await acceptRun(await api.github.startSync(project.id));
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "GitHub Sync failed");
+      setError(failure instanceof Error ? failure.message : "GitHub 同步失败");
       setStage("error");
     }
   };
@@ -96,7 +96,7 @@ export function GithubSyncDialog({ open, project, compileState, onClose, onFlush
     if (compileState.state !== "success" || !run) return;
     setStage("finalizing");
     void api.github.finalizeSync(project.id, run.id).then(acceptRun).catch((failure) => {
-      setError(failure instanceof Error ? failure.message : "Could not finish GitHub Sync");
+      setError(failure instanceof Error ? failure.message : "无法完成 GitHub 同步");
       setStage("error");
     });
   }, [compileState, project.id, run, stage]);
@@ -111,7 +111,7 @@ export function GithubSyncDialog({ open, project, compileState, onClose, onFlush
     try {
       await acceptRun(await api.github.resolveSync(project.id, run.id, body));
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Could not apply conflict resolutions");
+      setError(failure instanceof Error ? failure.message : "无法应用冲突解决结果");
       setStage("conflicts");
     }
   };
@@ -124,34 +124,34 @@ export function GithubSyncDialog({ open, project, compileState, onClose, onFlush
 
   const allResolved = Boolean(run?.conflicts.length) && run!.conflicts.every((conflict) => resolutions[conflict.path]?.choice);
   const busy = ["saving", "syncing", "compiling", "finalizing"].includes(stage);
-  const footer = stage === "conflicts" ? <Button variant="primary" icon={<Icon name={icons.gitMerge} />} disabled={!allResolved} onClick={() => void applyResolutions()}>Apply &amp; continue sync</Button>
-    : stage === "compile-error" ? <Button variant="primary" icon={<Icon name={icons.refresh} />} onClick={retryCompile}>Compile again</Button>
-    : stage === "remote-changed" || stage === "error" ? <Button variant="primary" icon={<Icon name={icons.refresh} />} onClick={() => void start()}>Sync again</Button>
-    : stage === "completed" ? <Button variant="primary" onClick={onClose}>Done</Button>
-    : <Button variant="secondary" disabled>Sync in progress</Button>;
+  const footer = stage === "conflicts" ? <Button variant="primary" icon={<Icon name={icons.gitMerge} />} disabled={!allResolved} onClick={() => void applyResolutions()}>应用并继续同步</Button>
+    : stage === "compile-error" ? <Button variant="primary" icon={<Icon name={icons.refresh} />} onClick={retryCompile}>重新编译</Button>
+    : stage === "remote-changed" || stage === "error" ? <Button variant="primary" icon={<Icon name={icons.refresh} />} onClick={() => void start()}>重新同步</Button>
+    : stage === "completed" ? <Button variant="primary" onClick={onClose}>完成</Button>
+    : <Button variant="secondary" disabled>正在同步</Button>;
 
-  return <Dialog open={open} title="Sync with GitHub" {...(project.source.type === "github" ? { description: `${project.source.repository} · ${run?.branch ?? project.source.ref}` } : {})} width={stage === "conflicts" ? "wide" : "medium"} className="github-sync-dialog" onClose={busy ? () => undefined : onClose} footer={footer}>
-    {stage === "saving" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title="Saving local changes" detail="Creating a local recovery checkpoint…" /> : null}
-    {stage === "syncing" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title={run?.conflicts.length ? "Applying conflict resolutions" : "Syncing changes"} detail="Fetching GitHub and merging from the last synced commit…" /> : null}
-    {stage === "compiling" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title="Compiling merged paper" detail="Sync will continue after the current project version compiles successfully." /> : null}
-    {stage === "finalizing" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title="Finishing Sync" detail={run?.hasChangesToPush ? "Publishing one FastWrite commit…" : "Recording the synced GitHub version…"} /> : null}
-    {stage === "completed" ? <SyncProgress icon={<Icon name={icons.passFilled} />} title="GitHub is in sync" detail={run?.pushedCommit ? `Published ${shortCommit(run.pushedCommit)} on ${run.branch}.` : `Updated from ${run?.branch ?? "GitHub"}; no FastWrite commit was needed.`} tone="success" /> : null}
-    {stage === "compile-error" ? <SyncProgress icon={<Icon name={icons.warning} />} title="The merged paper did not compile" detail="Fix the compile errors, then compile again to continue this Sync." tone="warning" /> : null}
-    {stage === "remote-changed" ? <SyncProgress icon={<Icon name={icons.warning} />} title="GitHub changed during Sync" detail={run?.error ?? "Run Sync again to merge the latest remote commit. No force-push was attempted."} tone="warning" /> : null}
-    {stage === "error" ? <SyncProgress icon={<Icon name={icons.warning} />} title="Sync could not finish" detail={error || run?.error || "GitHub Sync failed"} tone="error" /> : null}
+  return <Dialog open={open} title="与 GitHub 同步" {...(project.source.type === "github" ? { description: `${project.source.repository} · ${run?.branch ?? project.source.ref}` } : {})} width={stage === "conflicts" ? "wide" : "medium"} className="github-sync-dialog" onClose={busy ? () => undefined : onClose} footer={footer}>
+    {stage === "saving" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title="正在保存本地更改" detail="正在创建本地恢复检查点…" /> : null}
+    {stage === "syncing" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title={run?.conflicts.length ? "正在应用冲突解决结果" : "正在同步更改"} detail="正在获取 GitHub 内容，并基于上次同步提交合并…" /> : null}
+    {stage === "compiling" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title="正在编译合并后的论文" detail="当前项目版本编译成功后将继续同步。" /> : null}
+    {stage === "finalizing" ? <SyncProgress icon={<Icon name={icons.loading} spin />} title="正在完成同步" detail={run?.hasChangesToPush ? "正在发布 FastWrite 提交…" : "正在记录同步后的 GitHub 版本…"} /> : null}
+    {stage === "completed" ? <SyncProgress icon={<Icon name={icons.passFilled} />} title="已与 GitHub 同步" detail={run?.pushedCommit ? `已将提交 ${shortCommit(run.pushedCommit)} 发布到 ${run.branch}。` : `已更新自 ${run?.branch ?? "GitHub"}；无需创建 FastWrite 提交。`} tone="success" /> : null}
+    {stage === "compile-error" ? <SyncProgress icon={<Icon name={icons.warning} />} title="合并后的论文编译失败" detail="请修复编译错误，再重新编译以继续同步。" tone="warning" /> : null}
+    {stage === "remote-changed" ? <SyncProgress icon={<Icon name={icons.warning} />} title="同步期间 GitHub 已有新的更改" detail={run?.error ?? "请重新同步以合并最新远程提交，本次未进行强制推送。"} tone="warning" /> : null}
+    {stage === "error" ? <SyncProgress icon={<Icon name={icons.warning} />} title="无法完成同步" detail={error || run?.error || "GitHub 同步失败"} tone="error" /> : null}
     {stage === "conflicts" && run ? <div className="sync-conflict-list">
-      <div className="sync-conflict-summary"><Icon name={icons.warning} /><div><strong>{run.conflicts.length} conflict{run.conflicts.length === 1 ? "" : "s"}</strong><span>Resolve each file, then continue this Sync.</span></div></div>
+      <div className="sync-conflict-summary"><Icon name={icons.warning} /><div><strong>{run.conflicts.length} conflict</strong><span>请逐个解决文件冲突，再继续同步。</span></div></div>
       {run.conflicts.map((conflict) => {
         const resolution = resolutions[conflict.path] ?? { choice: "", content: "" };
         return <article className="sync-conflict" key={conflict.path}>
-          <header><code>{conflict.path}</code><span>{conflict.kind === "text" ? "Text conflict" : conflict.kind === "binary" ? "Binary conflict" : "Delete / modify conflict"}</span></header>
+          <header><code>{conflict.path}</code><span>{conflict.kind === "text" ? "文本冲突" : conflict.kind === "binary" ? "二进制冲突" : "删除与修改冲突"}</span></header>
           {conflict.kind === "text" ? <GithubTextConflictComparison path={conflict.path} base={conflict.baseContent} fastwrite={conflict.fastwriteContent} github={conflict.githubContent} /> : null}
-          <div className="sync-resolution" role="group" aria-label={`Resolution for ${conflict.path}`}>
-            <Button variant="ghost" className={resolution.choice === "fastwrite" ? "is-active" : ""} onClick={() => setResolutions((current) => ({ ...current, [conflict.path]: keepConflictSide(conflict, resolution, "fastwrite") }))}>Keep FastWrite</Button>
-            <Button variant="ghost" className={resolution.choice === "github" ? "is-active" : ""} onClick={() => setResolutions((current) => ({ ...current, [conflict.path]: keepConflictSide(conflict, resolution, "github") }))}>Keep GitHub</Button>
+          <div className="sync-resolution" role="group" aria-label={`冲突解决结果： ${conflict.path}`}>
+            <Button variant="ghost" className={resolution.choice === "fastwrite" ? "is-active" : ""} onClick={() => setResolutions((current) => ({ ...current, [conflict.path]: keepConflictSide(conflict, resolution, "fastwrite") }))}>保留 FastWrite 版本</Button>
+            <Button variant="ghost" className={resolution.choice === "github" ? "is-active" : ""} onClick={() => setResolutions((current) => ({ ...current, [conflict.path]: keepConflictSide(conflict, resolution, "github") }))}>保留 GitHub 版本</Button>
           </div>
-          {conflict.kind === "text" ? <Field label="Merged result" className="sync-conflict__result">
-            <TextArea aria-label={`Merged result for ${conflict.path}`} value={resolution.content} onChange={(content) => setResolutions((current) => ({ ...current, [conflict.path]: editTextResolution(resolution, content) }))} spellCheck={false} />
+          {conflict.kind === "text" ? <Field label="合并结果" className="sync-conflict__result">
+            <TextArea aria-label={`合并结果： ${conflict.path}`} value={resolution.content} onChange={(content) => setResolutions((current) => ({ ...current, [conflict.path]: editTextResolution(resolution, content) }))} spellCheck={false} />
           </Field> : null}
         </article>;
       })}
@@ -172,9 +172,9 @@ function GithubTextConflictComparison({ path, base, fastwrite, github }: { path:
     configureMonaco();
     const identity = crypto.randomUUID();
     const create = (side: string, content: string) => monaco.editor.createModel(content, languageForPath(path), monaco.Uri.from({ scheme: "fastwrite-github-conflict", path: `/${path}`, query: `${identity}-${side}` }));
-    const created = { fastwrite: create("fastwrite", fastwrite ?? "Deleted"), github: create("github", github ?? "Deleted") };
+    const created = { fastwrite: create("fastwrite", fastwrite ?? "已删除"), github: create("github", github ?? "已删除") };
     setModels(created);
     return () => { setModels(null); created.fastwrite.dispose(); created.github.dispose(); };
   }, [fastwrite, github, path]);
-  return <div className="sync-conflict__comparison"><section><strong>Common base</strong><pre>{base ?? "No common base"}</pre></section><section className="sync-conflict__diff">{models ? <TextModelComparison original={models.fastwrite} modified={models.github} originalLabel="FastWrite" modifiedLabel="GitHub" /> : null}</section></div>;
+  return <div className="sync-conflict__comparison"><section><strong>共同基准版本</strong><pre>{base ?? "没有共同基准版本"}</pre></section><section className="sync-conflict__diff">{models ? <TextModelComparison original={models.fastwrite} modified={models.github} originalLabel="FastWrite" modifiedLabel="GitHub" /> : null}</section></div>;
 }

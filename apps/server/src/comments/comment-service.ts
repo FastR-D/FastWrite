@@ -37,5 +37,5 @@ function validateMentions(state: ReturnType<JsonDatabase["snapshot"]>, projectId
   if (mentionedUserIds.some((userId) => !memberIds.has(userId))) throw new ApiError(400, "comment_mention_invalid", "Mentioned users must be project members");
   return mentionedUserIds;
 }
-function notifyMentions(state: ReturnType<JsonDatabase["snapshot"]>, mentionedUserIds: string[], authorUserId: string, projectId: string, threadId: string): void { for (const userId of mentionedUserIds) if (userId !== authorUserId) createNotification(state, { userId, type: "mention", title: "You were mentioned in a comment", projectId, body: `Comment thread ${threadId}` }); }
+function notifyMentions(state: ReturnType<JsonDatabase["snapshot"]>, mentionedUserIds: string[], authorUserId: string, projectId: string, threadId: string): void { for (const userId of mentionedUserIds) if (userId !== authorUserId) createNotification(state, { userId, type: "mention", title: "有人在评论中提及了你", projectId, body: `评论讨论 ${threadId}` }); }
 function canRead(authorization: AuthorizationService, principal: Principal, projectId: string, path: string): boolean { try { authorization.requireProjectPath(principal, projectId, path, "project:read"); return true; } catch { return false; } }

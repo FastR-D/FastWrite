@@ -13,24 +13,24 @@ export function ComplianceDialog({ open, project, renderedPages, onClose }: { op
   const run = useCallback(async (signal?: AbortSignal) => {
     setLoading(true); setError("");
     try { const hasMainPages = mainBodyPages !== undefined && Number.isSafeInteger(mainBodyPages) && mainBodyPages > 0; const [compliance, writing] = await Promise.all([api.compliance.check(project.id, { ...(renderedPages ? { renderedPages } : {}), ...(hasMainPages ? { mainBodyPages } : {}), verifyCitationsOnline: online }, signal), api.claims.writingChecks(project.id, signal)]); setReport(compliance); setWritingFindings(writing.findings as Array<{ id: string; status: string; source: string; message: string }>); }
-    catch (failure) { if ((failure as DOMException).name !== "AbortError") setError(failure instanceof Error ? failure.message : "Compliance check failed"); }
+    catch (failure) { if ((failure as DOMException).name !== "AbortError") setError(failure instanceof Error ? failure.message : "投稿检查失败"); }
     finally { setLoading(false); }
   }, [mainBodyPages, online, project.id, renderedPages]);
   useEffect(() => { if (!open) return; const controller = new AbortController(); void run(controller.signal); return () => controller.abort(); }, [open, run]);
 
-  return <Dialog open={open} title="Submission compliance" description="Deterministic source, venue-format, anonymity, comment, reference, and citation-authenticity checks." width="large" onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Close</Button><Button variant="primary" icon={<Icon name={icons.verified} />} loading={loading} onClick={() => void run()}>Run checks</Button></>}>
+  return <Dialog open={open} title="投稿检查" description="检查源文件、投稿格式、匿名性、注释、参考文献及引用真实性。" width="large" onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>关闭</Button><Button variant="primary" icon={<Icon name={icons.verified} />} loading={loading} onClick={() => void run()}>运行检查</Button></>}>
     <div className="form-stack">
-      <Field label="Authenticity verification" hint="Unreachable or unmatched records remain unresolved; they are never treated as genuine.">
-        <Select aria-label="Authenticity verification" value={online ? "online" : "local"} onChange={(next) => setOnline(next === "online")} options={[{ value: "online", label: "Crossref online verification" }, { value: "local", label: "Local consistency only" }]} />
+      <Field label="真实性验证" hint="无法访问或匹配的记录将保留为未核实，不会视为真实引用。">
+        <Select aria-label="真实性验证" value={online ? "online" : "local"} onChange={(next) => setOnline(next === "online")} options={[{ value: "online", label: "Crossref 在线验证" }, { value: "local", label: "仅检查本地一致性" }]} />
       </Field>
-      <Field label="Main-body pages" hint="Enter the number of rendered main-text pages before references so main-text-only limits can be enforced exactly.">
-        <NumberField min={1} step={1} value={mainBodyPages} onChange={setMainBodyPages} placeholder="Optional when references are excluded" />
+      <Field label="正文页数" hint="填写参考文献之前的正文页数，以准确检查正文页数限制。">
+        <NumberField min={1} step={1} value={mainBodyPages} onChange={setMainBodyPages} placeholder="不计参考文献时可选填" />
       </Field>
       {report ? <>
-        <div className="agent-resolution"><Icon name={icons.verified} /><span><strong>{report.submissionBlocked ? "SUBMISSION BLOCKED" : "READY"} · {report.summary.errors} errors · {report.summary.warnings} warnings · {report.summary.unresolved} unresolved · {report.summary.passed} passed</strong>{report.renderedPages ? `Rendered PDF: ${report.renderedPages} pages.` : "Compile the PDF to enforce page limits."}</span></div>
-        <div className="agent-plan"><section><h3>Checks</h3><List label="Checks">{report.findings.map((finding) => <ListRow key={finding.id}><strong>{finding.status.toUpperCase()} · {finding.category}</strong> — {finding.message}{finding.path ? ` (${finding.path}${finding.line ? `:${finding.line}` : ""})` : ""}</ListRow>)}</List></section>
-        <section><h3>Citation authenticity</h3>{report.citations.length ? <List label="Citation authenticity">{report.citations.map((citation) => <ListRow key={citation.key}><strong>{citation.status.toUpperCase()} · {citation.key}</strong> — {citation.message}</ListRow>)}</List> : <p><Icon name={icons.passFilled} /> No citation commands were found.</p>}</section></div>
-        <section><h3>Writing quality preflight</h3>{writingFindings.length ? <List label="Writing quality preflight">{writingFindings.map((finding) => <ListRow key={finding.id}><strong className={finding.status === "blocking" ? "text-danger" : finding.status === "warning" ? "text-warning" : ""}>{finding.status.toUpperCase()} · {finding.source}</strong> — {finding.message}</ListRow>)}</List> : <p><Icon name={icons.passFilled} /> No deterministic writing findings.</p>}</section>
+        <div className="agent-resolution"><Icon name={icons.verified} /><span><strong>{report.submissionBlocked ? "投稿检查未通过" : "准备就绪"} · {report.summary.errors} 项错误 · {report.summary.warnings} 项警告 · {report.summary.unresolved} 项未核实 · {report.summary.passed} 已通过</strong>{report.renderedPages ? `已生成的 PDF： ${report.renderedPages} 页。` : "请编译 PDF 以检查页数限制。"}</span></div>
+        <div className="agent-plan"><section><h3>检查项</h3><List label="检查项">{report.findings.map((finding) => <ListRow key={finding.id}><strong>{finding.status.toUpperCase()} · {finding.category}</strong> — {finding.message}{finding.path ? ` (${finding.path}${finding.line ? `:${finding.line}` : ""})` : ""}</ListRow>)}</List></section>
+        <section><h3>引用真实性</h3>{report.citations.length ? <List label="引用真实性">{report.citations.map((citation) => <ListRow key={citation.key}><strong>{citation.status.toUpperCase()} · {citation.key}</strong> — {citation.message}</ListRow>)}</List> : <p><Icon name={icons.passFilled} /> 未发现引用命令。</p>}</section></div>
+        <section><h3>写作质量预检</h3>{writingFindings.length ? <List label="写作质量预检">{writingFindings.map((finding) => <ListRow key={finding.id}><strong className={finding.status === "blocking" ? "text-danger" : finding.status === "warning" ? "text-warning" : ""}>{finding.status.toUpperCase()} · {finding.source}</strong> — {finding.message}</ListRow>)}</List> : <p><Icon name={icons.passFilled} /> 未发现可确定的写作问题。</p>}</section>
       </> : null}
       {error ? <div className="form-error" role="alert">{error}</div> : null}
     </div>

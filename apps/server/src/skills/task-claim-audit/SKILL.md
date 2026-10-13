@@ -1,6 +1,6 @@
 ---
 version: 1.0.0
-description: Align claims with evidence and remove unsupported assertions.
+description: 关联论断与证据，移除没有依据的断言。
 supportedIntents: draft,continue,revise
 allowedScope: project
 requiredEvidence: claims,evidence links

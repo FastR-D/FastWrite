@@ -1,4 +1,4 @@
-import * as monaco from "monaco-editor";
+import * as monaco from "./monacoRuntime";
 import { normalizeWorkspacePath, type FileContentResponse, type SaveFileResponse } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { CollaborationProvider } from "./collaborationProvider";
@@ -43,7 +43,7 @@ export class DocumentRegistry {
     let released = false;
     return () => {
       if (released) return; released = true; this.owners--;
-      queueMicrotask(() => { if (!this.owners) void this.close().catch(error => console.error("Could not preserve document drafts", error)); });
+      queueMicrotask(() => { if (!this.owners) void this.close().catch(error => console.error("无法保存文档草稿", error)); });
     };
   }
   constructor(readonly projectId: string, readonly cacheLimit = 32) {}
@@ -59,7 +59,7 @@ export class DocumentRegistry {
   get dirty() { return [...this.entries.values()].some(entry => this.dirtyEntry(entry)); }
 
   open(document: FileContentResponse): DocumentEntry {
-    if (this.closed) throw new Error("Document registry is closed");
+    if (this.closed) throw new Error("文档管理服务已关闭");
     const key = this.key(document.file.path);
     let entry = this.entries.get(key);
     if (entry) {
@@ -72,7 +72,7 @@ export class DocumentRegistry {
     }
     configureMonaco();
     const path = normalizeWorkspacePath(document.file.path);
-    if (!path) throw new Error("A document path is required");
+    if (!path) throw new Error("请提供文档路径");
     const model = monaco.editor.createModel(document.content, languageForPath(path), monaco.Uri.from({ scheme: "fastwrite", authority: this.modelAuthority, path: `/${path}` }));
     const session = new DocumentSession(this.projectId, path, document.content, document.file.version, async snapshot => {
       if (!this.identity.current()) throw new Error("The signed-in account changed; this draft remains saved for the original account.");
@@ -135,8 +135,8 @@ export class DocumentRegistry {
     entry.recoveries = entry.recoveries.filter(item => item.id !== id); this.emit(entry);
   }
   async resolve(entry: DocumentEntry, content: string, server: FileContentResponse, expectedRevision: number) {
-    if (entry.mode !== "rest") throw new Error("Save a copy of this recovery before changing the collaborative document.");
-    if (entry.session.localRevision !== expectedRevision || entry.session.saving) throw new Error("Local text changed or is still saving. Reopen the comparison before applying it.");
+    if (entry.mode !== "rest") throw new Error("更改协作文档前，请先保存恢复内容的副本。");
+    if (entry.session.localRevision !== expectedRevision || entry.session.saving) throw new Error("本地文本已更改或仍在保存，请重新打开对比后再应用。");
     await this.preserve(entry, entry.model.getValue(), "before-recovery");
     entry.session.resolveConflict(content, server.content, server.file.version, expectedRevision);
     entry.applyingExternal = true;
@@ -150,7 +150,7 @@ export class DocumentRegistry {
   async saveCopy(entry: DocumentEntry, path: string, content: string) {
     if (!this.identity.current()) throw new Error("The signed-in account changed. Reopen this page before saving.");
     const normalized = normalizeWorkspacePath(path);
-    if (!normalized || normalized === entry.session.path) throw new Error("Choose a different path for the recovered copy.");
+    if (!normalized || normalized === entry.session.path) throw new Error("请为恢复副本选择其他路径。");
     const file = await api.projects.createFile(this.projectId, normalized, content);
     void Promise.resolve().then(() => this.onSaved?.({ file, content })).catch(() => undefined);
     return file;

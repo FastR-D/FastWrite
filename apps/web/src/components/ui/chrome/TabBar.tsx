@@ -108,14 +108,14 @@ export function TabBar({ tabs, activeId, onSelect, label, onClose, onActivate, c
             >
               {tab.icon}
               <span className={styles.label}>{tab.label}</span>
-              {tab.dirty ? <span className={styles.dirty} aria-label="Unsaved changes">●</span> : null}
+              {tab.dirty ? <span className={styles.dirty} aria-label="未保存的更改">●</span> : null}
             </button>
             {onClose ? (
               <button
                 type="button"
                 className={styles.close}
-                aria-label={closeLabel ? closeLabel(tab) : `Close ${tab.id}`}
-                title={closeLabel ? closeLabel(tab) : `Close ${tab.id}`}
+                aria-label={closeLabel ? closeLabel(tab) : `关闭 ${tab.id}`}
+                title={closeLabel ? closeLabel(tab) : `关闭 ${tab.id}`}
                 onClick={() => onClose(tab.id)}
               >
                 <span aria-hidden="true">×</span>

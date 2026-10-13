@@ -1,3 +1,4 @@
+import type { ReferencePaperService } from "../references/service";
 import type {
   AgentRun,
   ChangeSetConflictFile,
@@ -67,12 +68,13 @@ export class ReviseService {
     private readonly workspaces: WorkspaceService,
     private readonly skills: SkillRegistry,
     private readonly provider?: AgentProvider | AgentGateway,
-    private readonly memories?: MemoryService
+    private readonly memories?: MemoryService,
+    private readonly references?: ReferencePaperService
   ) {}
 
   private get agent(): AgentProvider | undefined { return this.provider as AgentProvider | undefined; }
 
-  async propose(projectId: string, request: ReviseRequest, access?: AgentContextAccess): Promise<ReviseResponse> {
+  async propose(projectId: string, request: ReviseRequest, access?: AgentContextAccess, requestSignal?: AbortSignal, actorUserId?: string): Promise<ReviseResponse> {
     if (!this.agent) {
       throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable AI revision");
     }
@@ -87,6 +89,7 @@ export class ReviseService {
       .map((turn) => ({ role: turn.role, content: turn.content.trim().slice(0, 4_000) })));
     const context = await this.contextFor(projectId, request, opened.content, access);
     const memory = this.memories && (!access || access.includeMemory) ? await this.memories.focusedWriterContext(projectId, opened.file.path, context.sectionTitle) : { content: "" };
+    const styleReferenceContext = await this.references?.resolve(projectId, request.references, requestSignal, false, actorUserId);
 
     const runId = `run_${crypto.randomUUID()}`;
     const createdAt = timestamp();
@@ -94,6 +97,7 @@ export class ReviseService {
       id: runId,
       projectId,
       type: "revise",
+      ...(styleReferenceContext ? { styleReferenceContext } : {}),
       status: "running",
       objective: instruction,
       skill: structuredClone(project.skill),
@@ -107,6 +111,7 @@ export class ReviseService {
     try {
       const [loadedSkill, workflowInstructions] = await Promise.all([this.skills.load(project.skill, project.publicationTarget), this.skills.loadWorkflow("revise")]);
       const output = await this.agent.revise({
+        ...(styleReferenceContext ? { styleReferenceContext } : {}),
         instruction,
         selection: request.selection,
         workingText,
@@ -119,7 +124,8 @@ export class ReviseService {
         venueInstructions: loadedSkill.venueInstructions,
         ...(request.responseLanguage ? { responseLanguage: request.responseLanguage } : {}),
         ...context
-      });
+      }, requestSignal);
+      requestSignal?.throwIfAborted();
       if (!output.replacement.trim()) throw new Error("The agent returned an empty revision");
       if (output.replacement === workingText) throw new Error("The agent did not propose a textual change");
 
@@ -141,6 +147,7 @@ export class ReviseService {
         if (findings.length) hunk.findings = findings;
       }
       const updatedRun = await this.database.mutate((state) => {
+        requestSignal?.throwIfAborted();
         state.changeSets.push(changeSet);
         const stored = state.agentRuns.find((candidate) => candidate.id === runId)!;
         stored.status = "waiting-approval";
@@ -158,12 +165,13 @@ export class ReviseService {
       await this.database.mutate((state) => {
         const stored = state.agentRuns.find((candidate) => candidate.id === runId);
         if (stored) {
-          stored.status = "failed";
+          stored.status = requestSignal?.aborted ? "cancelled" : "failed";
           stored.error = error instanceof Error ? error.message : "Revision failed";
           stored.updatedAt = timestamp();
         }
       });
       if (error instanceof ApiError) throw error;
+      if (requestSignal?.aborted) throw new ApiError(499, "agent_cancelled", "Revision cancelled; no changes were created");
       throw new ApiError(502, "agent_failed", error instanceof Error ? error.message : "The revision agent failed");
     }
   }

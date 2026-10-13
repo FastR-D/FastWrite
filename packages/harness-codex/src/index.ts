@@ -32,7 +32,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       return { kind: "codex", state: "ready", ...(version ? { version } : {}), message: "Codex CLI available" };
     } catch { return { kind: "codex", state: "unavailable", message: "Codex CLI is not installed or not executable" }; }
   }
-  async getCapabilities(): Promise<HarnessCapabilities> { return { streaming: true, sessions: true, resume: true, approvals: true, skills: true, mcp: true }; }
+  async getCapabilities(): Promise<HarnessCapabilities> { return { streaming: true, sessions: true, resume: true, approvals: true, skills: true, mcp: true, images: true }; }
   async createSession(input: { cwd: string; title?: string }): Promise<SessionReference> { await this.#ensureProcess(input.cwd); const result = await this.#request("thread/start", { cwd: input.cwd, ...(input.title ? { title: input.title } : {}) }) as { thread?: { id?: string } }; if (!result.thread?.id) throw new Error("Codex app-server did not return a thread id"); return { harness: "codex", sessionId: result.thread.id, cwd: input.cwd }; }
   async resumeSession(session: SessionReference): Promise<SessionReference> { await this.#ensureProcess(session.cwd); await this.#request("thread/resume", { threadId: session.sessionId }); return session; }
   sendMessage(input: SendMessageInput): AsyncIterable<HarnessEvent> {

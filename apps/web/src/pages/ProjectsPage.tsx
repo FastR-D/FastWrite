@@ -1,5 +1,7 @@
+import { ProductLanding } from "../components/projects/ProductLanding";
+import { roleLabel, modelProviderLabel } from "../lib/labels";
+import { HarnessProfileEditor } from "../components/workspace/ProjectHarnessProfile";
 import { useCallback, useEffect, useState } from "react";
-import type { ReactNode } from "react";
 import type {
   PaperProject,
   PublicationTarget,
@@ -10,7 +12,7 @@ import { WRITING_PROFILES } from "@fastwrite/shared";
 import { api } from "../api/client";
 import { ImportDialog } from "../components/import/ImportDialog";
 import { FastCASDialog } from "../components/FastCASDialog";
-import { Button, Checkbox, Dialog, Divider, Field, Icon, IconButton, Link, MultiSelect, NumberField, Select, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
+import { Button, Checkbox, Dialog, Field, Icon, IconButton, Link, MultiSelect, NumberField, Select, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { PublicationTargetFields } from "../components/ui/PublicationTargetFields";
 import { navigate, projectPath } from "../lib/navigation";
 import { publicationTargetAbbreviation } from "../lib/labels";
@@ -53,7 +55,7 @@ export function ProjectsPage() {
         setError(
           loadError instanceof Error
             ? loadError.message
-            : "Could not load projects",
+            : "无法加载项目",
         );
     } finally {
       setLoading(false);
@@ -93,7 +95,7 @@ export function ProjectsPage() {
       setInvitationError(
         failure instanceof Error
           ? failure.message
-          : "Could not accept invitation",
+          : "无法接受邀请",
       );
     }
   }, [account, invitationState, invitationToken, loadProjects]);
@@ -122,7 +124,7 @@ export function ProjectsPage() {
   const openProject = (project: PaperProject) =>
     navigate(projectPath(project.id));
   const deleteProject = async (project: PaperProject) => {
-    if (!window.confirm(`Move project "${project.name}" to trash?`)) return;
+    if (!window.confirm(`将项目“${project.name}”移入回收站？`)) return;
     setDeleting(project.id);
     setError("");
     try {
@@ -130,7 +132,7 @@ export function ProjectsPage() {
       await loadProjects();
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "Could not delete project",
+        failure instanceof Error ? failure.message : "无法删除项目",
       );
     } finally {
       setDeleting(null);
@@ -145,14 +147,14 @@ export function ProjectsPage() {
           <span>FastWrite</span>
         </Link>
         <div className="topbar-actions">
-          <span className="skill-badge">Agentic Paper Writing</span>
+          <span className="skill-badge">智能论文写作</span>
           <Button
             size="small"
             variant="ghost"
             icon={<Icon name={icons.organization} />}
             onClick={() => setTeamsOpen(true)}
           >
-            Teams
+            团队
           </Button>
           {account ? (
             <Button
@@ -161,7 +163,7 @@ export function ProjectsPage() {
               icon={<Icon name={icons.bell} />}
               onClick={() => setNotificationsOpen(true)}
             >
-              Notifications
+              通知
             </Button>
           ) : null}
           <Button
@@ -178,37 +180,31 @@ export function ProjectsPage() {
                 : setAccountOpen(true)
             }
           >
-            {account ? account.displayName : "Sign in"}
+            {account ? account.displayName : "登录"}
           </Button>
-          {account ? <Button size="small" variant="ghost" onClick={() => setFastcasOpen(true)}>Account authentication</Button> : null}
+          {account ? <Button size="small" variant="ghost" onClick={() => setFastcasOpen(true)}>账号认证</Button> : null}
+          <Link href="/diagrams">科研绘图</Link>
           <ThemeToggle />
         </div>
       </header>
       <FastCASDialog open={fastcasOpen} onClose={() => setFastcasOpen(false)} />
       <main className="projects-main">
         <section className="projects-hero">
-          <div>
-            <p className="eyebrow">WORKSPACE</p>
-            <h1>Your papers, ready to write.</h1>
-            <p>
-              Import an existing LaTeX project or start a new paper in a focused
-              writing workspace.
-            </p>
-          </div>
+          <h1>工作区</h1>
           <div className="projects-hero__actions">
             <Button
               variant="primary"
               icon={<Icon name={icons.add} />}
               onClick={() => setImportOpen(true)}
             >
-              Import paper
+              导入论文
             </Button>
             <Button
               variant="secondary"
               icon={<Icon name={icons.newFile} />}
               onClick={() => setNewOpen(true)}
             >
-              New paper
+              新建论文
             </Button>
           </div>
         </section>
@@ -224,36 +220,36 @@ export function ProjectsPage() {
               {!account ? (
                 <>
                   <span>
-                    Sign in with the invited email address to join this project.
+                    请使用受邀邮箱登录以加入此项目。
                   </span>
                   <Button size="small" onClick={() => setAccountOpen(true)}>
-                    Sign in
+                    登录
                   </Button>
                 </>
               ) : invitationState === "accepting" ? (
-                "Accepting invitation..."
+                "正在接受邀请…"
               ) : invitationState === "accepted" ? (
-                "Invitation accepted. The project is now available in your workspace."
+                "已接受邀请，可在工作区中访问此项目。"
               ) : (
-                invitationError || "Preparing invitation..."
+                invitationError || "正在准备邀请…"
               )}
             </div>
           ) : null}
           <div className="section-heading">
             <div>
-              <h2 id="recent-projects">Recent projects</h2>
-              <p>Papers available in this FastWrite workspace.</p>
+              <h2 id="recent-projects">最近项目</h2>
+
             </div>
             <span>
-              {projects.length} {projects.length === 1 ? "project" : "projects"}
+              {projects.length} 个项目
             </span>
           </div>
           {error ? (
             <div className="page-error" role="alert">
-              <strong>Could not load projects</strong>
+              <strong>无法加载项目</strong>
               <span>{error}</span>
               <Button size="small" onClick={() => void loadProjects()}>
-                Try again
+                重试
               </Button>
             </div>
           ) : null}
@@ -264,17 +260,16 @@ export function ProjectsPage() {
               <div className="projects-empty__art">
                 <Icon name={icons.book} />
               </div>
-              <h3>No papers yet</h3>
+              <h3>暂无论文</h3>
               <p>
-                Bring in a local directory or GitHub repository to open the full
-                writing workspace.
+                导入本地目录或 GitHub 仓库，开始使用完整的写作工作区。
               </p>
               <Button
                 variant="primary"
                 icon={<Icon name={icons.repo} />}
                 onClick={() => setImportOpen(true)}
               >
-                Import your first paper
+                导入第一篇论文
               </Button>
             </div>
           ) : (
@@ -294,8 +289,8 @@ export function ProjectsPage() {
                       <Icon name={icons.arrowRight} className="project-card__arrow" />
                       <IconButton
                         className="project-card__delete"
-                        label={`Delete ${project.name}`}
-                        title="Move project to trash"
+                        label={`删除 ${project.name}`}
+                        title="将项目移入回收站"
                         icon={<Icon name={icons.trash} />}
                         disabled={deleting === project.id}
                         onClick={(event) => {
@@ -352,30 +347,6 @@ export function ProjectsPage() {
   );
 }
 
-function ProductLanding({ onSignIn }: { onSignIn: () => void }) {
-  return (
-    <div className="product-landing">
-      <header className="product-landing__nav">
-        <Link variant="inherit" className="brand" href="/projects"><span className="brand__mark">F</span><span>FastWrite</span></Link>
-        <div className="product-landing__nav-actions"><Link href="#workflow">How it works</Link><Link href="#research">For research teams</Link><Button size="small" variant="secondary" icon={<Icon name={icons.account} />} onClick={onSignIn}>Sign in</Button><ThemeToggle /></div>
-      </header>
-      <main>
-        <section className="product-landing__hero">
-          <div className="product-landing__hero-copy"><p className="eyebrow">THE RESEARCH WRITING WORKSPACE</p><h1>Write papers together.<br /><em>Keep every claim accountable.</em></h1><p className="product-landing__lede">FastWrite brings LaTeX, evidence, review, and careful AI assistance into one workspace built for serious academic collaboration.</p><div className="product-landing__actions"><Button variant="primary" icon={<Icon name={icons.arrowRight} />} onClick={onSignIn}>Open your workspace</Button><Link href="#workflow" className="product-landing__text-link">See the workflow <Icon name={icons.arrowRight} size={16} /></Link></div></div>
-          <div className="product-landing__hero-art" aria-label="A focused academic writing workspace"><div className="landing-window"><div className="landing-window__bar"><span /><span /><span /></div><div className="landing-window__body"><div className="landing-sidebar"><b>PROJECT</b><i>▾ Draft paper</i><i>◦ Introduction.tex</i><i>◦ Methods.tex</i><i>◦ references.bib</i></div><div className="landing-editor"><small>INTRODUCTION.TEX</small><p><span>01</span> <strong>\\section&#123;Introduction&#125;</strong></p><p><span>02</span> Research is a shared process.</p><p><span>03</span> <mark>Evidence turns ideas into knowledge.</mark></p><p><span>04</span> Collaborate with confidence.</p><div className="landing-cursor" /></div><div className="landing-pdf"><div className="pdf-page-mock"><b>FastWrite</b><Divider /><strong>Evidence-first writing</strong><p>Build, review, and refine your research with your team.</p><Divider /><small>1  |  DRAFT</small></div></div></div></div></div>
-        </section>
-        <section id="workflow" className="product-landing__section"><p className="eyebrow">A BETTER RESEARCH LOOP</p><h2>From first outline to final PDF, the record stays clear.</h2><div className="product-landing__grid"><LandingFeature icon={<Icon name={icons.repo} size={24} />} title="One source of truth" text="Edit LaTeX together with versioned files, checkpoints, and a PDF that always shows what was compiled." /><LandingFeature icon={<Icon name={icons.organization} size={24} />} title="Collaboration with context" text="Invite coauthors, discuss anchored passages, and keep decisions attached to the text they change." /><LandingFeature icon={<Icon name={icons.book} size={24} />} title="AI with guardrails" text="Use evidence-aware skills to propose changes. Review every diff before it reaches the manuscript." /></div></section>
-        <section id="research" className="product-landing__proof"><div><p className="eyebrow">BUILT FOR ACADEMIC TEAMS</p><h2>Move quickly without losing the trail.</h2><p>FastWrite keeps authorship, sources, review findings, and compile history connected so your team can focus on the argument.</p></div><div className="product-landing__proof-list"><span><Icon name={icons.passFilled} /> Evidence-linked revisions</span><span><Icon name={icons.passFilled} /> Team roles and path-level access</span><span><Icon name={icons.passFilled} /> OIDC and campus CAS ready</span></div></section>
-      </main>
-      <footer className="product-landing__footer"><span>FastWrite</span><span>Research writing, with a record you can trust.</span><Button variant="ghost" onClick={onSignIn}>Sign in to begin <Icon name={icons.arrowRight} size={15} /></Button></footer>
-    </div>
-  );
-}
-
-function LandingFeature({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
-  return <article className="product-landing__feature"><span className="product-landing__feature-icon">{icon}</span><h3>{title}</h3><p>{text}</p></article>;
-}
-
 function AccountDialog({
   open,
   onClose,
@@ -412,7 +383,7 @@ function AccountDialog({
       onAuthenticated(result.user);
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "Could not authenticate",
+        failure instanceof Error ? failure.message : "无法完成认证",
       );
     } finally {
       setLoading(false);
@@ -421,8 +392,8 @@ function AccountDialog({
   return (
     <Dialog
       open={open}
-      title={mode === "login" ? "Sign in" : "Create account"}
-      description="Use your FastWrite account for team projects and review comments."
+      title={mode === "login" ? "登录" : "创建账号"}
+      description="使用 FastWrite 账号访问团队项目和审稿评论。"
       onClose={onClose}
       footer={
         <>
@@ -434,7 +405,7 @@ function AccountDialog({
               setError("");
             }}
           >
-            {mode === "login" ? "Create account" : "Use existing account"}
+            {mode === "login" ? "创建账号" : "使用已有账号"}
           </Button>
           <Button
             variant="primary"
@@ -443,20 +414,20 @@ function AccountDialog({
             loading={loading}
             disabled={!email.trim() || !password}
           >
-            {mode === "login" ? "Sign in" : "Create account"}
+            {mode === "login" ? "登录" : "创建账号"}
           </Button>
         </>
       }
     >
       <form id="account-auth-form" className="form-stack" onSubmit={(event) => { event.preventDefault(); if (!loading && email.trim() && password) void submit(); }}>
         {mode === "login" && (providers.oidc || providers.cas || providers.fastcas) ? <div className="form-stack">
-          {providers.fastcas ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/login?returnTo=/projects")}>Continue with FastCAS</Button> : null}
-          {providers.oidc ? <Button type="button" variant="secondary" onClick={() => { window.location.assign(`/api/auth/oidc/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`); }}>Continue with organization sign-in</Button> : null}
-          {providers.cas ? <Button type="button" variant="secondary" onClick={() => { window.location.assign("/api/auth/cas/login"); }}>Continue with campus CAS</Button> : null}
+          {providers.fastcas ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/login?returnTo=/projects")}>使用 FastCAS 登录</Button> : null}
+          {providers.oidc ? <Button type="button" variant="secondary" onClick={() => { window.location.assign(`/api/auth/oidc/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`); }}>使用机构账号登录</Button> : null}
+          {providers.cas ? <Button type="button" variant="secondary" onClick={() => { window.location.assign("/api/auth/cas/login"); }}>使用校园 CAS 登录</Button> : null}
         </div> : null}
-        {mode === "register" && providers.fastcasSignup ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/signup?returnTo=/projects")}>Create a new account with FastCAS</Button> : null}
+        {mode === "register" && providers.fastcasSignup ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/signup?returnTo=/projects")}>通过 FastCAS 创建新账号</Button> : null}
         {mode === "register" ? (
-          <Field label="Name">
+          <Field label="名称">
             <TextField
               value={name}
               onChange={setName}
@@ -466,7 +437,7 @@ function AccountDialog({
             />
           </Field>
         ) : null}
-        <Field label="Email">
+        <Field label="邮箱">
           <TextField
             value={email}
             onChange={setEmail}
@@ -476,7 +447,7 @@ function AccountDialog({
             autoFocus={mode === "login"}
           />
         </Field>
-        <Field label="Password">
+        <Field label="密码">
           <TextField
             value={password}
             onChange={setPassword}
@@ -559,7 +530,7 @@ function TeamsDialog({
       setError("");
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "Could not load teams",
+        failure instanceof Error ? failure.message : "无法加载团队",
       );
     }
   }, []);
@@ -578,7 +549,7 @@ function TeamsDialog({
         setError(
           failure instanceof Error
             ? failure.message
-            : "Could not load team policy",
+            : "无法加载团队策略",
         ),
       );
   }, [selected?.id, selected?.personalUserId]);
@@ -604,7 +575,7 @@ function TeamsDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not load team governance",
+          : "无法加载团队管理信息",
       );
     }
   }, [selected?.id, selected?.personalUserId]);
@@ -621,7 +592,7 @@ function TeamsDialog({
       setSelectedId(created.id);
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "Could not create team",
+        failure instanceof Error ? failure.message : "无法创建团队",
       );
     } finally {
       setBusy(false);
@@ -636,7 +607,7 @@ function TeamsDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not save team policy",
+          : "无法保存团队策略",
       );
     } finally {
       setBusy(false);
@@ -664,7 +635,7 @@ function TeamsDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not invite team member",
+          : "无法邀请团队成员",
       );
     } finally {
       setBusy(false);
@@ -683,14 +654,14 @@ function TeamsDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not update team member",
+          : "无法更新团队成员",
       );
     } finally {
       setBusy(false);
     }
   };
   const removeMember = async (userId: string) => {
-    if (!selected || !window.confirm("Remove this member from the team?"))
+    if (!selected || !window.confirm("从团队中移除此成员？"))
       return;
     setBusy(true);
     try {
@@ -700,7 +671,7 @@ function TeamsDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not remove team member",
+          : "无法移除团队成员",
       );
     } finally {
       setBusy(false);
@@ -721,7 +692,7 @@ function TeamsDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not update invitation",
+          : "无法更新邀请",
       );
     } finally {
       setBusy(false);
@@ -731,21 +702,21 @@ function TeamsDialog({
     if (!selected || !groupValue.trim()) return;
     setBusy(true);
     try { await api.teams.saveGroupBinding(selected.id, "new", { idpGroup: groupValue.trim(), role: groupRole }); setGroupValue(""); await loadGovernance(); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "Could not save IdP group binding"); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "无法保存身份服务用户组绑定"); }
     finally { setBusy(false); }
   };
   const previewGroupBinding = async () => {
     if (!selected || !groupValue.trim()) return;
     setBusy(true);
     try { setGroupPreview(await api.teams.previewGroupBindings(selected.id, [groupValue.trim()])); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "Could not preview IdP group binding"); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "无法预览身份服务用户组绑定"); }
     finally { setBusy(false); }
   };
   const removeGroupBinding = async (id: string) => {
     if (!selected) return;
     setBusy(true);
     try { await api.teams.deleteGroupBinding(selected.id, id); await loadGovernance(); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "Could not remove IdP group binding"); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "无法移除身份服务用户组绑定"); }
     finally { setBusy(false); }
   };
   const setAllowedProviders = (providers: string[]) =>
@@ -759,29 +730,29 @@ function TeamsDialog({
   return (
     <Dialog
       open={open}
-      title="Teams"
-      description="Create a research team, set its default Harness policy, and invite members."
+      title="团队"
+      description="创建科研团队、设置默认模型策略并邀请成员。"
       onClose={onClose}
       footer={
         <Button variant="ghost" onClick={onClose}>
-          Close
+          关闭
         </Button>
       }
     >
       <div className="form-stack">
-        <Field label="Team">
+        <Field label="团队">
           <Select
-            aria-label="Team"
+            aria-label="团队"
             value={selectedId}
             onChange={setSelectedId}
-            options={[{ value: "", label: "Choose a team" }, ...teams.map((team) => ({ value: team.id, label: team.personalUserId ? `${team.name} (personal workspace)` : team.name }))]}
+            options={[{ value: "", label: "选择团队" }, ...teams.map((team) => ({ value: team.id, label: team.personalUserId ? `${team.name} （个人工作区）` : team.name }))]}
           />
         </Field>
-        <Field label="New team">
+        <Field label="新团队">
           <TextField
             value={name}
             onChange={setName}
-            placeholder="Applied Cryptography Lab"
+            placeholder="应用密码学实验室"
           />
         </Field>
         <Button
@@ -790,7 +761,7 @@ function TeamsDialog({
           disabled={busy || !name.trim()}
           onClick={() => void create()}
         >
-          Create team
+          创建团队
         </Button>
         {selected && !selected.personalUserId ? (
           <>
@@ -803,17 +774,17 @@ function TeamsDialog({
                 }))
               }
             >
-              Allow personal Harness profiles
+              允许个人模型配置
             </Checkbox>
-            <Field label="Allowed Harness providers">
+            <Field label="允许的模型服务">
               <MultiSelect
-                label="Allowed Harness providers"
+                label="允许的模型服务"
                 value={policy.allowedProviders ?? []}
                 onChange={setAllowedProviders}
-                options={HARNESS_PROVIDERS.map((provider) => ({ value: provider, label: provider }))}
+                options={HARNESS_PROVIDERS.map((provider) => ({ value: provider, label: modelProviderLabel(provider) }))}
               />
             </Field>
-            <Field label="Maximum concurrent runs">
+            <Field label="最大并发任务数">
               <NumberField
                 min={1}
                 max={100}
@@ -829,7 +800,7 @@ function TeamsDialog({
                 }
               />
             </Field>
-            <Field label="Daily budget (USD)">
+            <Field label="每日预算（美元）">
               <NumberField
                 min={0}
                 step={0.01}
@@ -837,12 +808,9 @@ function TeamsDialog({
                 onChange={(next) =>
                   setPolicy((current) => {
                     const updated = { ...current };
-                    // Faithful to the pre-migration handler, which wrote the
-                    // daily budget into maxConcurrentRuns. Left as-is: a control
-                    // swap must not change behaviour (see the task report).
                     if (next !== undefined)
-                      updated.maxConcurrentRuns = next;
-                    else delete updated.maxConcurrentRuns;
+                      updated.dailyBudgetUsd = next;
+                    else delete updated.dailyBudgetUsd;
                     return updated;
                   })
                 }
@@ -854,17 +822,18 @@ function TeamsDialog({
               disabled={busy}
               onClick={() => void savePolicy()}
             >
-              Save Harness policy
+              保存模型策略
             </Button>
+            {canManageMembers ? <HarnessProfileEditor key={selected.id} scope="team" teamId={selected.id}/> : null}
             {canManageMembers ? <div className="field" role="group" aria-labelledby="idp-group-bindings-title">
-              <span id="idp-group-bindings-title">IdP group bindings</span>
-              <Field label="Issuer-qualified group"><TextField value={groupValue} onChange={(next) => { setGroupValue(next); setGroupPreview([]); }} placeholder="https://idp.example:lab-members" /></Field>
-              <Field label="Mapped role"><Select aria-label="Mapped role" value={groupRole} onChange={(next) => setGroupRole(next as "admin" | "member")} options={[{ value: "member", label: "Member" }, { value: "admin", label: "Admin" }]} /></Field>
-              <div className="settings-agent__actions"><Button size="small" variant="secondary" disabled={busy || !groupValue.trim()} onClick={() => void previewGroupBinding()}>Preview</Button><Button size="small" variant="secondary" disabled={busy || !groupValue.trim()} onClick={() => void saveGroupBinding()}>Add binding</Button></div>
-              {groupPreview.length ? <small>Matches: {groupPreview.map((binding) => `${binding.idpGroup} (${binding.role})`).join(", ")}</small> : null}
-              {groupBindings.map((binding) => <div className="team-governance-row" key={binding.id}><span>{binding.idpGroup} <small>{binding.role}</small></span><Button size="small" variant="ghost" disabled={busy} onClick={() => void removeGroupBinding(binding.id)}>Remove</Button></div>)}
+              <span id="idp-group-bindings-title">身份服务用户组绑定</span>
+              <Field label="包含身份服务来源的用户组"><TextField value={groupValue} onChange={(next) => { setGroupValue(next); setGroupPreview([]); }} placeholder="https://idp.example:lab-members" /></Field>
+              <Field label="映射角色"><Select aria-label="映射角色" value={groupRole} onChange={(next) => setGroupRole(next as "admin" | "member")} options={[{ value: "member", label: "成员" }, { value: "admin", label: "管理员" }]} /></Field>
+              <div className="settings-agent__actions"><Button size="small" variant="secondary" disabled={busy || !groupValue.trim()} onClick={() => void previewGroupBinding()}>预览</Button><Button size="small" variant="secondary" disabled={busy || !groupValue.trim()} onClick={() => void saveGroupBinding()}>添加绑定</Button></div>
+              {groupPreview.length ? <small>匹配人数： {groupPreview.map((binding) => `${binding.idpGroup} (${roleLabel(binding.role)})`).join(", ")}</small> : null}
+              {groupBindings.map((binding) => <div className="team-governance-row" key={binding.id}><span>{binding.idpGroup} <small>{roleLabel(binding.role)}</small></span><Button size="small" variant="ghost" disabled={busy} onClick={() => void removeGroupBinding(binding.id)}>移除</Button></div>)}
             </div> : null}
-            <Field label="Invite team member">
+            <Field label="邀请团队成员">
               <TextField
                 type="email"
                 value={email}
@@ -872,18 +841,18 @@ function TeamsDialog({
                 placeholder="researcher@university.edu"
               />
             </Field>
-            <Field label="Team role">
+            <Field label="团队角色">
               <Select
-                aria-label="Team role"
+                aria-label="团队角色"
                 value={role}
                 onChange={(next) => setRole(next as typeof role)}
-                options={[{ value: "member", label: "Member" }, { value: "admin", label: "Admin" }]}
+                options={[{ value: "member", label: "成员" }, { value: "admin", label: "管理员" }]}
               />
             </Field>
-            <Field label="Expires at (optional)">
+            <Field label="到期时间（可选）">
               <TextField type="datetime-local" value={inviteExpiresAt} onChange={setInviteExpiresAt} />
             </Field>
-            <Field label="Message (optional)">
+            <Field label="留言（可选）">
               <TextArea rows={3} maxLength={2000} value={inviteMessage} onChange={setInviteMessage} />
             </Field>
             <Button
@@ -892,10 +861,10 @@ function TeamsDialog({
               disabled={busy || !email.trim()}
               onClick={() => void invite()}
             >
-              Create invitation
+              创建邀请
             </Button>
             {invitationLink ? (
-              <Field label="Invitation link (shown once)">
+              <Field label="邀请链接（仅显示一次）">
                 <TextField
                   readonly
                   value={invitationLink}
@@ -903,7 +872,7 @@ function TeamsDialog({
               </Field>
             ) : null}
             <div className="field" role="group" aria-labelledby="team-members-title">
-              <span id="team-members-title">Members</span>
+              <span id="team-members-title">成员</span>
               {members.map((member) => (
                 <div className="team-governance-row" key={member.userId}>
                   <span>
@@ -911,11 +880,11 @@ function TeamsDialog({
                     <small>{member.user.emailNormalized}</small>
                   </span>
                   {member.role === "owner" ? (
-                    <strong>Owner</strong>
+                    <strong>所有者</strong>
                   ) : canManageMembers ? (
                     <>
                       <Select
-                        aria-label={`Role for ${member.user.displayName}`}
+                        aria-label={`成员角色： ${member.user.displayName}`}
                         value={member.role}
                         disabled={busy}
                         onChange={(next) =>
@@ -924,7 +893,7 @@ function TeamsDialog({
                             next as "admin" | "member",
                           )
                         }
-                        options={[{ value: "member", label: "Member" }, { value: "admin", label: "Admin" }]}
+                        options={[{ value: "member", label: "成员" }, { value: "admin", label: "管理员" }]}
                       />
                       <Button
                         size="small"
@@ -932,29 +901,29 @@ function TeamsDialog({
                         disabled={busy}
                         onClick={() => void removeMember(member.userId)}
                       >
-                        Remove
+                        移除
                       </Button>
                     </>
                   ) : (
-                    <strong>{member.role}</strong>
+                    <strong>{roleLabel(member.role)}</strong>
                   )}
                 </div>
               ))}
-              {!members.length ? <small>No members found.</small> : null}
+              {!members.length ? <small>暂无成员。</small> : null}
             </div>
             <div className="field" role="group" aria-labelledby="team-invitations-title">
-              <span id="team-invitations-title">Invitations</span>
+              <span id="team-invitations-title">邀请</span>
               {invitations.map((invitation) => (
                 <div className="team-governance-row" key={invitation.id}>
                   <span>
                     {invitation.emailNormalized}{" "}
                     <small>
-                      {invitation.role} ·{" "}
+                      {roleLabel(invitation.role)} ·{" "}
                       {invitation.acceptedAt
                         ? "accepted"
                         : invitation.revokedAt
                           ? "revoked"
-                          : "pending"}
+                          : "待处理"}
                     </small>
                     {invitation.message ? <small>{invitation.message}</small> : null}
                   </span>
@@ -970,7 +939,7 @@ function TeamsDialog({
                           void manageInvitation(invitation.id, "resend")
                         }
                       >
-                        Resend
+                        重新发送
                       </Button>
                       <Button
                         size="small"
@@ -980,21 +949,20 @@ function TeamsDialog({
                           void manageInvitation(invitation.id, "revoke")
                         }
                       >
-                        Revoke
+                        撤销
                       </Button>
                     </>
                   ) : null}
                 </div>
               ))}
               {!invitations.length ? (
-                <small>No invitations found.</small>
+                <small>暂无邀请。</small>
               ) : null}
             </div>
           </>
         ) : selected ? (
           <p className="dialog-copy">
-            Personal workspaces do not have a shared Harness policy or team
-            invitations.
+            个人工作区不提供共享模型策略或团队邀请。
           </p>
         ) : null}
         {error ? (
@@ -1045,7 +1013,7 @@ function NotificationsDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not load notifications",
+          : "无法加载通知",
       );
     }
   }, []);
@@ -1055,12 +1023,12 @@ function NotificationsDialog({
   return (
     <Dialog
       open={open}
-      title="Notifications"
-      description="Project access and collaboration updates."
+      title="通知"
+      description="项目访问与协作动态。"
       onClose={onClose}
       footer={
         <Button variant="ghost" onClick={onClose}>
-          Close
+          关闭
         </Button>
       }
     >
@@ -1072,9 +1040,9 @@ function NotificationsDialog({
         ) : null}
         {notifications.map((notification) => (
           <p className="dialog-copy" key={notification.id}>
-            <strong>{notification.title}</strong>
-            {notification.body ? ` ${notification.body}` : ""} ·{" "}
-            {new Date(notification.createdAt).toLocaleString()}{" "}
+            <strong>{notification.title.replace(/ requested access$/, " 申请访问项目").replace("You were mentioned in a comment", "有人在评论中提及了你").replace("Project access approved", "项目访问申请已批准").replace("Project access request declined", "项目访问申请已拒绝")}</strong>
+            {notification.body ? ` ${notification.body.replace(/^Comment thread /, "评论讨论 ")}` : ""} ·{" "}
+            {new Date(notification.createdAt).toLocaleString("zh-CN")}{" "}
             {!notification.readAt ? (
               <Button
                 size="small"
@@ -1084,23 +1052,23 @@ function NotificationsDialog({
                   await load();
                 }}
               >
-                Mark read
+                标记已读
               </Button>
             ) : null}
           </p>
         ))}
-        <div className="notification-preferences" aria-label="Notification preferences">
-          <strong>Delivery preferences</strong>
+        <div className="notification-preferences" aria-label="通知设置">
+          <strong>通知接收方式</strong>
           {preferences.map((preference) => (
             <div className="notification-preference-row" key={preference.type}>
               <span>{notificationPreferenceLabel(preference.type)}</span>
-              <Checkbox checked={preference.inApp} onChange={async (checked) => { await api.notifications.updatePreference(preference.type, { inApp: checked }); await load(); }}>In-app</Checkbox>
-              <Checkbox checked={preference.email} onChange={async (checked) => { await api.notifications.updatePreference(preference.type, { email: checked }); await load(); }}>Email</Checkbox>
+              <Checkbox checked={preference.inApp} onChange={async (checked) => { await api.notifications.updatePreference(preference.type, { inApp: checked }); await load(); }}>站内</Checkbox>
+              <Checkbox checked={preference.email} onChange={async (checked) => { await api.notifications.updatePreference(preference.type, { email: checked }); await load(); }}>邮箱</Checkbox>
             </div>
           ))}
         </div>
         {!notifications.length && !error ? (
-          <p className="sidebar-empty">No notifications.</p>
+          <p className="sidebar-empty">暂无通知。</p>
         ) : null}
       </div>
     </Dialog>
@@ -1108,9 +1076,9 @@ function NotificationsDialog({
 }
 
 function notificationPreferenceLabel(type: "access_request" | "access_request_decision" | "mention") {
-  if (type === "access_request") return "Access requests";
-  if (type === "access_request_decision") return "Access decisions";
-  return "Comment mentions";
+  if (type === "access_request") return "访问申请";
+  if (type === "access_request_decision") return "访问审批结果";
+  return "评论提及";
 }
 
 function NewPaperDialog({
@@ -1175,7 +1143,7 @@ function NewPaperDialog({
       setError(
         createError instanceof Error
           ? createError.message
-          : "Could not create project",
+          : "无法创建项目",
       );
     } finally {
       setLoading(false);
@@ -1184,17 +1152,17 @@ function NewPaperDialog({
   return (
     <Dialog
       open={open}
-      title="Create a new paper"
+      title="创建新论文"
       description={
         selectedVenue?.template
-          ? "Start from the selected venue's complete LaTeX template."
-          : "Start with a minimal, compilable LaTeX document."
+          ? "使用所选会议或期刊的完整 LaTeX 模板开始写作。"
+          : "使用可编译的最简 LaTeX 文档开始写作。"
       }
       onClose={onClose}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            取消
           </Button>
           <Button
             variant="primary"
@@ -1202,33 +1170,33 @@ function NewPaperDialog({
             disabled={!name.trim()}
             onClick={() => void create()}
           >
-            Create paper
+            创建论文
           </Button>
         </>
       }
     >
       <div className="form-stack">
-        <Field label="Project name">
+        <Field label="项目名称">
           <TextField
             value={name}
             onChange={setName}
-            placeholder="My security paper"
+            placeholder="我的安全研究论文"
             autoFocus
           />
         </Field>
         {teams.length ? (
-          <Field label="Workspace">
+          <Field label="工作区">
             <Select
-              aria-label="Workspace"
+              aria-label="工作区"
               value={teamId}
               onChange={setTeamId}
-              options={teams.map((team) => ({ value: team.id, label: team.personalUserId ? `${team.name} (personal)` : team.name }))}
+              options={teams.map((team) => ({ value: team.id, label: team.personalUserId ? `${team.name} （个人）` : team.name }))}
             />
           </Field>
         ) : null}
-        <Field label="Research domain" hint="The research domain and selected venue jointly guide all writing workflows.">
+        <Field label="研究领域" hint="研究领域与所选会议或期刊共同指导全部写作流程。">
           <Select
-            aria-label="Research domain"
+            aria-label="研究领域"
             value={profile}
             onChange={(next) => {
               setProfile(next as WritingProfile);
@@ -1253,16 +1221,16 @@ function NewPaperDialog({
                 target="_blank"
                 rel="noreferrer"
               >
-                Inspect source
+                查看来源
               </Link>
               .
             </small>
             <small>
               {selectedVenue.template.trust === "official"
-                ? "Fetched from the venue's official source."
+                ? "获取自会议或期刊的官方来源。"
                 : selectedVenue.template.trust === "publisher"
-                  ? "Publisher-family starting point; confirm the venue-specific options."
-                  : "Current community-maintained source; compare it with the official author guide before submission."}
+                  ? "使用出版社通用模板，请确认会议或期刊的具体选项。"
+                  : "使用当前社区维护的模板，投稿前请与官方作者指南核对。"}
             </small>
           </div>
         ) : null}
@@ -1278,7 +1246,7 @@ function NewPaperDialog({
 
 function ProjectSkeletons() {
   return (
-    <div className="project-grid" aria-label="Loading projects">
+    <div className="project-grid" aria-label="正在加载项目">
       {[0, 1, 2].map((item) => (
         <div className="project-card project-card--skeleton" key={item}>
           <i />
@@ -1294,9 +1262,9 @@ function relativeTime(value: string): string {
   const days = Math.floor(
     (Date.now() - new Date(value).getTime()) / 86_400_000,
   );
-  if (days <= 0) return "Today";
-  if (days === 1) return "Yesterday";
-  if (days < 30) return `${days} days ago`;
+  if (days <= 0) return "今天";
+  if (days === 1) return "昨天";
+  if (days < 30) return `${days} 天前`;
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",

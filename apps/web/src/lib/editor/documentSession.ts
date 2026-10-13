@@ -54,7 +54,7 @@ export class DocumentSession {
   receive(content: string, version: number): boolean {
     if (version <= this.serverVersion) return false;
     if (this.dirty || this.running) {
-      this.error = new Error("The server changed while this document has local edits. Compare before replacing.");
+      this.error = new Error("服务端版本在本地编辑期间发生了更改，请先比较再替换。");
       this.emit();
       return false;
     }
@@ -66,9 +66,9 @@ export class DocumentSession {
 
   /** User-reviewed resolution rebases the next conditional save; it is not an ACK. */
   resolveConflict(content: string, serverContent: string, serverVersion: number, expectedRevision: number) {
-    if (this.running) throw new Error("A save is still in progress. Wait before applying the comparison.");
-    if (this.localRevision !== expectedRevision) throw new Error("Local text changed while comparing. Reopen the comparison before applying it.");
-    if (serverVersion < this.serverVersion) throw new Error("This comparison is older than the last acknowledged version.");
+    if (this.running) throw new Error("仍有保存操作正在进行，请等待完成后再应用对比结果。");
+    if (this.localRevision !== expectedRevision) throw new Error("比较期间本地文本发生了更改，请重新打开对比后再应用。");
+    if (serverVersion < this.serverVersion) throw new Error("此对比早于最近一次确认的版本。");
     clearTimeout(this.timer); this.timer = undefined;
     this.serverVersion = serverVersion;
     this.baseContent = serverContent;

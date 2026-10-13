@@ -9,7 +9,7 @@ import { ResearchService } from "./research-service";
 const temporaryDirectories: string[] = [];
 afterEach(async () => { await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 
-async function serviceWith(fetcher: typeof fetch) {
+async function serviceWith(fetcher: NonNullable<ConstructorParameters<typeof ResearchService>[2]>) {
   const directory = await mkdtemp(join(tmpdir(), "fastwrite-research-"));
   temporaryDirectories.push(directory);
   const database = new JsonDatabase(directory);
@@ -113,6 +113,12 @@ describe("Authorized PDF evidence", () => {
     expect(first[0]).toMatchObject({ origin: "source-text", representation: "verbatim", locatorType: "page", locator: "1" });
     expect(first[0]!.content).toContain("Distributional Equivalence PDF fixture");
     expect(second).toHaveLength(1);
+    expect(second[0]!.id).toBe(first[0]!.id);
+    await database.mutate(s => { s.sourceEvidence[0]!.status = "approved"; });
+    const replaced = await service.extractPdfEvidence(project.id, work.id, onePagePdf("A revised reference with different text"), true);
+    expect(replaced[0]!.sourceHash).not.toBe(first[0]!.sourceHash);
+    expect(replaced[0]!.status).toBe("candidate");
+    expect(database.snapshot().sourceEvidence[0]!.sourceHash).toBe(replaced[0]!.sourceHash);
     expect(database.snapshot().sourceEvidence.filter((item) => item.workId === work.id)).toHaveLength(1);
     expect(service.extractPdfEvidence(project.id, work.id, Buffer.from("not a PDF").toString("base64"), true)).rejects.toMatchObject({ status: 422, code: "pdf_invalid" });
   });
@@ -139,4 +145,85 @@ describe("FastRead project isolation", () => {
     expect(first.evidenceIds).toEqual([firstEvidence[0]!.id]);
     expect(second.evidenceIds).toEqual([secondEvidence[0]!.id]);
   });
+});
+
+test("search persists provider metadata without creating Evidence or authorization", async () => {
+  const { service, project, database } = await serviceWith((async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes("crossref")) return Response.json({ message: { items: [{ title: ["Metadata paper"], DOI: "10.1000/metadata", abstract: "<jats:p>A public abstract.</jats:p>", subject: ["Science"], URL: "https://example.org/paper", "is-referenced-by-count": 3 }] } });
+    if (url.includes("arxiv")) return new Response('<feed><entry><id>https://arxiv.org/abs/2609.00001</id><title>Arxiv metadata</title><summary>A &amp; B.</summary><category term="cs.AI"/><published>2026-09-01</published></entry></feed>');
+    return Response.json({ results: [], data: [] });
+  }) as typeof fetch);
+  await service.search(project.id, "metadata");
+  const papers = service.listWorks(project.id);
+  expect(papers).toHaveLength(2);
+  expect(papers.find(p => p.title === "Metadata paper")!.metadataObservations[0]!.fields).toMatchObject({ abstract: "A public abstract.", tags: ["Science"], citationCount: 3, sourceUrl: "https://example.org/paper" });
+  expect(papers.find(p => p.title === "Arxiv metadata")!.metadataObservations[0]!.fields).toMatchObject({ abstract: "A & B.", tags: ["cs.AI"], sourceUrl: "https://arxiv.org/abs/2609.00001" });
+  expect(papers.every(p => p.project.status === "candidate")).toBe(true);
+  expect(database.snapshot().sourceEvidence).toHaveLength(0);
+  const originalTime = papers[0]!.metadataObservations[0]!.fetchedAt;
+  await service.search(project.id, "metadata");
+  const repeated = service.listWorks(project.id).find(p => p.id === papers[0]!.id)!;
+  expect(repeated.metadataObservations).toHaveLength(2);
+  expect(repeated.metadataObservations.every(row => row.fetchedAt === originalTime)).toBe(true);
+});
+
+test("research tool access revocation after provider response prevents candidate persistence",async()=>{
+ const {ApiError}=await import("../http");let allowed=true,calls=0;
+ const f=await serviceWith(async()=>{calls++;allowed=false;return Response.json({message:{items:[{title:["Must not persist"],DOI:"10.5555/revoked"}]},results:[],data:[]});});
+ await expect(f.service.search(f.project.id,"test query",undefined,()=>{if(!allowed)throw new ApiError(403,"revoked","Permission revoked");})).rejects.toMatchObject({status:403});
+ expect(calls).toBe(4);expect(f.database.snapshot().researchWorks).toEqual([]);expect(f.database.snapshot().projectResearchWorks).toEqual([]);
+ expect(f.database.snapshot().researchRuns[0]?.status).toBe("failed");
+});
+
+test("queued access revocation is checked when research metadata actually enters the write queue", async () => {
+  let requests = 0, responseChecks = 0;
+  const f = await serviceWith(async () => {
+    requests++;
+    return Response.json({ message: { items: [{ title: ["Queued candidate"], DOI: "10.5555/queued" }] }, results: [], data: [] });
+  });
+  let allowed = true;
+  let revocation: Promise<unknown> | undefined;
+  const authorize = () => {
+    if (requests !== 4) return;
+    responseChecks++;
+    if (!allowed) throw new Error("Queued permission revoked");
+    // Enqueue revocation after the pre-write check; it runs before candidate commit.
+    if (responseChecks === 2) revocation = f.database.mutate(() => { allowed = false; });
+  };
+  await expect(f.service.search(f.project.id, "original query", undefined, authorize)).rejects.toThrow("Queued permission revoked");
+  await revocation;
+  expect(f.database.snapshot().researchWorks).toEqual([]);
+  expect(f.database.snapshot().projectResearchWorks).toEqual([]);
+  expect(f.database.snapshot().metadataObservations).toEqual([]);
+  expect(f.database.snapshot().researchRuns[0]).toMatchObject({ status: "failed", workIds: [] });
+});
+
+test("concurrent searches share one persisted work identity", async () => {
+  const f = await serviceWith(async () => Response.json({ message: { items: [{ title: ["Shared search candidate"], DOI: "10.5555/shared-search" }] }, results: [], data: [] }));
+  const results = await Promise.all([f.service.search(f.project.id, "first query"), f.service.search(f.project.id, "second query")]);
+  expect(results.every(result => result.run.status === "completed")).toBe(true);
+  expect(f.database.snapshot().researchWorks).toHaveLength(1);
+  expect(f.database.snapshot().projectResearchWorks).toHaveLength(1);
+  expect(results[0]!.works[0]!.id).toBe(results[1]!.works[0]!.id);
+  expect(f.database.snapshot().researchRuns.every(run => run.workIds[0] === results[0]!.works[0]!.id)).toBe(true);
+});
+
+test("cancellation during asynchronous write authorization prevents research candidate persistence", async () => {
+  const controller = new AbortController();
+  let requests = 0, responseChecks = 0;
+  const f = await serviceWith(async () => {
+    requests++;
+    return Response.json({ message: { items: [{ title: ["Cancelled candidate"], DOI: "10.5555/cancelled" }] }, results: [], data: [] });
+  });
+  await expect(f.service.search(f.project.id, "cancel at write authorization", controller.signal, async () => {
+    if (requests !== 4) return;
+    responseChecks++;
+    if (responseChecks === 3) { await Promise.resolve(); controller.abort(); }
+  })).rejects.toMatchObject({ code: "research_cancelled" });
+  expect(responseChecks).toBe(3);
+  expect(f.database.snapshot().researchWorks).toEqual([]);
+  expect(f.database.snapshot().projectResearchWorks).toEqual([]);
+  expect(f.database.snapshot().metadataObservations).toEqual([]);
+  expect(f.database.snapshot().researchRuns[0]).toMatchObject({ status: "cancelled", workIds: [] });
 });

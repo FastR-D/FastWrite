@@ -13,6 +13,7 @@
     "package:app": "bun scripts/package-app.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test ./apps/server/src ./apps/web/src ./packages/shared/src ./packages/harness-core/src ./packages/harness-protocol/src ./packages/harness-codex/src ./packages/harness-claude/src",
+    "references:eval": "bun scripts/reference-writing-eval.ts",
     "writing:eval": "bun scripts/writing-eval.ts",
     "papers:eval": "bun scripts/papers-eval.ts",
     "papers:compile": "bun scripts/papers-compile.ts",
@@ -38,6 +39,7 @@
     "e2e:document-recovery": "node scripts/e2e-document-recovery.mjs",
     "e2e:two-checkpoints": "node scripts/e2e-two-checkpoints.mjs",
     "e2e:current-changes": "node scripts/e2e-current-changes.mjs",
+    "e2e:references": "node scripts/e2e-reference-papers.mjs",
     "e2e:evidence-outline": "node scripts/e2e-evidence-outline.mjs",
     "e2e:bottom-panel-layout": "node scripts/e2e-bottom-panel-layout.mjs",
     "e2e:editor-matrix": "node scripts/e2e-editor-matrix.mjs",
@@ -58,7 +60,7 @@
     "yjs": "^13.6.32"
   },
   "patchedDependencies": {
-    "monaco-editor@0.56.0": "patches/monaco-editor@0.55.1.patch"
+    "monaco-editor@0.56.0": "patches/monaco-editor@0.56.0.patch"
   },
   "overrides": {
     "dompurify": "3.4.17",

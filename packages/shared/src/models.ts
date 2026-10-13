@@ -1,3 +1,5 @@
+import type { ReferenceSelection, StyleReferenceContext } from "./reference-papers";
+
 export type ResearchDomainId =
   | "computer-architecture-systems"
   | "computer-networks"
@@ -275,6 +277,8 @@ export interface UploadManifestEntry {
   checksum?: string;
 }
 
+export type UploadTargetKind = "project" | "skill-resource" | "reference-artifact";
+
 export interface UploadSession {
   id: string;
   ownerUserId?: string;
@@ -292,6 +296,7 @@ export interface UploadSession {
   expiresAt: string;
   projectId?: string;
   error?: string;
+  targetKind?: UploadTargetKind;
 }
 
 export type ImportStatus = "queued" | "analyzing" | "copying" | "completed" | "failed" | "cancelled";
@@ -406,6 +411,7 @@ export type ReviseCommandId =
   | "limitations";
 
 export interface ReviseRequest {
+  references?: ReferenceSelection[];
   selection: TextSelection;
   command?: ReviseCommandId;
   instruction?: string;
@@ -417,6 +423,12 @@ export interface ReviseRequest {
   responseLanguage?: "auto" | "zh-CN" | "en-US";
 }
 
+export interface FactualSupportInput {
+  claim: string;
+  context?: string;
+  evidenceSources?: string[];
+}
+
 export interface ReviseTurn {
   role: "user" | "assistant";
   content: string;
@@ -425,6 +437,7 @@ export interface ReviseTurn {
 export type AgentRunStatus = "queued" | "running" | "waiting-approval" | "completed" | "failed" | "cancelled";
 
 export interface AgentRun {
+  styleReferenceContext?: StyleReferenceContext;
   id: string;
   projectId: string;
   type: "revise" | "draft" | "agent" | "review";
@@ -551,6 +564,7 @@ export interface ReviseResponse {
 }
 
 export interface DraftRequest {
+  references?: ReferenceSelection[];
   /** Natural-language Agent message. Preferred by the focused Draft flow. */
   brief?: string;
   /** Structured fields remain supported for API clients and saved legacy plans. */
@@ -569,6 +583,7 @@ export interface DraftOutlineSection {
 export type DraftPlanStatus = "proposed" | "generating" | "waiting-approval" | "accepted" | "cancelled" | "failed";
 
 export interface DraftPlan {
+  styleReferenceContext?: StyleReferenceContext;
   id: string;
   projectId: string;
   agentRunId: string;
@@ -748,6 +763,7 @@ export interface PaperMemory {
 }
 
 export interface AgentTaskRequest {
+  references?: ReferenceSelection[];
   objective: string;
   scope: {
     type: "file" | "section" | "project";
@@ -801,6 +817,7 @@ export interface PublishedSkillDescriptor {
 export type AgentTaskStatus = "proposed" | "generating" | "waiting-approval" | "accepted" | "cancelled" | "failed";
 
 export interface AgentTaskPlan {
+  styleReferenceContext?: StyleReferenceContext;
   id: string;
   projectId: string;
   agentRunId: string;
@@ -1125,7 +1142,7 @@ export interface CompileJob {
 }
 
 export type CompletionKind = "auto";
-export interface CompletionRequest { path: string; cursor: number; fileVersion: number; kind: CompletionKind }
+export interface CompletionRequest { references?: ReferenceSelection[]; path: string; cursor: number; fileVersion: number; kind: CompletionKind }
 export interface CompletionResponse { suggestion: string; path: string; cursor: number; fileVersion: number; kind: CompletionKind }
 
 export const WRITING_PROFILES: ReadonlyArray<{ value: WritingProfile; label: string }> = [

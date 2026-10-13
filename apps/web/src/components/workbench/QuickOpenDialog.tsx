@@ -10,7 +10,7 @@ export function QuickOpenDialog({ open, projectId, onClose, onOpen }: { open: bo
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController(); setError(""); setFiles([]); setLoading(true);
-    api.projects.tree(projectId, controller.signal).then(tree => { if (!controller.signal.aborted) setFiles(paths(tree)); }).catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Could not load files"); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    api.projects.tree(projectId, controller.signal).then(tree => { if (!controller.signal.aborted) setFiles(paths(tree)); }).catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "无法加载文件"); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [open, projectId]);
   const choose = (path: string) => { onOpen(path); onClose(); };
@@ -29,8 +29,8 @@ export function QuickOpenDialog({ open, projectId, onClose, onOpen }: { open: bo
    * were already named — "Matching files" on the listbox, "Find file by name"
    * on the field. One name for both would have to rename one of them.
    */
-  return <Dialog open={open} title="Quick open" description="Type a file name or path. Use arrow keys and Enter to open." onClose={onClose}>
-    <QuickPick label="Matching files" filterLabel="Find file by name" items={files.map(path => ({ id: path, label: path }))} onSelect={choose} emptyMessage={error || loading ? "" : "No matching files."} />
-    {error ? <p role="alert">{error}</p> : loading ? <p role="status">Loading files…</p> : null}
+  return <Dialog open={open} title="快速打开" description="输入文件名或路径，使用方向键选择，按回车打开。" onClose={onClose}>
+    <QuickPick label="匹配的文件" filterLabel="按名称查找文件" items={files.map(path => ({ id: path, label: path }))} onSelect={choose} emptyMessage={error || loading ? "" : "没有匹配的文件。"} />
+    {error ? <p role="alert">{error}</p> : loading ? <p role="status">正在加载文件…</p> : null}
   </Dialog>;
 }

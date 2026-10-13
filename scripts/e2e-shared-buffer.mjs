@@ -17,7 +17,7 @@ try {
   assert.ok(image.ok(), await image.text());
   const read = async () => (await (await context.request.get(`${root}/file?path=main.tex`)).json()).content;
   await page.goto(`${base}/projects/${project.id}`);
-  const source = () => page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true });
+  const source = () => page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true });
   await source().waitFor(); const modelId = await page.locator('.monaco-editor-host').getAttribute('data-model-id');
   assert.ok(modelId);
   await source().focus(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('% SOURCE_MARKER\n');
@@ -31,19 +31,19 @@ try {
   });
   await source().focus(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('% UNSAVED_PREFIX\n');
 
-  const activity = page.getByRole('navigation', { name: 'Workspace views' });
-  const selectFiles = async () => { const button = activity.getByRole('button', { name: 'Files', exact: true }); if (await button.getAttribute('aria-pressed') !== 'true') await button.click(); };
+  const activity = page.getByRole('navigation', { name: "工作区视图" });
+  const selectFiles = async () => { const button = activity.getByRole('button', { name: "文件", exact: true }); if (await button.getAttribute('aria-pressed') !== 'true') await button.click(); };
   await activity.getByRole('button', { name: 'Git', exact: true }).click();
   await page.getByRole('button', { name: 'Compare open buffer with latest checkpoint', exact: true }).click();
   const working = page.getByRole('textbox', { name: /Working buffer for main.tex/ });
   await working.waitFor({ timeout: 10000 }).catch(async failure => { console.error(await page.locator(".workspace-diff").innerText(), await page.locator(".workspace-diff [role], .workspace-diff textarea").evaluateAll(nodes => nodes.map(node => ({ role: node.getAttribute("role"), label: node.getAttribute("aria-label"), tag: node.tagName }))), errors); throw failure; }); assert.equal(await page.locator(".diff-editor-host").getAttribute("data-modified-model-id"), modelId, "diff reuses exact source model"); assert.match((await page.locator('.workspace-diff .view-lines').allTextContents()).join('\n'), /UNSAVED_PREFIX/);
   assert.ok(!(await read()).includes('UNSAVED_PREFIX'), 'working diff includes text that has not reached the server');
   releaseSave();
-  await page.getByRole('button', { name: 'Close main.tex', exact: true }).click();
+  await page.getByRole('button', { name: "关闭 main.tex", exact: true }).click();
   await page.locator('.source-editor').waitFor({ state: 'detached' });
   await working.focus(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('% DIFF_MARKER');
   await until(async () => (await read()).endsWith('% DIFF_MARKER'), 'diff save through shared session');
-  await page.getByRole('button', { name: 'Close comparison', exact: true }).click();
+  await page.getByRole('button', { name: "关闭对比", exact: true }).click();
   await selectFiles(); await page.locator('span[title="main.tex"]').click();
   await source().waitFor(); await source().focus(); await page.keyboard.press('Control+z');
   await until(async () => !(await read()).includes('DIFF_MARKER'), 'source undo reverses diff edit').catch(async failure => { console.error('after undo', await read(), await page.locator('.source-editor').innerText(), errors); throw failure; });

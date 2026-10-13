@@ -97,3 +97,16 @@ test.each([200, 401])("a late refresh response (%s) cannot replace or delete new
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(values.get("fastwrite.session-token")).toBe("new-login");
 });
+
+test("API failures show Chinese guidance while preserving status, code and conflict details", async () => {
+  const details = { path: "main.tex", expectedVersion: 2, actualVersion: 3 };
+  fetchMock.mockResolvedValue(Response.json({ error: { code: "file_version_conflict", message: "File version changed", details } }, { status: 409 }));
+  await expect(api.projects.readAsset("project", "image.png")).rejects.toMatchObject({
+    status: 409, code: "file_version_conflict", message: "文件版本已更改，请比较最新内容后再保存。", serverMessage: "File version changed", details
+  });
+});
+
+test("Chinese server validation details reach the UI unchanged", async () => {
+  fetchMock.mockResolvedValue(Response.json({ error: { code: "reference_scope_invalid", message: "请选择至少一个参考章节。" } }, { status: 400 }));
+  await expect(api.projects.readAsset("project", "image.png")).rejects.toMatchObject({ code: "reference_scope_invalid", message: "请选择至少一个参考章节。" });
+});

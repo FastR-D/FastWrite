@@ -35,7 +35,7 @@ export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, 
         preview: !tab.pinned,
         dirty: !!dirty[tab.path],
         active: activePath === tab.path,
-        closeLabel: `Close ${tab.path}`,
+        closeLabel: `关闭 ${tab.path}`,
         select: () => onSelect(tab.path),
         pin: () => onPin(tab.path),
         close: () => onClose(tab.path)
@@ -43,7 +43,7 @@ export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, 
     }),
     ...comparisons.map(tab => {
       const { request } = tab;
-      const label = `${request.path} (${request.baseRef.slice(0, 8)} → ${request.targetRef === "working" ? "buffer" : request.targetRef === "working-tree" ? `saved v${request.projectVersion}` : request.targetRef.slice(0, 8)})`;
+      const label = `${request.path} (${request.baseRef.slice(0, 8)} → ${request.targetRef === "working" ? "编辑内容" : request.targetRef === "working-tree" ? `已保存版本${request.projectVersion}` : request.targetRef.slice(0, 8)})`;
       return {
         id: `diff:${tab.key}`,
         label,
@@ -53,7 +53,7 @@ export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, 
         preview: false,
         dirty: request.targetRef === "working" && !!dirty[request.path],
         active: activeComparison === tab.key,
-        closeLabel: `Close comparison ${label}`,
+        closeLabel: `关闭对比 ${label}`,
         select: () => onSelectComparison?.(request),
         pin: () => undefined,
         close: () => onCloseComparison?.(tab.key)
@@ -61,14 +61,14 @@ export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, 
     }),
     ...(settings ? [{
       id: "settings",
-      label: "Settings",
-      title: "Project settings",
+      label: "设置",
+      title: "项目设置",
       controls: "settings-editor-panel",
       icon: <Icon name={icons.settingsGear} aria-hidden />,
       preview: false,
       dirty: false,
       active: settings.active,
-      closeLabel: "Close Settings",
+      closeLabel: "关闭设置",
       select: settings.select,
       pin: () => undefined,
       close: settings.close
@@ -78,13 +78,13 @@ export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, 
   const items: TabItem[] = entries.map(({ id, label, title, controls, icon, preview, dirty: isDirty }) => ({ id, label, title, controls, icon, preview, dirty: isDirty }));
   return <TabBar
     className="editor-tabs"
-    label="Open editors"
+    label="已打开的编辑器"
     tabs={items}
     activeId={entries.find(entry => entry.active)?.id ?? null}
     scrollActiveIntoView
     onSelect={id => byId.get(id)?.select()}
     onActivate={id => byId.get(id)?.pin()}
     onClose={id => byId.get(id)?.close()}
-    closeLabel={tab => byId.get(tab.id)?.closeLabel ?? `Close ${tab.id}`}
+    closeLabel={tab => byId.get(tab.id)?.closeLabel ?? `关闭 ${tab.id}`}
   />;
 }

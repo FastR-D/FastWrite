@@ -1,9 +1,9 @@
 import type { AgentTaskIntent, AgentTaskPlan, ChangeSet } from "@fastwrite/shared";
 
 export const AGENT_INTENT_COMMANDS: ReadonlyArray<{ intent: AgentTaskIntent; label: string }> = [
-  { intent: "draft", label: "/draft" },
-  { intent: "continue", label: "/continue" },
-  { intent: "revise", label: "/revise" }
+  { intent: "draft", label: "起草" },
+  { intent: "continue", label: "续写" },
+  { intent: "revise", label: "修改" }
 ];
 
 export function applyAgentIntentCommand(objective: string, intent: AgentTaskIntent): string {

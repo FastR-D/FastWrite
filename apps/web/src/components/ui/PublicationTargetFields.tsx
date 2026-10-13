@@ -27,12 +27,12 @@ export function PublicationTargetFields({ profile, value, onChange, onSelectedVe
   };
 
   return <>
-    <Field label="Target conference or journal" hint={selected ? `${selected.edition} · rules verified ${selected.verifiedAt}${selected.template ? ` · ${selected.template.trust === "official" ? "official template" : selected.template.trust === "publisher" ? "publisher-family template" : "community-mirrored template"}` : ""}` : "Agent, Revise, Review, and Completion use the selected venue's bundled constraints."}>
+    <Field label="目标会议或期刊" hint={selected ? `${selected.edition} · 规则核实于 ${selected.verifiedAt}${selected.template ? ` · ${selected.template.trust === "official" ? "官方模板" : selected.template.trust === "publisher" ? "出版社通用模板" : "社区镜像模板"}` : ""}` : "智能助手、修改、审稿和补全将使用所选会议或期刊的内置规则。"}>
       <Select
-        aria-label="Target conference or journal"
+        aria-label="目标会议或期刊"
         value={value?.venueId ?? ""}
         onChange={chooseVenue}
-        placeholder="General domain guidance (no venue constraints)"
+        placeholder="通用领域指导（不限定会议或期刊）"
         options={[
           /*
            * A selectable "none" entry, matching the raw dropdown this replaced.
@@ -42,14 +42,14 @@ export function PublicationTargetFields({ profile, value, onChange, onSelectedVe
            * (Phrased without the tag name: the raw-control guard scans source
            * text, so writing it out here would trip the guard from a comment.)
            */
-          { value: "", label: "General domain guidance (no venue constraints)" },
-          { label: "CCF-A conferences", options: venues.filter((venue) => venue.kind === "conference").map((venue) => ({ value: venue.value, label: venueOptionLabel(venue) })) },
-          { label: "CCF-A journals", options: venues.filter((venue) => venue.kind === "journal").map((venue) => ({ value: venue.value, label: venueOptionLabel(venue) })) }
+          { value: "", label: "通用领域指导（不限定会议或期刊）" },
+          { label: "CCF A 类会议", options: venues.filter((venue) => venue.kind === "conference").map((venue) => ({ value: venue.value, label: venueOptionLabel(venue) })) },
+          { label: "CCF A 类期刊", options: venues.filter((venue) => venue.kind === "journal").map((venue) => ({ value: venue.value, label: venueOptionLabel(venue) })) }
         ]}
       />
     </Field>
-    {value && templateYears.length ? <Field label="Template year" hint="Only officially verified template editions are offered."><Select aria-label="Template year" value={String(value.year ?? Math.max(...templateYears))} onChange={(next) => onChange({ ...value, year: Number(next) })} options={templateYears.map((year) => ({ value: String(year), label: String(year) }))} /></Field> : null}
-    {value ? <Field label="Manuscript stage"><Select aria-label="Manuscript stage" value={value.stage} onChange={(next) => onChange({ ...value, stage: next as PublicationTarget["stage"] })} options={[{ value: "draft", label: "Draft" }, { value: "submission", label: "Anonymous submission" }, { value: "camera-ready", label: "Camera-ready" }]} /></Field> : null}
-    {value && selected?.tracks?.length ? <Field label="Paper track"><Select aria-label="Paper track" value={value.track ?? selected.tracks[0]!.value} onChange={(next) => onChange({ ...value, track: next })} options={selected.tracks.map((track) => ({ value: track.value, label: track.label }))} /></Field> : null}
+    {value && templateYears.length ? <Field label="模板年份" hint="仅提供已核实的官方模板版本。"><Select aria-label="模板年份" value={String(value.year ?? Math.max(...templateYears))} onChange={(next) => onChange({ ...value, year: Number(next) })} options={templateYears.map((year) => ({ value: String(year), label: String(year) }))} /></Field> : null}
+    {value ? <Field label="稿件阶段"><Select aria-label="稿件阶段" value={value.stage} onChange={(next) => onChange({ ...value, stage: next as PublicationTarget["stage"] })} options={[{ value: "draft", label: "初稿" }, { value: "submission", label: "匿名投稿" }, { value: "camera-ready", label: "终稿" }]} /></Field> : null}
+    {value && selected?.tracks?.length ? <Field label="论文类别"><Select aria-label="论文类别" value={value.track ?? selected.tracks[0]!.value} onChange={(next) => onChange({ ...value, track: next })} options={selected.tracks.map((track) => ({ value: track.value, label: track.label }))} /></Field> : null}
   </>;
 }

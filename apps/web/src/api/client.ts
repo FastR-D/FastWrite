@@ -1,4 +1,5 @@
 import { captureSessionIdentity, rememberSession } from "../lib/sessionIdentity";
+import type { ReferencePaper, ParsedReference, ReferenceSettings, ReferenceSelection, ReferenceProfileStatus } from "@fastwrite/shared";
 import type {
   CollaborationPersistRequest, CollaborationPersistResponse,
   HistoryWorkingComparison, HistoryChanges, HistoryCommit, HistorySummary, HistoryPage, HistoryTreeEntry, HistoryFileSide, HistoryComparison,
@@ -51,9 +52,42 @@ import type {
 } from "@fastwrite/shared";
 
 export class ApiClientError extends Error {
+  readonly serverMessage: string;
   constructor(public readonly status: number, public readonly code: string, message: string, public readonly details?: unknown) {
-    super(message);
+    super(apiErrorMessage(status, code, message));
+    this.serverMessage = message;
   }
+}
+
+function apiErrorMessage(status: number, code: string, message: string): string {
+  if (/[\u4e00-\u9fff]/.test(message)) return message;
+  switch (code) {
+    case "login_invalid": return "邮箱或密码不正确。";
+    case "account_disabled": return "此账号已停用。";
+    case "email_taken": case "account_exists": return "此邮箱已注册，请直接登录。";
+    case "password_invalid": case "password_too_short": return "密码不符合要求，请使用至少 12 个字符。";
+    case "local_proof_required": return "请确认 FastWrite 密码后再管理认证方式。";
+    case "harness_profile_missing": return "尚未配置可用的模型，请在设置中添加模型配置。";
+    case "agent_not_configured": return "请先在项目设置中配置 API 密钥。";
+    case "agent_api_key_required": return "请填写 API 密钥以启用智能助手。";
+    case "file_version_conflict": case "version_conflict": return "文件版本已更改，请比较最新内容后再保存。";
+    case "changeset_conflict": case "change_set_conflict": return "审核期间文件发生了更改，请处理冲突后再应用。";
+    case "invitation_expired": return "邀请已过期，请联系邀请人重新发送。";
+    case "invitation_email_mismatch": return "请使用受邀邮箱登录以接受此邀请。";
+    case "research_work_not_approved": return "请先批准此文献，再生成参考文献建议。";
+    case "pdf_authorization_required": return "请先确认你有权处理此 PDF。";
+    case "reference_revision_conflict": return "参考设置已被更新，请重新加载后再保存。";
+  }
+  if (code.endsWith("_cancelled")) return "操作已取消。";
+  if (status === 401) return "登录已失效，请重新登录。";
+  if (status === 403) return "没有执行此操作的权限。";
+  if (status === 404) return "所需的项目、文件或记录不存在。";
+  if (status === 409) return "当前状态与此操作冲突，请刷新后重试。";
+  if (status === 413) return "文件或请求内容超过大小限制。";
+  if (status === 429) return "请求过于频繁，请稍后重试。";
+  if (status === 400 || status === 422) return "输入内容不符合要求，请检查后重试。";
+  if (status === 503) return "所需服务暂不可用，请检查配置或稍后重试。";
+  return "请求失败，请稍后重试。";
 }
 
 const refreshes = new Map<string, Promise<string | null>>();
@@ -71,7 +105,7 @@ function refreshSession(expiredToken: string): Promise<string | null> {
       return null;
     }
     const session = await response.json() as { token?: unknown; user?: { id: string } };
-    if (typeof session.token !== "string" || !session.token) throw new ApiClientError(502, "invalid_session_response", "Invalid session refresh response");
+    if (typeof session.token !== "string" || !session.token) throw new ApiClientError(502, "invalid_session_response", "登录状态刷新响应无效");
     if (localStorage.getItem(sessionKey) !== expiredToken) return localStorage.getItem(sessionKey);
     rememberSession({ token: session.token, ...(session.user ? { user: session.user } : {}) }, expiredToken);
     return session.token;
@@ -121,7 +155,7 @@ export async function requestResponse(path: string, init?: RequestInit): Promise
     } catch {
       // Preserve the status fallback when a proxy or server returns non-JSON.
     }
-    throw new ApiClientError(response.status, body.error?.code ?? "request_failed", body.error?.message ?? `Request failed (${response.status})`, body.error?.details);
+    throw new ApiClientError(response.status, body.error?.code ?? "request_failed", body.error?.message ?? `请求失败（${response.status}）`, body.error?.details);
   }
   return response;
 }
@@ -159,6 +193,19 @@ function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestI
 }
 
 export const api = {
+  referencePapers: {
+    list: (projectId: string, signal?: AbortSignal) => request<ReferencePaper[]>(`/api/projects/${projectId}/reference-papers`, signal ? { signal } : undefined),
+    upload: (projectId: string, file: File, signal?: AbortSignal) => request<ReferencePaper>(`/api/projects/${projectId}/reference-papers?name=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "content-type": "application/octet-stream" }, body: file, ...(signal ? { signal } : {}) }),
+    parse: (projectId: string, id: string, mainDocument?: string) => request<ReferencePaper>(`/api/projects/${projectId}/reference-papers/${id}/parse`, jsonInit("POST", { mainDocument })),
+    text: (projectId: string, id: string, signal?: AbortSignal) => request<ParsedReference>(`/api/projects/${projectId}/reference-papers/${id}/text`, signal ? { signal } : undefined),
+    source: (projectId: string, id: string, signal?: AbortSignal) => requestResponse(`/api/projects/${projectId}/reference-papers/${id}/source`, signal ? { signal } : undefined),
+    rename: (projectId: string, id: string, title: string) => request<ReferencePaper>(`/api/projects/${projectId}/reference-papers/${id}`, jsonInit("PATCH", { title })),
+    remove: (projectId: string, id: string) => request<void>(`/api/projects/${projectId}/reference-papers/${id}`, { method: "DELETE" }),
+    settings: (projectId: string, signal?: AbortSignal) => request<ReferenceSettings>(`/api/projects/${projectId}/reference-selections`, signal ? { signal } : undefined),
+    saveSettings: (projectId: string, selections: ReferenceSelection[], revision: number) => request<ReferenceSettings>(`/api/projects/${projectId}/reference-selections`, jsonInit("PUT", { selections, revision })),
+    profiles: (projectId: string, signal?: AbortSignal) => request<ReferenceProfileStatus[]>(`/api/projects/${projectId}/reference-profiles`, signal ? { signal } : undefined),
+    prepare: (projectId: string) => request<ReferenceProfileStatus[]>(`/api/projects/${projectId}/reference-profiles`, { method: "POST" })
+  },
   jobs: {
     get: (jobId: string, signal?: AbortSignal) => request<{ id: string; kind: string; status: "queued" | "running" | "completed" | "failed" | "cancelled"; attempts: number; error?: string; output?: unknown }>(`/api/jobs/${encodeURIComponent(jobId)}`, signal ? { signal } : undefined),
     cancel: (jobId: string) => request<{ id: string; status: string }>(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" })

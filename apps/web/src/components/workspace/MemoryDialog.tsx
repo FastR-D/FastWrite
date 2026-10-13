@@ -1,3 +1,4 @@
+import { statusLabel } from "../../lib/labels";
 import { useEffect, useMemo, useState } from "react";
 import type { PaperMemory, PaperProject } from "@fastwrite/shared";
 import { api } from "../../api/client";
@@ -73,17 +74,17 @@ export function MemoryDialog({ open, project, onClose, onNavigate, onChanged }: 
   };
   const parts = useMemo(() => memoryParts(memory), [memory]);
 
-  return <Dialog open={open} width="large" title="Paper Memory" description={memory ? "Edit each memory part here; every save updates the root memory.md file." : "Create a durable project memory and instructions file."} onClose={() => { if (!loading) onClose(); }} footer={<>
-    <Button variant="ghost" onClick={onClose}>Close</Button>
-    {memory ? <Button variant="secondary" icon={<Icon name={icons.fileText} />} onClick={() => { onNavigate("memory.md"); onClose(); }}>Open memory.md</Button> : null}
-    {memory && candidates.length ? <Button variant="primary" icon={<Icon name={icons.check} />} loading={loading} disabled={Boolean(editing)} onClick={() => void apply()}>Apply reviewed memory</Button> : null}
-    <Button variant={memory ? "secondary" : "primary"} icon={loading ? <Icon name={icons.loading} spin /> : <Icon name={icons.refresh} />} loading={loading} onClick={() => void regenerate()}>{memory ? "Regenerate candidate" : "Generate Memory"}</Button>
+  return <Dialog open={open} width="large" title="论文记忆" description={memory ? "在此编辑各部分记忆，每次保存都会更新根目录的 memory.md 文件。" : "创建可持续维护的项目记忆和指令文件。"} onClose={() => { if (!loading) onClose(); }} footer={<>
+    <Button variant="ghost" onClick={onClose}>关闭</Button>
+    {memory ? <Button variant="secondary" icon={<Icon name={icons.fileText} />} onClick={() => { onNavigate("memory.md"); onClose(); }}>打开 memory.md</Button> : null}
+    {memory && candidates.length ? <Button variant="primary" icon={<Icon name={icons.check} />} loading={loading} disabled={Boolean(editing)} onClick={() => void apply()}>应用已审核的记忆</Button> : null}
+    <Button variant={memory ? "secondary" : "primary"} icon={loading ? <Icon name={icons.loading} spin /> : <Icon name={icons.refresh} />} loading={loading} onClick={() => void regenerate()}>{memory ? "重新生成候选内容" : "生成记忆"}</Button>
   </>}>
-    {loading ? <div className="agent-progress"><Icon name={icons.loading} spin /><strong>{operation === "saving" ? "Polishing edited Memory" : operation === "accepting" ? "Accepting Memory candidate" : operation === "applying" ? "Applying reviewed Memory" : "Building Paper Memory"}</strong><span>Existing user instructions remain unchanged.</span></div> : memory ? <div className="memory-panel memory-panel--review">
-      <section className="memory-file-callout"><Icon name={icons.fileText} /><div><strong>memory.md is in the paper root</strong><span>User Instructions are edited directly in the file. Save any overview, section, or fact below to persist it immediately.</span></div></section>
-      <div className="memory-review-summary"><strong>{candidates.length ? `${candidates.length} candidate entries to review` : "Reviewed memory is current"}</strong><span>{parts.length} editable parts</span></div>
-      {parts.length ? <div className="memory-review">{parts.map((part) => <article className="memory-review-card" key={part.key}><header><span>{part.title}</span>{editing?.key === part.key ? <div><IconButton label="Polish and save memory part" icon={<Icon name={icons.save} />} variant="secondary" disabled={!draft.trim()} onClick={() => void savePart()} /><IconButton label="Cancel editing memory part" icon={<Icon name={icons.close} />} onClick={() => setEditing(null)} /></div> : <IconButton label={`Edit ${part.title}`} icon={<Icon name={icons.edit} />} onClick={() => beginEdit(part)} />}</header>{editing?.key === part.key ? <AutoSizeTextarea label={`Edit ${part.title}`} value={draft} onChange={setDraft} /> : <p className="memory-review-card__candidate">{part.content}</p>}{part.candidate && part.candidate !== part.content ? <div className="memory-candidate"><Button size="small" variant="primary" icon={<Icon name={icons.check} />} onClick={() => void acceptCandidate(part)}>Accept candidate</Button><p>{part.candidate}</p></div> : null}</article>)}</div> : <div className="memory-empty"><Icon name={icons.database} /><span>Regenerate after changing the manuscript to create editable memory parts.</span></div>}
-    </div> : <div className="review-empty"><Icon name={icons.database} /><h3>Build a paper memory</h3><p>Generate evidence-backed context, inspect the complete candidate, and save it as an editable root-level memory.md file.</p></div>}
+    {loading ? <div className="agent-progress"><Icon name={icons.loading} spin /><strong>{operation === "saving" ? "正在润色编辑后的记忆" : operation === "accepting" ? "正在接受候选记忆" : operation === "applying" ? "正在应用已审核的记忆" : "正在生成论文记忆"}</strong><span>现有用户指令将保持不变。</span></div> : memory ? <div className="memory-panel memory-panel--review">
+      <section className="memory-file-callout"><Icon name={icons.fileText} /><div><strong>memory.md 位于论文根目录</strong><span>用户指令可直接在文件中编辑，保存下方任一概述、章节或事实即可立即写入文件。</span></div></section>
+      <div className="memory-review-summary"><strong>{candidates.length ? `${candidates.length} 个候选条目待审核` : "已审核的记忆为最新版本"}</strong><span>{parts.length} 个可编辑部分</span></div>
+      {parts.length ? <div className="memory-review">{parts.map((part) => <article className="memory-review-card" key={part.key}><header><span>{part.title}</span>{editing?.key === part.key ? <div><IconButton label="润色并保存此部分记忆" icon={<Icon name={icons.save} />} variant="secondary" disabled={!draft.trim()} onClick={() => void savePart()} /><IconButton label="取消编辑此部分记忆" icon={<Icon name={icons.close} />} onClick={() => setEditing(null)} /></div> : <IconButton label={`编辑 ${part.title}`} icon={<Icon name={icons.edit} />} onClick={() => beginEdit(part)} />}</header>{editing?.key === part.key ? <AutoSizeTextarea label={`编辑 ${part.title}`} value={draft} onChange={setDraft} /> : <p className="memory-review-card__candidate">{part.content}</p>}{part.candidate && part.candidate !== part.content ? <div className="memory-candidate"><Button size="small" variant="primary" icon={<Icon name={icons.check} />} onClick={() => void acceptCandidate(part)}>接受候选内容</Button><p>{part.candidate}</p></div> : null}</article>)}</div> : <div className="memory-empty"><Icon name={icons.database} /><span>修改稿件后重新生成，即可创建可编辑的记忆部分。</span></div>}
+    </div> : <div className="review-empty"><Icon name={icons.database} /><h3>建立论文记忆</h3><p>生成有证据支持的上下文，检查完整候选内容，再保存为根目录下可编辑的 memory.md 文件。</p></div>}
     {error ? <div className="form-error" role="alert">{error}</div> : null}
   </Dialog>;
 }
@@ -95,19 +96,19 @@ function AutoSizeTextarea({ label, value, onChange }: { label: string; value: st
 function memoryParts(memory: PaperMemory | null): MemoryPart[] {
   if (!memory) return [];
   const parts: MemoryPart[] = [];
-  if (memory.overview) parts.push({ key: "overview", kind: "overview", title: "Paper overview", content: memory.overview.content, candidate: memory.overview.candidate?.content });
+  if (memory.overview) parts.push({ key: "overview", kind: "overview", title: "论文概述", content: memory.overview.content, candidate: memory.overview.candidate?.content });
   for (const section of memory.sections ?? []) parts.push({ key: `section:${section.id}`, kind: "section", id: section.id, title: `${section.title} (${section.path})`, content: section.content, candidate: section.candidate?.content });
-  for (const item of memory.items) if (item.status !== "rejected") parts.push({ key: `item:${item.id}`, kind: "item", id: item.id, label: item.label, title: `${item.category}: ${item.label}`, content: item.content, candidate: item.candidate?.content });
+  for (const item of memory.items) if (item.status !== "rejected") parts.push({ key: `item:${item.id}`, kind: "item", id: item.id, label: item.label, title: `${statusLabel(item.category)}： ${item.label}`, content: item.content, candidate: item.candidate?.content });
   return parts;
 }
 
 function candidateEntries(memory: PaperMemory | null): Candidate[] {
   if (!memory) return [];
   const entries: Candidate[] = [];
-  if (memory.overview) entries.push({ title: "Paper overview", ...(memory.overview.locked ? { current: memory.overview.content } : {}), proposed: memory.overview.candidate?.content ?? memory.overview.content });
+  if (memory.overview) entries.push({ title: "论文概述", ...(memory.overview.locked ? { current: memory.overview.content } : {}), proposed: memory.overview.candidate?.content ?? memory.overview.content });
   for (const section of memory.sections ?? []) entries.push({ title: `${section.title} (${section.path})`, ...(section.locked ? { current: section.content } : {}), proposed: section.candidate?.content ?? section.content });
-  for (const item of memory.items) if (item.status !== "rejected") entries.push({ title: `${item.category}: ${item.label}`, ...(item.status === "confirmed" || item.locked ? { current: item.content } : {}), proposed: item.candidate?.content ?? item.content });
+  for (const item of memory.items) if (item.status !== "rejected") entries.push({ title: `${statusLabel(item.category)}： ${item.label}`, ...(item.status === "confirmed" || item.locked ? { current: item.content } : {}), proposed: item.candidate?.content ?? item.content });
   return entries.filter((entry) => !entry.current || entry.current !== entry.proposed);
 }
 
-function message(error: unknown) { return error instanceof Error ? error.message : "Paper Memory request failed"; }
+function message(error: unknown) { return error instanceof Error ? error.message : "论文记忆请求失败"; }

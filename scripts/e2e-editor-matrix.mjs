@@ -19,7 +19,7 @@ try {
       assert.ok(created.ok(), await created.text());
       const project = await created.json();
       await page.goto(`${base}/projects/${project.id}`);
-      const editor = page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true });
+      const editor = page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true });
       await editor.waitFor();
       assert.equal(await page.evaluate(() => window.devicePixelRatio), dpr, `DPR ${dpr} applied`);
       for (const zoom of [80, 100, 125, 150]) {

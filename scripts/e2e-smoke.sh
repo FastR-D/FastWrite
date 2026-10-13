@@ -26,9 +26,9 @@ run_code() {
     status=$?
   fi
   printf '%s\n' "$output"
-  if [ "$status" -ne 0 ]; then return "$status"; fi
+  if [ "$status" -ne 0 ]; then pw snapshot || true; return "$status"; fi
   case "$output" in
-    *"### Error"*) return 1 ;;
+    *"### Error"*) pw snapshot || true; return 1 ;;
   esac
 }
 
@@ -44,7 +44,7 @@ run_accessibility() {
   }));
   const violations = result.violations.filter(item => item.impact === "critical" || item.impact === "serious");
   if (violations.length) {
-    throw new Error(violations.map(item => item.id + ": " + item.nodes.map(node => node.target.join(" ")).join(", ")).join("\n"));
+    throw new Error(violations.map(item => item.id + ": " + item.nodes.map(node => node.target.join(" ") + " " + node.html + " " + node.failureSummary).join(", ")).join("\n"));
   }
 }'
 }
@@ -145,7 +145,9 @@ run_code 'async (page) => {
 }'
 
 run_code 'async (page) => {
-  await page.getByRole("treeitem", { name: "sections", exact: true }).click();
+  const filesButton = page.getByRole("navigation", { name: "Workspace views" }).getByRole("button", { name: "Files", exact: true });
+  if (await filesButton.getAttribute("aria-pressed") !== "true") await filesButton.click();
+  await page.locator("span[title=\"sections\"]").click();
   await page.locator("span[title=\"sections/method.tex\"]").click();
   const methodEditor = page.getByRole("textbox", { name: "Source editor for sections/method.tex" });
   await methodEditor.waitFor({ state: "attached" });
@@ -658,6 +660,8 @@ run_code 'async (page) => {
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   await conflictDialog.getByRole("button", { name: "Overwrite with reviewed result", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "Rollback", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "New task", exact: true }).click();
   const composerAfterAcceptedFinish = agentPanel.getByLabel("What should Agent do?");
   await composerAfterAcceptedFinish.waitFor();
   if (await composerAfterAcceptedFinish.inputValue()) throw new Error("Finishing an accepted Agent review did not open an empty next-task composer");
@@ -1016,6 +1020,7 @@ run_code 'async (page) => {
   const fixBox = await fixButton.boundingBox();
   const pdfBox = await page.locator(".pdf-pane").boundingBox();
   if (!fixBox || !pdfBox || fixBox.x < pdfBox.x || fixBox.x + fixBox.width > pdfBox.x + pdfBox.width) throw new Error("Fix with Agent is clipped in the PDF failure state");
+  await page.getByRole("button", { name: "Hide panel", exact: true }).click();
   await fixButton.click();
   await page.getByRole("region", { name: "Agent workspace" }).waitFor();
   const agentObjective = page.getByRole("textbox", { name: "What should Agent do?" });
@@ -1104,7 +1109,7 @@ run_code 'async (page) => {
   }));
   const violations = accessibility.violations.filter(item => item.impact === "critical" || item.impact === "serious");
   if (violations.length) {
-    throw new Error(violations.map(item => item.id + ": " + item.nodes.map(node => node.target.join(" ")).join(", ")).join("\n"));
+    throw new Error(violations.map(item => item.id + ": " + item.nodes.map(node => node.target.join(" ") + " " + node.html + " " + node.failureSummary).join(", ")).join("\n"));
   }
   await dialog.getByRole("button", { name: "Import paper", exact: true }).click();
   await page.waitForURL(new RegExp("/projects/" + imported.id + "$"));

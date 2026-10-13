@@ -1,6 +1,6 @@
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { PublicationTarget, TargetVenue, UploadManifestEntry, UploadSession } from "@fastwrite/shared";
+import type { PublicationTarget, TargetVenue, UploadManifestEntry, UploadSession, UploadTargetKind } from "@fastwrite/shared";
 import { isIgnoredWorkspacePath, normalizeWorkspacePath } from "@fastwrite/shared";
 import { config } from "../config";
 import { ApiError } from "../http";
@@ -15,6 +15,8 @@ interface CreateUploadInput {
   publicationTarget?: PublicationTarget;
   sourceName: string;
   entries: UploadManifestEntry[];
+  targetKind?: UploadTargetKind;
+  conflictPolicy?: "overwrite" | "skip" | "rename";
 }
 
 export class UploadService {

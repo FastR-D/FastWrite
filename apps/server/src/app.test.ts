@@ -311,7 +311,7 @@ describe("workspace API", () => {
     expect((await request("/api/notification-preferences/mention", { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ inApp: false, email: true }) })).status).toBe(200);
     expect((await request(`/api/projects/${project.id}/comments/${commentResult.id}/messages`, { method: "POST", headers: commenterHeaders, body: JSON.stringify({ body: `A further note for @[Owner](${owner.user.id})` }) })).status).toBe(201);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sentMail).toEqual([{ to: "strict-owner@example.test", subject: "FastWrite: You were mentioned in a comment", text: "You have a new FastWrite notification. Sign in to view it." }]);
+    expect(sentMail).toEqual([{ to: "strict-owner@example.test", subject: "FastWrite: 有人在评论中提及了你", text: "你有新的 FastWrite 通知，请登录查看。" }]);
     const afterPreference = await request("/api/notifications", { headers: ownerHeaders });
     expect((await afterPreference.json() as Array<{ type: string }>).filter((item) => item.type === "mention")).toHaveLength(1);
     expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: commenterHeaders, body: JSON.stringify({ path: "blocked.tex", content: "No permission" }) })).status).toBe(403);
@@ -1429,9 +1429,9 @@ describe("workspace API", () => {
     const changeSet = await generated.json() as { changeSet: ChangeSet; run: { steps: Array<{ id: string; label: string; status: string }>; auditTrail: Array<{ action: string }> } };
     expect(changeSet.changeSet).toMatchObject({ approvalMode: "explicit-finish", status: "proposed" });
     expect(changeSet.run.steps).toEqual([
-      { id: "generate-file-1", label: "Process main.tex", status: "completed" },
-      { id: "generate-file-2", label: "Process sections/introduction.tex", status: "completed" },
-      { id: "generate-file-3", label: "Process references.bib", status: "completed" }
+      { id: "generate-file-1", label: "处理 main.tex", status: "completed" },
+      { id: "generate-file-2", label: "处理 sections/introduction.tex", status: "completed" },
+      { id: "generate-file-3", label: "处理 references.bib", status: "completed" }
     ]);
     expect(visibleGenerationDocuments.every((content) => !content.includes("Keep this user instruction"))).toBe(true);
     expect(changeSet.run.auditTrail.filter((event) => event.action === "generation-progress")).toHaveLength(3);
@@ -1501,7 +1501,7 @@ describe("workspace API", () => {
     expect(maxConcurrentGenerations).toBeGreaterThan(1);
     const response = await generated.json() as { changeSet: ChangeSet; run: { auditTrail: Array<{ action: string; summary: string }> } };
     expect(response.changeSet.changes.map((change) => change.path).sort()).toEqual(["main.tex", "sections/introduction.tex", "sections/method.tex"]);
-    expect(response.run.auditTrail.find((event) => event.action === "execution-started")?.summary).toContain("in parallel");
+    expect(response.run.auditTrail.find((event) => event.action === "execution-started")?.summary).toContain("并行");
   });
 
   test("routes every explicit Agent command and repairs an incomplete compatible-model plan", async () => {

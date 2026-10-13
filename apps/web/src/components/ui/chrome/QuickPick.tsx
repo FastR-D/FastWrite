@@ -40,7 +40,7 @@ const MAX_VISIBLE = 100;
  * row, which is the combobox pattern — moving DOM focus into the list would
  * break typing.
  */
-export function QuickPick({ items, filter = true, label, filterLabel = label, onSelect, emptyMessage = "No matches" }: QuickPickProps) {
+export function QuickPick({ items, filter = true, label, filterLabel = label, onSelect, emptyMessage = "没有匹配项" }: QuickPickProps) {
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const list = useRef<HTMLDivElement>(null);

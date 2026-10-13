@@ -12,5 +12,5 @@ export function ThemeToggle() {
     return () => window.removeEventListener(THEME_CHANGE_EVENT, sync);
   }, []);
   const dark = theme === "dark";
-  return <IconButton label={dark ? "Use light theme" : "Use dark theme"} icon={<Icon name={icons.colorMode} />} onClick={() => applyTheme(dark ? "light" : "dark")} />;
+  return <IconButton label={dark ? "切换浅色主题" : "切换深色主题"} icon={<Icon name={icons.colorMode} />} onClick={() => applyTheme(dark ? "light" : "dark")} />;
 }

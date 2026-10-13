@@ -26,7 +26,7 @@ export function createNotification(
         attempts: 0,
         recipientEmail: recipient,
         subject: `FastWrite: ${input.title}`,
-        text: "You have a new FastWrite notification. Sign in to view it.",
+        text: "你有新的 FastWrite 通知，请登录查看。",
         createdAt: now,
         updatedAt: now
       });

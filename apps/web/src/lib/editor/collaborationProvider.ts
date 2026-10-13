@@ -1,5 +1,5 @@
 import * as Y from "yjs";
-import * as monaco from "monaco-editor";
+import * as monaco from "./monacoRuntime";
 import { IndexeddbPersistence } from "y-indexeddb";
 import { captureSessionIdentity } from "../sessionIdentity";
 import * as decoding from "lib0/decoding";
@@ -71,7 +71,7 @@ export class CollaborationProvider {
   }
 
   ready(): Promise<void> {
-    if (this.disposed) return Promise.reject(new Error("Collaboration provider is closed"));
+    if (this.disposed) return Promise.reject(new Error("协作服务已关闭"));
     if (this.initialized) return Promise.resolve();
     if (this.initializing) return this.initializing;
     this.initializing = this.initialize().catch(error => {
@@ -83,8 +83,8 @@ export class CollaborationProvider {
     this.assertIdentity();
     const state = await api.projects.collaboration(this.projectId, this.entry.session.path);
     if (this.disposed) return;
-    if (this.documentId && this.documentId !== state.documentId) throw new Error("The collaboration document was replaced. Local text is retained for comparison.");
-    if (state.fileVersion < this.entry.session.serverVersion) throw new Error("The file changed outside collaboration. Local text is retained; compare before reconnecting.");
+    if (this.documentId && this.documentId !== state.documentId) throw new Error("协作文档已被替换，已保留本地文本用于比较。");
+    if (state.fileVersion < this.entry.session.serverVersion) throw new Error("文件在协作之外发生了更改，已保留本地文本，请先比较再重新连接。");
     this.documentId = state.documentId;
     if (!this.persistence) this.persistence = new IndexeddbPersistence(`fastwrite-collaboration:v2:${this.identity.scope}:${this.projectId}:${state.documentId}`, this.doc);
     await this.persistence.whenSynced;
@@ -93,7 +93,7 @@ export class CollaborationProvider {
     const text = this.doc.getText("content");
     const pending = this.entry.model.getValue();
     if (pending !== this.initialContent) {
-      if (text.toString() !== this.initialContent) throw new Error("Local input and the collaborative document both changed during initialization. Local text is retained for comparison.");
+      if (text.toString() !== this.initialContent) throw new Error("初始化期间本地内容与协作文档均有更改，已保留本地文本用于比较。");
       // Reconcile only the changed range, retaining CRDT identities for untouched text.
       let start = 0, end = 0;
       while (start < Math.min(pending.length, this.initialContent.length) && pending[start] === this.initialContent[start]) start++;
@@ -202,7 +202,7 @@ export class CollaborationProvider {
     try {
       const state = await api.projects.collaboration(this.projectId, this.entry.session.path);
       if (this.disposed) return;
-      if (state.documentId !== this.documentId) { this.state = "conflict"; this.error = new Error("The collaboration document was replaced. Local text is retained for comparison."); this.changed(); return; }
+      if (state.documentId !== this.documentId) { this.state = "conflict"; this.error = new Error("协作文档已被替换，已保留本地文本用于比较。"); this.changed(); return; }
       Y.applyUpdate(this.doc, fromBase64(state.update), REMOTE);
       const grant = await api.projects.collaborationToken(this.projectId, this.entry.session.path);
       this.tokenExpiresAt = Date.parse(grant.expiresAt);
@@ -222,8 +222,8 @@ export class CollaborationProvider {
             if (encoding.length(reply) > 1) socket.send(encoding.toUint8Array(reply));
             if (sync === messageYjsSyncStep2) { this.state = "synced"; this.error = null; this.changed(); }
           } else if (type === 1) applyAwarenessUpdate(this.awareness, decoding.readVarUint8Array(decoder), REMOTE);
-          else socket.close(1003, "Invalid collaboration message");
-        } catch { socket.close(1003, "Invalid collaboration update"); }
+          else socket.close(1003, "协作消息无效");
+        } catch { socket.close(1003, "协作更新无效"); }
       };
       socket.onclose = (event) => { if (this.socket === socket) { this.socket = undefined; if ([4003, 4008].includes(event.code)) this.tokenExpired = true; this.scheduleReconnect(); } };
     } catch (error) { this.tokenExpired = error instanceof Error && /401|403|expired|revoked/i.test(error.message); this.error = error; this.scheduleReconnect(); }
@@ -238,7 +238,7 @@ export class CollaborationProvider {
   async persist() {
     this.assertIdentity();
     await this.ready();
-    if (this.disposed || !this.documentId || this.state === "conflict") throw this.error ?? new Error("Collaboration is unavailable");
+    if (this.disposed || !this.documentId || this.state === "conflict") throw this.error ?? new Error("协作暂不可用");
     const update = toBase64(Y.encodeStateAsUpdate(this.doc));
     const revision = this.localRevision, documentId = this.documentId;
     const operation = this.persistTail.catch(() => undefined).then(async () => {
@@ -259,7 +259,7 @@ export class CollaborationProvider {
     this.assertIdentity();
     await this.ready();
     const state = await api.projects.collaboration(this.projectId, this.entry.session.path);
-    if (state.documentId !== this.documentId) throw new Error("The collaboration document was replaced. Reopen it before editing.");
+    if (state.documentId !== this.documentId) throw new Error("协作文档已被替换，请重新打开后再编辑。");
     Y.applyUpdate(this.doc, fromBase64(state.update), REMOTE);
     await this.entry.session.flush();
   }

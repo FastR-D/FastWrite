@@ -29,6 +29,8 @@ Web Workspace
 - Workspace 保存论文文件；成功编译产生与项目版本绑定的 PDF artifact 和 SyncTeX；JSON Database 保存 Run、Plan、ChangeSet、Review、Memory 和版本元数据。
 - Writing Skill 定义论文结构、写作风格和审稿标准，不建设第二套 Prompt 模式系统。
 
+- 参考论文是独立的项目资源，通过 `styleReferenceContext` 提供写法示例，不属于当前论文源码、Paper Memory 或事实证据。参考范围（全文、章节、页码或选段）与当前稿件的写作目标范围独立。长文先分析全部选定文本，再汇总有界写法特征；Agent/Draft 的计划和运行保存参考上下文快照，确认计划后的设置变更不改变该次执行。Completion 只读取缓存的精简特征；Review 不读取写法参考。参考资料变更使用独立解析与设置版本，不递增正文项目版本。
+
 ## 3. 四条工作流契约
 
 | 工作流 | 输入单位 | 输出 | 写入规则 |

@@ -28,7 +28,7 @@ try {
     assert.ok(result.ok(), await result.text());
   }
   await page.goto(`${base}/projects/${project.id}`);
-  const editor = () => page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true });
+  const editor = () => page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true });
   await editor().waitFor();
   await editor().focus();
   await page.keyboard.press('Control+Home');
@@ -64,7 +64,7 @@ try {
   await editor().focus();
   await page.keyboard.insertText('_FAST');
   await page.locator('span[title="other.tex"]').click();
-  await page.getByRole('textbox', { name: 'Source editor for other.tex', exact: true }).waitFor();
+  await page.getByRole('textbox', { name: "源文件编辑器： other.tex", exact: true }).waitFor();
   await page.locator('span[title="main.tex"]').click();
   await editor().waitFor();
   await waitFor(async () => (await read('main.tex')).startsWith('SAVE_A_B_FAST'), 'fast file switch preserves queued save');
@@ -93,7 +93,7 @@ try {
   for (let index = 0; index < 25; index++) {
     await editor().focus();
     await page.locator('span[title="other.tex"]').click();
-    const other = page.getByRole('textbox', { name: 'Source editor for other.tex', exact: true });
+    const other = page.getByRole('textbox', { name: "源文件编辑器： other.tex", exact: true });
     await other.waitFor();
     await other.focus();
     await page.locator('span[title="main.tex"]').click();

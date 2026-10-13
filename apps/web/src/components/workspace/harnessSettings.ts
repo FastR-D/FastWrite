@@ -7,7 +7,7 @@ export function harnessSettingsSaveDecision(draft: HarnessSettingsDraft, baselin
   const apiKey = draft.apiKey.trim(); const baseURL = draft.baseURL.trim(); const model = draft.model.trim();
   const changed = baseURL !== baseline.baseURL.trim() || model !== baseline.model.trim() || draft.wireAPI !== baseline.wireAPI;
   if (!apiKey && !changed) return { kind: "unchanged" };
-  if (!apiKey) return { kind: "invalid", message: "Enter an API key to save the Harness settings." };
-  if (baseURL) { try { const url = new URL(baseURL); if (!["http:", "https:"].includes(url.protocol)) throw new Error(); } catch { return { kind: "invalid", message: "Base URL must be a valid HTTP or HTTPS URL." }; } }
+  if (!apiKey) return { kind: "invalid", message: "请填写 API 密钥以保存模型设置。" };
+  if (baseURL) { try { const url = new URL(baseURL); if (!["http:", "https:"].includes(url.protocol)) throw new Error(); } catch { return { kind: "invalid", message: "服务地址必须为有效的 HTTP 或 HTTPS 地址。" }; } }
   return { kind: "save", body: { apiKey, ...(baseURL ? { baseURL } : {}), ...(model ? { model } : {}), wireAPI: draft.wireAPI } };
 }

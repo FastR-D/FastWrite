@@ -17,7 +17,7 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
   async getStatus(): Promise<HarnessStatus> {
     return this.sdk instanceof ClaudeCliBridge ? this.sdk.getStatus() : { kind: "claude", state: "ready", message: "Claude SDK bridge available" };
   }
-  async getCapabilities(): Promise<HarnessCapabilities> { const cli = this.sdk instanceof ClaudeCliBridge; return { streaming: true, sessions: true, resume: true, approvals: !cli && Boolean(this.sdk.resolveApproval), skills: !cli, mcp: !cli }; }
+  async getCapabilities(): Promise<HarnessCapabilities> { const cli = this.sdk instanceof ClaudeCliBridge; return { streaming: true, sessions: true, resume: true, approvals: !cli && Boolean(this.sdk.resolveApproval), skills: !cli, mcp: !cli, images: !cli }; }
   async createSession(input: { cwd: string; title?: string }): Promise<SessionReference> { if (!this.sdk) throw new Error("Claude Agent SDK is unavailable"); return { harness: "claude", sessionId: await this.sdk.createSession(input), cwd: input.cwd }; }
   async resumeSession(session: SessionReference): Promise<SessionReference> { if (!this.sdk) throw new Error("Claude Agent SDK is unavailable"); await this.sdk.resumeSession({ sessionId: session.sessionId, cwd: session.cwd }); return session; }
   sendMessage(input: SendMessageInput): AsyncIterable<HarnessEvent> {

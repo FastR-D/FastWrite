@@ -22,13 +22,12 @@ function siglumStaticHeaders(): Plugin {
 
 export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, process.cwd(), "");
-  const webPort = Number.parseInt(process.env.FASTWRITE_WEB_PORT ?? environment.FASTWRITE_WEB_PORT ?? "3002", 10);
   const apiOrigin = process.env.FASTWRITE_API_ORIGIN ?? environment.FASTWRITE_API_ORIGIN ?? `http://localhost:${process.env.FASTWRITE_PORT ?? environment.FASTWRITE_PORT ?? "3003"}`;
   return {
     plugins: [siglumStaticHeaders(), react(), wasm()],
     server: {
       host: "127.0.0.1",
-      port: webPort,
+      port: 3002,
       strictPort: true,
       headers: {
         "Cross-Origin-Opener-Policy": "same-origin",

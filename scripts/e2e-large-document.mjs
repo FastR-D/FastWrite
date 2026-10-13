@@ -24,10 +24,10 @@ try {
   }
   const openedAt = now();
   await page.goto(`${base}/projects/${project.id}`);
-  await page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true }).waitFor();
+  await page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true }).waitFor();
   const largeAt = now();
   await page.locator('span[title="large.tex"]').click();
-  const editor = page.getByRole('textbox', { name: 'Source editor for large.tex', exact: true });
+  const editor = page.getByRole('textbox', { name: "源文件编辑器： large.tex", exact: true });
   await editor.waitFor();
   const openMs = now() - largeAt;
   await editor.focus();
@@ -38,7 +38,7 @@ try {
   const inputMs = now() - inputAt;
   const switchAt = now();
   await page.locator('span[title="small.tex"]').click();
-  await page.getByRole('textbox', { name: 'Source editor for small.tex', exact: true }).waitFor();
+  await page.getByRole('textbox', { name: "源文件编辑器： small.tex", exact: true }).waitFor();
   const switchMs = now() - switchAt;
   assert.ok(openMs < 5000, `large document open ${openMs.toFixed(1)}ms exceeded 5s smoke threshold`);
   assert.ok(inputMs < 1000, `large document input ${inputMs.toFixed(1)}ms exceeded 1s smoke threshold`);

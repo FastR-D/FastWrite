@@ -63,9 +63,9 @@ export class ReviewService {
       createdAt,
       updatedAt: createdAt,
       steps: [
-        { id: "snapshot", label: "Read current workspace", status: "completed" },
-        { id: "evidence", label: "Collect section evidence", status: "running" },
-        { id: "synthesis", label: "Synthesize and deduplicate issues", status: "pending" }
+        { id: "snapshot", label: "读取当前工作区", status: "completed" },
+        { id: "evidence", label: "收集章节证据", status: "running" },
+        { id: "synthesis", label: "汇总并合并重复问题", status: "pending" }
       ],
     };
     await this.database.mutate((state) => { state.agentRuns.push(run); });

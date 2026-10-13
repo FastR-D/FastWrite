@@ -1,0 +1,15 @@
+import type { AgentProvider, AgentTaskInput, AgentTaskExecutionInput, DraftAgentInput, ReviseAgentInput, CompletionAgentInput } from "../agent/provider";
+import type { DraftOutlineSection, ReferenceStyleAnalysisInput } from "@fastwrite/shared";
+export const referenceTestOutline: DraftOutlineSection[] = ["Abstract", "Introduction", "Method", "Evaluation", "Conclusion"].map(title => ({ title, path: `sections/${title.toLowerCase()}.tex`, purpose: `Explain ${title.toLowerCase()} using supplied evidence` }));
+export function referenceTestProvider(calls: Array<{ operation: string; input: unknown }> = []): AgentProvider {
+  const capture = (operation: string, input: unknown) => { calls.push({ operation, input: structuredClone(input) }); };
+  return {
+    async analyzeReferenceStyle(input: ReferenceStyleAnalysisInput) { capture("style", input); return { features: ["Introduce a concrete problem, explain the gap, then describe the approach.", "Use a topic sentence, supporting explanation, and a bounded transition."] }; },
+    async revise(input: ReviseAgentInput) { capture("revise", input); return { replacement: input.workingText.replace("Original statement.", "Revised statement."), rationale: "Uses the selected paragraph pattern while preserving the paper facts." }; },
+    async complete(input: CompletionAgentInput) { capture("complete", input); return { suggestion: " This observation motivates the next design step." }; },
+    async planAgentTask(input: AgentTaskInput) { capture("plan", input); return { steps: ["Improve paragraph flow in the requested target"], affectedFiles: [input.scope.path ?? input.documents.find(document => document.path.endsWith(".tex"))?.path ?? "main.tex"], risks: [], validation: ["Preserve evidence and compile"] }; },
+    async generateAgentTask(input: AgentTaskExecutionInput) { capture("generate", input); const document = input.documents.find(candidate => candidate.path === input.targetPath); return { files: [{ path: input.targetPath, content: (document?.content ?? "").replace("Original statement.", "Revised statement."), rationale: "Improves flow without importing reference facts." }] }; },
+    async planDraft(input: DraftAgentInput) { capture("draft-plan", input); return { outline: referenceTestOutline }; },
+    async generateDraft(input: DraftAgentInput & { outline: DraftOutlineSection[]; mainDocument: string }) { capture("draft-generate", input); return { files: [{ path: input.mainDocument, content: `\\documentclass{article}\n\\begin{document}\n${input.outline.map(section => `\\input{${section.path}}`).join("\n")}\n\\end{document}\n`, rationale: "Compilable entry document" }, ...input.outline.map(section => ({ path: section.path, content: `\\section{${section.title}}\nThe protocol is described through a concrete problem and a bounded design response. This section explains its purpose using the available manuscript material. The discussion preserves the supplied evidence and states the scope of the proposed approach.\n`, rationale: "Uses the requested writing pattern" }))] }; }
+  };
+}

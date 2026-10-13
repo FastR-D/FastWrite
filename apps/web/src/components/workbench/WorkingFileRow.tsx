@@ -38,7 +38,7 @@ export function WorkingFileRow({ file, group, onOpen, onStage, onUnstage, onDisc
       <Button variant="ghost" size="small" className="working-file__open" onClick={onOpen} title={label}>
         <b className={`working-file__marker working-file__marker--${marker}`} aria-hidden="true">{marker}</b>
         <span className="working-file__path">{label}</span>
-        {file.conflicted ? <span className="working-file__note">conflict</span> : null}
+        {file.conflicted ? <span className="working-file__note">冲突</span> : null}
       </Button>
       {/*
         Actions are real buttons rather than decorative icons on the row, so they
@@ -50,9 +50,9 @@ export function WorkingFileRow({ file, group, onOpen, onStage, onUnstage, onDisc
         title in one place instead of being restated at each call site.
       */}
       <span className="working-file__actions">
-        {group === "changes" && onStage ? <IconButton label={`Stage ${file.path}`} icon={<Icon name={icons.add} />} onClick={onStage} /> : null}
-        {group === "changes" && onDiscard ? <IconButton label={`Discard changes in ${file.path}`} icon={<Icon name={icons.discard} />} onClick={onDiscard} /> : null}
-        {group === "staged" && onUnstage ? <IconButton label={`Unstage ${file.path}`} icon={<Icon name={icons.discard} />} onClick={onUnstage} /> : null}
+        {group === "changes" && onStage ? <IconButton label={`暂存 ${file.path}`} icon={<Icon name={icons.add} />} onClick={onStage} /> : null}
+        {group === "changes" && onDiscard ? <IconButton label={`放弃文件更改： ${file.path}`} icon={<Icon name={icons.discard} />} onClick={onDiscard} /> : null}
+        {group === "staged" && onUnstage ? <IconButton label={`取消暂存 ${file.path}`} icon={<Icon name={icons.discard} />} onClick={onUnstage} /> : null}
       </span>
     </div>
   );

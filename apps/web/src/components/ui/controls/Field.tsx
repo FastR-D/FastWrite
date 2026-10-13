@@ -96,7 +96,7 @@ export function Field({ label, children, hint, error, optional = false, compact 
       <div className={`${styles.field} ${compact ? styles.compact : ""} ${className}`.trim()}>
         <label className={styles.label} htmlFor={id}>
           {label}
-          {optional ? <span className={styles.optional}>(optional)</span> : null}
+          {optional ? <span className={styles.optional}>（可选）</span> : null}
         </label>
         {content}
         {error ? <small className={styles.error} id={errorId}>{error}</small>

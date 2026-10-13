@@ -1,3 +1,4 @@
+import type { ReferencePaperService } from "../references/service";
 import type { CompletionRequest, CompletionResponse, OutlineItem, WorkspaceTreeNode } from "@fastwrite/shared";
 import { ApiError } from "../http";
 import type { WorkspaceService } from "../workspace/workspace-service";
@@ -33,7 +34,8 @@ export class CompletionService {
     private readonly workspaces: WorkspaceService,
     private readonly skills: SkillRegistry,
     private readonly provider: AgentProvider | AgentGateway | undefined,
-    private readonly memories: MemoryService
+    private readonly memories: MemoryService,
+    private readonly references?: ReferencePaperService
   ) {}
 
   private get agent(): AgentProvider | undefined { return this.provider as AgentProvider | undefined; }
@@ -67,7 +69,9 @@ export class CompletionService {
     const memoryInstructions = memory.content ? `\n\nLocal Paper Context (paper core and current section only):\n${memory.content}` : "";
     const contextBefore = opened.content.slice(Math.max(0, request.cursor - BEFORE_LIMIT), request.cursor);
     const contextAfter = opened.content.slice(request.cursor, request.cursor + AFTER_LIMIT);
+    const styleReferenceContext = await this.references?.resolve(projectId, request.references, undefined, true);
     const result = await this.agent.complete({
+      ...(styleReferenceContext ? { styleReferenceContext } : {}),
       intent: inferCompletionIntent(opened.file.path, contextBefore),
       path: opened.file.path,
       contextBefore,

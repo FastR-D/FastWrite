@@ -71,7 +71,7 @@ export function App() {
     window.addEventListener("keydown", save, { capture: true });
     return () => window.removeEventListener("keydown", save, { capture: true });
   }, []);
-  if (!authenticationReady) return <main className="app-loading" aria-live="polite">Completing sign-in…</main>;
+  if (!authenticationReady) return <main className="app-loading" aria-live="polite">正在完成登录…</main>;
   const page = route.name === "admin" ? <AdminPage /> : route.name === "diagrams" ? <DiagramsPage /> : route.name === "workspace" ? <WorkspacePage key={identity} projectId={route.projectId} /> : route.name === "shared" ? <SharedReviewPage token={route.token} /> : route.name === "access-request" ? <AccessRequestPage projectId={route.projectId} /> : route.name === "gallery" ? <GalleryPage /> : <ProjectsPage />;
-  return <Suspense fallback={<main className="app-loading" aria-live="polite">Loading FastWrite…</main>}>{route.name !== "diagrams" && <Link href="/diagrams" style={{position:"fixed",bottom:18,right:24,zIndex:100,background:"#244f3d",color:"white",padding:"10px 18px",borderRadius:8}}>科研绘图</Link>}{page}</Suspense>;
+  return <Suspense fallback={<main className="app-loading" aria-live="polite">正在加载 FastWrite…</main>}>{route.name !== "diagrams" && route.name !== "projects" && <Link href="/diagrams" style={{position:"fixed",bottom:18,right:24,zIndex:100,background:"#244f3d",color:"white",padding:"10px 18px",borderRadius:8}}>科研绘图</Link>}{page}</Suspense>;
 }
