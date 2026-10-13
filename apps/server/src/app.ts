@@ -518,6 +518,16 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       for (const path of memorySourcePaths(projectId, database)) authorization.requireProjectPath(current, projectId, path, "agent:propose");
     }
   };
+  const authorizeProjectRecords = async (request: Request, projectId: string, action: ProjectAction = "project:read") => {
+    const current = authorize(request, projectId, action);
+    if (!current) return;
+    await requireWorkspacePathAccess(projectId, current, authorization, action, workspaces);
+    // Legacy objectives, rationales and summaries lack complete source provenance.
+    // Require access across all restricted prefixes, including deleted sources,
+    // instead of claiming that filtering output file names sanitizes their text.
+    const prefixes = new Set(database.snapshot().projectAclRules.filter(rule => rule.projectId === projectId && rule.pathPrefix).map(rule => rule.pathPrefix));
+    for (const path of prefixes) authorization.requireProjectPath(current, projectId, path, action);
+  };
   const agentContextAccess = async (request: Request, projectId: string) => {
     if (!principal(request)) return undefined;
     const canUsePath = (path: string) => {
@@ -1247,11 +1257,11 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     }),
     route("POST", "/api/projects/:projectId/memory/items/:itemId/accept", async (request, params) => { const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true); return json(await memories.acceptItemCandidate(projectId, required(params, "itemId"))); }),
     route("POST", "/api/projects/:projectId/memory/rollback", async (request, params) => { const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true); return json(await memories.rollback(projectId)); }),
-    route("GET", "/api/projects/:projectId/agent-tasks", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(agentTasks.list(projectId)); }),
-    route("GET", "/api/projects/:projectId/agent-runs", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); workspaces.getProject(projectId); return json(database.snapshot().agentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); }),
+    route("GET", "/api/projects/:projectId/agent-tasks", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); return json(agentTasks.list(projectId)); }),
+    route("GET", "/api/projects/:projectId/agent-runs", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); workspaces.getProject(projectId); return json(database.snapshot().agentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); }),
     route("GET", "/api/projects/:projectId/provenance", async (request, params) => {
       const projectId = required(params, "projectId");
-      const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read");
+      await authorizeProjectRecords(request, projectId);
       const project = workspaces.getProject(projectId);
       const state = database.snapshot();
       const runs = state.agentRuns.filter((run) => run.projectId === projectId).map((run) => ({ id: run.id, type: run.type, status: run.status, objective: run.objective, skill: run.skill, publicationTarget: run.publicationTarget, changeSetId: run.changeSetId, createdAt: run.createdAt, updatedAt: run.updatedAt, auditTrail: run.auditTrail ?? [] }));
@@ -1265,7 +1275,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       return json({ project: { id: project.id, version: project.version, mainDocument: project.mainDocument, skill: project.skill, publicationTarget: project.publicationTarget }, generatedAt: new Date().toISOString(), disclosureDraft, runs, changeSets, experiments });
     }),
     route("GET", "/api/projects/:projectId/provenance/export", async (request, params) => {
-      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read");
+      const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId);
       const project = workspaces.getProject(projectId); const state = database.snapshot();
       const runs = state.agentRuns.filter((run) => run.projectId === projectId).map((run) => ({ id: run.id, type: run.type, status: run.status, objective: run.objective, createdAt: run.createdAt, updatedAt: run.updatedAt, skill: run.skill, publicationTarget: run.publicationTarget, auditTrail: run.auditTrail ?? [] }));
       const changeSets = state.changeSets.filter((item) => item.projectId === projectId).map((item) => ({ id: item.id, status: item.status, summary: item.summary, agentRunId: item.agentRunId, changes: item.changes.map((change) => ({ path: change.path, operation: change.operation, hunks: (change.hunks ?? []).map((hunk) => ({ id: hunk.id, status: hunk.status, additions: classifyHunkAdditions(hunk.after) })) })) }));
@@ -1274,13 +1284,13 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     }),
     route("POST", "/api/projects/:projectId/agent-tasks", async (request, params) => { const projectId = required(params, "projectId"); await collaboration.flushProject(projectId); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces); return json(await agentTasks.plan(projectId, await readJson<AgentTaskRequest>(request), request.signal), 201); }),
     route("POST", "/api/projects/:projectId/agent-tasks/:planId/confirm", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces); return json(await agentTasks.confirm(projectId, required(params, "planId"), request.signal), 201); }),
-    route("POST", "/api/projects/:projectId/agent-tasks/:planId/cancel", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await agentTasks.cancel(projectId, required(params, "planId"))); }),
-    route("GET", "/api/projects/:projectId/issue-resolutions", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(agentTasks.resolutions(projectId)); }),
+    route("POST", "/api/projects/:projectId/agent-tasks/:planId/cancel", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); authorize(request, projectId, "project:write"); return json(await agentTasks.cancel(projectId, required(params, "planId"))); }),
+    route("GET", "/api/projects/:projectId/issue-resolutions", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); return json(agentTasks.resolutions(projectId)); }),
     route("POST", "/api/projects/:projectId/issue-resolutions/:resolutionId/rereview", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await agentTasks.rereview(projectId, required(params, "resolutionId"), request.signal)); }),
-    route("POST", "/api/projects/:projectId/issue-resolutions/:resolutionId/reopen", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await agentTasks.reopen(projectId, required(params, "resolutionId"))); }),
+    route("POST", "/api/projects/:projectId/issue-resolutions/:resolutionId/reopen", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); authorize(request, projectId, "project:write"); return json(await agentTasks.reopen(projectId, required(params, "resolutionId"))); }),
     route("GET", "/api/projects/:projectId/compile-results/latest", async (request, params) => {
       const projectId = required(params, "projectId");
-      const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read");
+      await authorizeProjectRecords(request, projectId);
       workspaces.getProject(projectId);
       return json(database.snapshot().compileRecords.filter((record) => record.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null);
     }),
@@ -1297,7 +1307,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       catch (error) { if (error instanceof Error && error.message === "job_quota_exceeded") throw new ApiError(429, "job_quota_exceeded", "Too many active jobs; retry later."); throw error; }
       return json(job, 202);
     }),
-    route("GET", "/api/projects/:projectId/experiments", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); workspaces.getProject(projectId); return json(database.snapshot().experimentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }),
+    route("GET", "/api/projects/:projectId/experiments", async (request, params) => { const projectId = required(params, "projectId"); await authorizeProjectRecords(request, projectId); workspaces.getProject(projectId); return json(database.snapshot().experimentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }),
     route("GET", "/api/jobs/:jobId", async (request, params) => { const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); const current = principal(request, authEnabled); authorizeJob(request, job, current); if (current && job.policy?.projectId) authorization.requireProject(current, job.policy.projectId, "project:read"); return json(job); }),
     route("POST", "/api/jobs/:jobId/progress", async (request, params) => { const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); const current = principal(request, authEnabled); authorizeJob(request, job, current); if (current && job.policy?.projectId) authorization.requireProject(current, job.policy.projectId, "project:write"); const body = await readJson<{ completed: number; total?: number; message?: string }>(request); if (!Number.isFinite(body.completed) || (body.total !== undefined && !Number.isFinite(body.total))) throw new ApiError(400, "job_progress_invalid", "Job progress must contain finite numbers"); try { return json(jobs.updateProgress(job.id, body)); } catch (error) { if (error instanceof Error && error.message === "Job is not active") throw new ApiError(409, "job_not_active", "Job is no longer active"); throw error; } }),
     route("POST", "/api/jobs/:jobId/cancel", async (request, params) => { try { const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); const current = principal(request, authEnabled); authorizeJob(request, job, current); if (current && job.policy?.projectId) authorization.requireProject(current, job.policy.projectId, "project:manage"); const cancelled = jobs.cancel(job.id); if (cancelled.status === "cancelled" && job.kind === "experiment.run") await database.mutate(state => { const run = state.experimentRuns.find(item => item.id === (job.input as { experimentId?: string })?.experimentId); if (run) { run.status = "cancelled"; run.updatedAt = new Date().toISOString(); } }); return json(cancelled); } catch (error) { if (error instanceof ApiError) throw error; throw new ApiError(404, "job_not_found", "Job not found"); } }),
