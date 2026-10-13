@@ -22,7 +22,9 @@ export class AuthorizationService {
     if (!project) throw new ApiError(404, "project_not_found", "Project not found");
     if (project.personalOwnerUserId === userId) return "owner";
     const member = state.projectMembers.find((item) => item.projectId === projectId && item.userId === userId);
-    if (member) return member.role;
+    // Old databases may contain owner memberships left behind by a transfer.
+    // A personal project's canonical owner takes precedence over those rows.
+    if (member) return member.role === "owner" && project.personalOwnerUserId ? "maintainer" : member.role;
     if (project.teamId) {
       const teamMember = state.teamMembers.find((item) => item.teamId === project.teamId && item.userId === userId);
       if (teamMember && (teamMember.role === "owner" || teamMember.role === "admin")) return "maintainer";

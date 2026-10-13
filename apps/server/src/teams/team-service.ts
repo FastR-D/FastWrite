@@ -98,7 +98,8 @@ export class TeamService {
     return this.database.mutate((state) => {
       const member = state.projectMembers.find((item) => item.projectId === projectId && item.userId === userId);
       if (!member) throw new ApiError(404, "project_member_not_found", "Project member not found");
-      if (member.role === "owner") throw new ApiError(409, "project_owner_role_protected", "Transfer ownership before changing an owner's role");
+      const project = state.projects.find((item) => item.id === projectId);
+      if (project?.personalOwnerUserId ? project.personalOwnerUserId === userId : member.role === "owner") throw new ApiError(409, "project_owner_role_protected", "Transfer ownership before changing an owner's role");
       member.role = role; member.updatedAt = timestamp;
       state.auditEvents.push(audit(principal.user.id, "project.member.role.update", "project", projectId));
       return structuredClone(member);
@@ -109,7 +110,8 @@ export class TeamService {
     await this.database.mutate((state) => {
       const index = state.projectMembers.findIndex((item) => item.projectId === projectId && item.userId === userId);
       if (index < 0) throw new ApiError(404, "project_member_not_found", "Project member not found");
-      if (state.projectMembers[index]!.role === "owner") throw new ApiError(409, "project_owner_remove_protected", "Transfer ownership before removing an owner");
+      const project = state.projects.find((item) => item.id === projectId);
+      if (project?.personalOwnerUserId ? project.personalOwnerUserId === userId : state.projectMembers[index]!.role === "owner") throw new ApiError(409, "project_owner_remove_protected", "Transfer ownership before removing an owner");
       state.projectMembers.splice(index, 1);
       state.auditEvents.push(audit(principal.user.id, "project.member.remove", "project", projectId));
     });
@@ -219,6 +221,12 @@ export class TeamService {
       if (input.teamId) { project.teamId = input.teamId; project.visibility = "team"; }
       else { project.personalOwnerUserId = input.personalOwnerUserId!; project.visibility = "private"; }
       const ownerId = input.personalOwnerUserId ?? principal.user.id;
+      // Transfer ownership atomically; former owners remain removable collaborators.
+      for (const previous of state.projectMembers) {
+        if (previous.projectId === projectId && previous.role === "owner" && previous.userId !== ownerId) {
+          previous.role = "maintainer"; previous.updatedAt = timestamp;
+        }
+      }
       const member = state.projectMembers.find((item) => item.projectId === projectId && item.userId === ownerId);
       if (member) { member.role = "owner"; member.updatedAt = timestamp; } else state.projectMembers.push({ projectId, userId: ownerId, role: "owner", createdAt: timestamp, updatedAt: timestamp });
       state.auditEvents.push(audit(principal.user.id, "project.transfer", "project", projectId));
