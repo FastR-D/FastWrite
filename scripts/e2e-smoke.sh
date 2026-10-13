@@ -1094,9 +1094,9 @@ run_code 'async (page) => {
   const dialog = page.getByRole("dialog", { name: "导入论文" });
   await dialog.getByRole("tab", { name: "GitHub 仓库" }).click();
   await dialog.getByLabel("仓库地址").fill("https://github.com/example/security-paper");
-  await dialog.getByLabel(/Branch, tag or commit/).fill("camera-ready");
-  await dialog.getByLabel(/Project name/).fill("Imported Security Paper");
-  await dialog.getByLabel(/Main document/).fill("paper.tex");
+  await dialog.getByLabel(/分支、标签或提交/).fill("camera-ready");
+  await dialog.getByLabel(/项目名称/).fill("Imported Security Paper");
+  await dialog.getByLabel(/主文档/).fill("paper.tex");
   await dialog.getByRole("combobox", { name: "研究领域" }).click();
   await dialog.getByRole("option", { name: "网络与信息安全", exact: true }).click();
   await page.waitForTimeout(350);
