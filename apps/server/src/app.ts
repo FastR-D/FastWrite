@@ -1494,7 +1494,7 @@ function filterVisibleTree(nodes: WorkspaceTreeNode[], principal: Principal, pro
     try { authorization.requireProjectPath(principal, projectId, node.path, "project:read"); } catch { continue; }
     if (node.type === "file") { visible.push(node); continue; }
     const children = filterVisibleTree(node.children, principal, projectId, authorization);
-    if (children.length) visible.push({ ...node, children });
+    if (node.loaded === false || children.length) visible.push({ ...node, children });
   }
   return visible;
 }
@@ -1505,7 +1505,7 @@ function filterSupportTree(nodes: WorkspaceTreeNode[], prefix: string): Workspac
     if (!(node.path === prefix || prefix === "" || node.path.startsWith(`${prefix}/`) || prefix.startsWith(`${node.path}/`))) continue;
     if (node.type === "file") { result.push(node); continue; }
     const children = filterSupportTree(node.children, prefix);
-    if (children.length) result.push({ ...node, children });
+    if (node.loaded === false || children.length) result.push({ ...node, children });
   }
   return result;
 }
