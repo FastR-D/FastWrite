@@ -955,7 +955,7 @@ run_code 'async (page) => {
   if (!metrics.suggested || !metrics.accepted || Object.values(metrics).some(value => typeof value !== "number")) throw new Error("Completion metrics were not privacy-safe counters");
 
   const toggle = page.getByRole("checkbox", { name: "Complete" });
-  await page.getByTitle("Skill-guided writing completion", { exact: true }).click();
+  await toggle.press("Space");
   if (await toggle.isChecked()) throw new Error("Completion toggle did not switch off");
   const beforeDisabledEdit = completionRequests;
   const disabledValue = acceptedContent;
@@ -988,14 +988,13 @@ run_code 'async (page) => {
   await editor.focus();
   await editor.press("ControlOrMeta+A");
   await page.keyboard.insertText("\\documentclass{article}\n\\begin{document}\n\\undefinedFastWriteCommand\n\\end{document}");
-  const diagnostics = page.locator(".pdf-diagnostics");
-  await diagnostics.waitFor({ timeout: 90000 });
   const errorIcon = page.locator(".compile-status-icon--error");
-  await errorIcon.waitFor();
+  await errorIcon.waitFor({ timeout: 90000 });
   if (await errorIcon.getAttribute("aria-label") !== "Compilation error") throw new Error("Compilation failure does not expose an unambiguous error icon");
-  if (!await diagnostics.getByText(/LaTeX diagnostics|Compilation log/).isVisible()) {
-    throw new Error("Compilation failure did not expose diagnostics or its log");
-  }
+  await page.getByRole("tab", { name: /^Problems/ }).click();
+  const diagnostics = page.locator(".bottom-panel-problems");
+  await diagnostics.getByText("Compilation failed", { exact: true }).waitFor();
+  await diagnostics.getByText(/Undefined control sequence/).first().waitFor();
   if (await page.locator(".react-pdf__Page__canvas").count() < 1) {
     throw new Error("Previous PDF disappeared after a failed compile");
   }
@@ -1012,7 +1011,7 @@ run_code 'async (page) => {
     await page.screenshot({ path: "output/playwright/workspace-pdf-error-" + viewport.name + browserSuffix + ".png", fullPage: true });
   }
   await page.setViewportSize({ width: 1280, height: 800 });
-  const fixButton = page.getByRole("button", { name: "Fix with Agent" });
+  const fixButton = page.locator(".pdf-pane").getByRole("button", { name: "Fix with Agent" });
   await fixButton.waitFor();
   const fixBox = await fixButton.boundingBox();
   const pdfBox = await page.locator(".pdf-pane").boundingBox();
@@ -1093,9 +1092,13 @@ run_code 'async (page) => {
   await dialog.getByLabel(/Branch, tag or commit/).fill("camera-ready");
   await dialog.getByLabel(/Project name/).fill("Imported Security Paper");
   await dialog.getByLabel(/Main document/).fill("paper.tex");
-  await dialog.getByLabel("Research domain").selectOption("network-information-security");
+  await dialog.getByRole("combobox", { name: "Research domain" }).click();
+  await dialog.getByRole("option", { name: "网络与信息安全", exact: true }).click();
   await page.waitForTimeout(350);
-  await page.addScriptTag({ path: "node_modules/axe-core/axe.min.js" });
+  const axeUrl = await page.evaluate(() => location.origin + "/__e2e__/axe.min.js");
+  await page.route(axeUrl, route => route.fulfill({ path: "node_modules/axe-core/axe.min.js", contentType: "application/javascript" }));
+  try { await page.addScriptTag({ url: axeUrl }); }
+  finally { await page.unroute(axeUrl); }
   const accessibility = await page.evaluate(async () => await window.axe.run(document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] }
   }));
