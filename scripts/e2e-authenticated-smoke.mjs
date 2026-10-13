@@ -71,6 +71,7 @@ try {
   await expect(editorTabs.getByRole("tab", { name: "Settings", exact: true })).toHaveCount(0);
   console.log("PASS: editor tabs retain keyboard navigation and accessible close controls");
 
+  const oldScope = await page.evaluate(() => JSON.parse(localStorage.getItem("fastwrite.session-identity")).scope);
   const oldToken = await page.evaluate(() => localStorage.getItem("fastwrite.session-token")); let refreshCalls = 0;
   context.on("request", request => { if (new URL(request.url()).pathname === "/api/auth/refresh") refreshCalls++; });
   await context.route("**/api/**", async route => {
@@ -81,6 +82,7 @@ try {
   await Promise.all([page.goto(projectUrl), second.goto(projectUrl)]);
   await editor().waitFor({ state: "attached" }); await second.getByRole("textbox", { name: "Source editor for main.tex" }).waitFor({ state: "attached" });
   assert.equal(refreshCalls, 1); await context.unroute("**/api/**"); await second.close();
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("fastwrite.session-identity")).scope), oldScope);
   console.log("PASS: parallel requests in two tabs rotate the refresh cookie exactly once");
 
   await page.waitForFunction(id => Object.keys(localStorage).some(key => key.startsWith("fastwrite.workspace-file:v2:") && key.endsWith(`:${id}:main.tex`)), projectId);
@@ -91,6 +93,41 @@ try {
   await page.route("**/api/projects/**", route => route.fulfill({ status: 403, contentType: "application/json", body: '{"error":{"code":"denied","message":"Access denied"}}' })); await page.reload();
   await page.getByText("Could not open this paper", { exact: true }).waitFor(); assert.equal(await editor().count(), 0);
   console.log("PASS: offline cache renders on network failure and stays hidden on access denial");
+
+  await page.unroute("**/api/projects/**");
+  const memberResponse = await context.request.post(setup.origin + "/api/auth/register", { data: { email: "draft-member@example.test", password: "fastwrite-e2e-only-password", displayName: "Draft member" } });
+  assert.ok(memberResponse.ok()); const member = await memberResponse.json();
+  const invitation = await api("/invitations", "POST", { email: "draft-member@example.test", role: "editor" });
+  assert.ok((await context.request.post(setup.origin + "/api/invitations/" + invitation.token + "/accept", { headers: { authorization: `Bearer ${member.token}` } })).ok());
+  await page.goto(projectUrl); await editor().waitFor({ state: "attached" });
+  await page.route("**/api/projects/**/file?*", route => route.request().method() === "PUT" ? route.abort("internetdisconnected") : route.continue());
+  await editor().focus(); await editor().press("ControlOrMeta+Home"); await page.keyboard.insertText("% ACCOUNT_A_PRIVATE_DRAFT\n");
+  await expect.poll(() => page.evaluate(() => new Promise((resolveDrafts, reject) => {
+    const opening = indexedDB.open("fastwrite-offline-v1", 2);
+    opening.onerror = () => reject(opening.error);
+    opening.onsuccess = () => { const db = opening.result; const reading = db.transaction("drafts").objectStore("drafts").getAll(); reading.onsuccess = () => { db.close(); resolveDrafts(reading.result.some(draft => draft.content.includes("ACCOUNT_A_PRIVATE_DRAFT"))); }; };
+  }))).toBe(true);
+  await page.goto(setup.origin + "/projects");
+  await page.unroute("**/api/projects/**/file?*");
+  await page.getByRole("button", { name: "FastWrite Administrator", exact: true }).click();
+  const signIn = async email => {
+    await page.getByRole("button", { name: "Sign in", exact: true }).first().click();
+    const dialog = page.getByRole("dialog", { name: "Sign in", exact: true });
+    await dialog.getByLabel("Email", { exact: true }).fill(email);
+    await dialog.getByLabel("Password", { exact: true }).fill("fastwrite-e2e-only-password");
+    await dialog.getByRole("button", { name: "Sign in", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+  };
+  await signIn("draft-member@example.test");
+  await page.goto(projectUrl); await editor().waitFor({ state: "attached" });
+  await expect(page.locator(".monaco-editor .view-lines")).not.toContainText("ACCOUNT_A_PRIVATE_DRAFT");
+  assert.ok(!(await api("/file?path=main.tex")).content.includes("ACCOUNT_A_PRIVATE_DRAFT"));
+  await page.goto(setup.origin + "/projects");
+  await page.getByRole("button", { name: "Draft member", exact: true }).click();
+  await signIn("e2e-admin@example.test");
+  await page.goto(projectUrl); await editor().waitFor({ state: "attached" });
+  await expect(page.locator(".monaco-editor .view-lines")).toContainText("ACCOUNT_A_PRIVATE_DRAFT");
+  console.log("PASS: drafts remain private across account switches and return to their original owner");
 } catch (error) {
   await mkdir("output/playwright", { recursive: true });
   await page?.screenshot({ path: "output/playwright/authenticated-regression-failure.png", fullPage: true }).catch(() => undefined);

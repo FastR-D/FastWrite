@@ -3,6 +3,7 @@ import { FASTWRITE_SAVE_EVENT, isSaveShortcut } from "./lib/keyboard";
 import { applyTheme, initialTheme } from "./lib/theme";
 import { api } from "./api/client";
 import { Link } from "./components/ui";
+import { SESSION_CHANGED, sessionIdentity } from "./lib/sessionIdentity";
 
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const DiagramsPage = lazy(() => import("./pages/DiagramsPage").then((module) => ({ default: module.DiagramsPage })));
@@ -26,6 +27,13 @@ function routeFromLocation(): { name: "admin" } | { name: "diagrams" } | { name:
 }
 
 export function App() {
+  const [identity, setIdentity] = useState(() => sessionIdentity().scope);
+  useEffect(() => {
+    const changed = () => setIdentity(sessionIdentity().scope);
+    window.addEventListener("storage", changed);
+    window.addEventListener(SESSION_CHANGED, changed);
+    return () => { window.removeEventListener("storage", changed); window.removeEventListener(SESSION_CHANGED, changed); };
+  }, []);
   const [route, setRoute] = useState(routeFromLocation);
   const [authenticationReady, setAuthenticationReady] = useState(() => {
     const parameters = new URLSearchParams(window.location.search);
@@ -64,6 +72,6 @@ export function App() {
     return () => window.removeEventListener("keydown", save, { capture: true });
   }, []);
   if (!authenticationReady) return <main className="app-loading" aria-live="polite">Completing sign-in…</main>;
-  const page = route.name === "admin" ? <AdminPage /> : route.name === "diagrams" ? <DiagramsPage /> : route.name === "workspace" ? <WorkspacePage projectId={route.projectId} /> : route.name === "shared" ? <SharedReviewPage token={route.token} /> : route.name === "access-request" ? <AccessRequestPage projectId={route.projectId} /> : route.name === "gallery" ? <GalleryPage /> : <ProjectsPage />;
+  const page = route.name === "admin" ? <AdminPage /> : route.name === "diagrams" ? <DiagramsPage /> : route.name === "workspace" ? <WorkspacePage key={identity} projectId={route.projectId} /> : route.name === "shared" ? <SharedReviewPage token={route.token} /> : route.name === "access-request" ? <AccessRequestPage projectId={route.projectId} /> : route.name === "gallery" ? <GalleryPage /> : <ProjectsPage />;
   return <Suspense fallback={<main className="app-loading" aria-live="polite">Loading FastWrite…</main>}>{route.name !== "diagrams" && <Link href="/diagrams" style={{position:"fixed",bottom:18,right:24,zIndex:100,background:"#244f3d",color:"white",padding:"10px 18px",borderRadius:8}}>科研绘图</Link>}{page}</Suspense>;
 }

@@ -5,6 +5,7 @@ import { CollaborationProvider } from "./collaborationProvider";
 import { DocumentSession } from "./documentSession";
 import { configureMonaco, languageForPath } from "./monaco";
 import { loadOfflineDraft, removeOfflineDraft, saveOfflineDraft, listRecoveryDrafts, preserveRecoveryDraft, removeRecoveryDraft, type RecoveryDraft } from "../offlineDrafts";
+import { captureSessionIdentity, sessionIdentity } from "../sessionIdentity";
 
 export interface DocumentEntry {
   session: DocumentSession;
@@ -27,6 +28,8 @@ export interface DocumentEntry {
 
 /** Project-owned models survive editor views and share exactly one persistence queue. */
 export class DocumentRegistry {
+  private readonly identity = captureSessionIdentity();
+  private readonly modelAuthority = crypto.randomUUID();
   readonly entries = new Map<string, DocumentEntry>();
   onSaved: ((document: FileContentResponse) => void | Promise<void>) | undefined;
   private listeners = new Set<(entry: DocumentEntry) => void>();
@@ -70,8 +73,9 @@ export class DocumentRegistry {
     configureMonaco();
     const path = normalizeWorkspacePath(document.file.path);
     if (!path) throw new Error("A document path is required");
-    const model = monaco.editor.createModel(document.content, languageForPath(path), monaco.Uri.from({ scheme: "fastwrite", authority: this.projectId, path: `/${path}` }));
+    const model = monaco.editor.createModel(document.content, languageForPath(path), monaco.Uri.from({ scheme: "fastwrite", authority: this.modelAuthority, path: `/${path}` }));
     const session = new DocumentSession(this.projectId, path, document.content, document.file.version, async snapshot => {
+      if (!this.identity.current()) throw new Error("The signed-in account changed; this draft remains saved for the original account.");
       const result = await (created.persist ? created.persist(snapshot) : api.projects.saveFile(this.projectId, path, { content: snapshot.content, baseVersion: snapshot.baseVersion }));
       created.file = result.file;
       void Promise.resolve().then(() => { if (!this.closed) return this.onSaved?.({ file: result.file, content: snapshot.content }); }).catch(() => undefined);
@@ -84,7 +88,7 @@ export class DocumentRegistry {
     });
     const unsubscribe = session.subscribe(() => {
       const content = session.content, version = session.serverVersion, baseContent = session.baseContent, dirty = session.dirty;
-      created.draftWrites = created.draftWrites.catch(() => undefined).then(() => created.draftReady).then(() => dirty ? saveOfflineDraft(this.projectId, path, content, version, baseContent) : removeOfflineDraft(this.projectId, path));
+      created.draftWrites = created.draftWrites.catch(() => undefined).then(() => created.draftReady).then(() => dirty ? saveOfflineDraft(this.projectId, path, content, version, baseContent, this.identity.scope) : removeOfflineDraft(this.projectId, path, this.identity.scope));
       void created.draftWrites.catch(error => { created.draftError = error; this.emit(created); });
       this.emit(created);
     });
@@ -100,12 +104,12 @@ export class DocumentRegistry {
 
   private async recoverDrafts(entry: DocumentEntry) {
     const path = entry.session.path;
-    const [draft, recoveries] = await Promise.all([loadOfflineDraft(this.projectId, path), listRecoveryDrafts(this.projectId, path)]);
+    const [draft, recoveries] = await Promise.all([loadOfflineDraft(this.projectId, path, this.identity.scope), listRecoveryDrafts(this.projectId, path, this.identity.scope)]);
     if (this.closed || entry.model.isDisposed()) return;
     entry.recoveries = recoveries;
     if (draft && draft.content !== entry.model.getValue()) {
       if (!recoveries.some(item => item.content === draft.content && item.baseVersion === draft.baseVersion)) {
-        entry.recoveries.unshift(await preserveRecoveryDraft(this.projectId, path, draft, "offline"));
+        entry.recoveries.unshift(await preserveRecoveryDraft(this.projectId, path, draft, "offline", this.identity.scope));
       }
       // The await above may allow fresh input; check revision only after archival completes.
       if (entry.mode === "rest" && entry.session.localRevision === 0 && draft.baseVersion === entry.session.serverVersion) {
@@ -122,12 +126,12 @@ export class DocumentRegistry {
     await entry.draftReady;
     const existing = entry.recoveries.find(item => item.content === content && item.baseVersion === baseVersion && item.baseContent === baseContent);
     if (existing) return existing;
-    const draft = await preserveRecoveryDraft(this.projectId, entry.session.path, { content, ...(baseContent === undefined ? {} : { baseContent }), baseVersion }, reason);
+    const draft = await preserveRecoveryDraft(this.projectId, entry.session.path, { content, ...(baseContent === undefined ? {} : { baseContent }), baseVersion }, reason, this.identity.scope);
     entry.recoveries.unshift(draft); this.emit(entry);
     return draft;
   }
   async forgetRecovery(entry: DocumentEntry, id: string) {
-    await removeRecoveryDraft(id);
+    await removeRecoveryDraft(id, this.projectId, entry.session.path, this.identity.scope);
     entry.recoveries = entry.recoveries.filter(item => item.id !== id); this.emit(entry);
   }
   async resolve(entry: DocumentEntry, content: string, server: FileContentResponse, expectedRevision: number) {
@@ -144,6 +148,7 @@ export class DocumentRegistry {
     await entry.session.flush();
   }
   async saveCopy(entry: DocumentEntry, path: string, content: string) {
+    if (!this.identity.current()) throw new Error("The signed-in account changed. Reopen this page before saving.");
     const normalized = normalizeWorkspacePath(path);
     if (!normalized || normalized === entry.session.path) throw new Error("Choose a different path for the recovered copy.");
     const file = await api.projects.createFile(this.projectId, normalized, content);
@@ -171,6 +176,7 @@ export class DocumentRegistry {
     }
   }
   async flushEntry(entry: DocumentEntry) {
+    if (!this.identity.current()) { entry.collaboration?.dispose(); throw new Error("The signed-in account changed."); }
     await entry.collaboration?.ready();
     await entry.session.flush();
     await entry.collaboration?.flush();
@@ -239,7 +245,8 @@ export function applyModelContent(model: monaco.editor.ITextModel, next: string)
 
 const registries = new Map<string, DocumentRegistry>();
 export function projectDocumentRegistry(projectId: string): DocumentRegistry {
-  let registry = registries.get(projectId);
-  if (!registry || registry.disposed) { registry = new DocumentRegistry(projectId); registries.set(projectId, registry); }
+  const key = JSON.stringify([sessionIdentity().scope, projectId]);
+  let registry = registries.get(key);
+  if (!registry || registry.disposed) { registry = new DocumentRegistry(projectId); registries.set(key, registry); }
   return registry;
 }

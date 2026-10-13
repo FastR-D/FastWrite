@@ -1,6 +1,7 @@
 import * as Y from "yjs";
 import * as monaco from "monaco-editor";
 import { IndexeddbPersistence } from "y-indexeddb";
+import { captureSessionIdentity } from "../sessionIdentity";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
@@ -14,6 +15,8 @@ export type CollaborationState = "initializing" | "cached" | "connecting" | "syn
 
 /** A project document owns this provider; mounted editors only borrow bindings. */
 export class CollaborationProvider {
+  private readonly identity = captureSessionIdentity();
+  private assertIdentity() { if (!this.identity.current()) { this.dispose(); throw new Error("The signed-in account changed."); } }
   readonly doc = new Y.Doc();
   readonly awareness = new Awareness(this.doc);
   readonly undoManager = new Y.UndoManager(this.doc.getText("content"), { trackedOrigins: new Set([LOCAL]) });
@@ -77,12 +80,13 @@ export class CollaborationProvider {
     return this.initializing;
   }
   private async initialize() {
+    this.assertIdentity();
     const state = await api.projects.collaboration(this.projectId, this.entry.session.path);
     if (this.disposed) return;
     if (this.documentId && this.documentId !== state.documentId) throw new Error("The collaboration document was replaced. Local text is retained for comparison.");
     if (state.fileVersion < this.entry.session.serverVersion) throw new Error("The file changed outside collaboration. Local text is retained; compare before reconnecting.");
     this.documentId = state.documentId;
-    if (!this.persistence) this.persistence = new IndexeddbPersistence(`fastwrite-collaboration:${this.projectId}:${state.documentId}`, this.doc);
+    if (!this.persistence) this.persistence = new IndexeddbPersistence(`fastwrite-collaboration:v2:${this.identity.scope}:${this.projectId}:${state.documentId}`, this.doc);
     await this.persistence.whenSynced;
     if (this.disposed) return;
     Y.applyUpdate(this.doc, fromBase64(state.update), REMOTE);
@@ -167,6 +171,7 @@ export class CollaborationProvider {
     this.changed();
   };
   private onUpdate = (update: Uint8Array, origin: unknown) => {
+    if (!this.identity.current()) return;
     if (origin === REMOTE || !this.initialized && origin !== LOCAL) return;
     this.localRevision++;
     clearTimeout(this.metadataTimer);
@@ -181,6 +186,7 @@ export class CollaborationProvider {
     this.changed();
   };
   private onAwareness = (_changes: unknown, origin: unknown) => {
+    if (!this.identity.current()) return;
     if (origin !== REMOTE && this.socket?.readyState === WebSocket.OPEN) {
       const encoder = encoding.createEncoder(); encoding.writeVarUint(encoder, 1); encoding.writeVarUint8Array(encoder, encodeAwarenessUpdate(this.awareness, [this.doc.clientID])); this.socket.send(encoding.toUint8Array(encoder));
     }
@@ -189,6 +195,7 @@ export class CollaborationProvider {
   private online = () => { void this.ready().then(() => { void this.connect(); return this.entry.session.flush(); }).catch(() => undefined); };
   private tokenIsExpired() { return this.tokenExpiresAt > 0 && Date.now() >= this.tokenExpiresAt - 2_000; }
   private async connect() {
+    if (!this.identity.current()) { this.dispose(); return; }
     if (this.disposed || this.tokenExpired || this.tokenIsExpired() || this.connecting || this.socket && this.socket.readyState < WebSocket.CLOSING) return;
     this.connecting = true;
     this.state = "connecting"; this.changed();
@@ -205,6 +212,7 @@ export class CollaborationProvider {
       this.socket = socket; socket.binaryType = "arraybuffer";
       socket.onopen = () => { this.attempts = 0; const encoder = encoding.createEncoder(); encoding.writeVarUint(encoder, 0); writeSyncStep1(encoder, this.doc); socket.send(encoding.toUint8Array(encoder)); this.onAwareness(null, LOCAL); };
       socket.onmessage = event => {
+        if (!this.identity.current()) { this.dispose(); return; }
         if (this.disposed || this.socket !== socket || !(event.data instanceof ArrayBuffer)) return;
         try {
           const decoder = decoding.createDecoder(new Uint8Array(event.data)); const type = decoding.readVarUint(decoder);
@@ -228,11 +236,13 @@ export class CollaborationProvider {
   }
 
   async persist() {
+    this.assertIdentity();
     await this.ready();
     if (this.disposed || !this.documentId || this.state === "conflict") throw this.error ?? new Error("Collaboration is unavailable");
     const update = toBase64(Y.encodeStateAsUpdate(this.doc));
     const revision = this.localRevision, documentId = this.documentId;
     const operation = this.persistTail.catch(() => undefined).then(async () => {
+      this.assertIdentity();
       const result = await api.projects.collaborationPersist(this.projectId, { path: this.entry.session.path, documentId, update });
       if (!this.disposed) {
         Y.applyUpdate(this.doc, fromBase64(result.update), REMOTE);
@@ -246,6 +256,7 @@ export class CollaborationProvider {
   }
   async flush() { await this.ready(); if (this.dirty) await this.persist(); }
   async refresh() {
+    this.assertIdentity();
     await this.ready();
     const state = await api.projects.collaboration(this.projectId, this.entry.session.path);
     if (state.documentId !== this.documentId) throw new Error("The collaboration document was replaced. Reopen it before editing.");

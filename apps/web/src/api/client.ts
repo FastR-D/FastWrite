@@ -1,3 +1,4 @@
+import { captureSessionIdentity, rememberSession } from "../lib/sessionIdentity";
 import type {
   CollaborationPersistRequest, CollaborationPersistResponse,
   HistoryWorkingComparison, HistoryChanges, HistoryCommit, HistorySummary, HistoryPage, HistoryTreeEntry, HistoryFileSide, HistoryComparison,
@@ -69,10 +70,10 @@ function refreshSession(expiredToken: string): Promise<string | null> {
       if (response.status === 401 || response.status === 403) localStorage.removeItem(sessionKey);
       return null;
     }
-    const session = await response.json() as { token?: unknown };
+    const session = await response.json() as { token?: unknown; user?: { id: string } };
     if (typeof session.token !== "string" || !session.token) throw new ApiClientError(502, "invalid_session_response", "Invalid session refresh response");
     if (localStorage.getItem(sessionKey) !== expiredToken) return localStorage.getItem(sessionKey);
-    localStorage.setItem(sessionKey, session.token);
+    rememberSession({ token: session.token, ...(session.user ? { user: session.user } : {}) }, expiredToken);
     return session.token;
   };
   // Cookies are shared across tabs; serialize their rotation as well as same-tab requests.
@@ -97,15 +98,20 @@ export async function requestResponse(path: string, init?: RequestInit): Promise
   const headers = new Headers(init?.headers);
   const token = localStorage.getItem("fastwrite.session-token");
   const usesSession = !headers.has("authorization");
+  const identity = captureSessionIdentity();
+  const checkIdentity = () => { if (usesSession && !identity.current()) throw new ApiClientError(401, "session_changed", "The signed-in account changed. Reopen this page before continuing."); };
   if (token && usesSession) headers.set("authorization", `Bearer ${token}`);
   let response = await fetch(path, { ...init, headers });
+  checkIdentity();
   if (response.status === 401 && token && usesSession && !/^\/api\/auth\/(?:login|register|refresh|logout)(?:[/?]|$)/.test(path)) {
     init?.signal?.throwIfAborted();
     const refreshed = await waitForRefresh(refreshSession(token), init?.signal);
+    checkIdentity();
     init?.signal?.throwIfAborted();
     if (refreshed) {
       headers.set("authorization", `Bearer ${refreshed}`);
       response = await fetch(path, { ...init, headers });
+      checkIdentity();
     }
   }
   if (!response.ok) {
@@ -118,6 +124,11 @@ export async function requestResponse(path: string, init?: RequestInit): Promise
     throw new ApiClientError(response.status, body.error?.code ?? "request_failed", body.error?.message ?? `Request failed (${response.status})`, body.error?.details);
   }
   return response;
+}
+
+function rememberAuthentication<T extends { token: string; user: { id: string } }>(session: T): T {
+  rememberSession(session);
+  return session;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -153,15 +164,15 @@ export const api = {
     cancel: (jobId: string) => request<{ id: string; status: string }>(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" })
   },
   auth: {
-    register: (body: { email: string; password: string; displayName?: string }) => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/register", jsonInit("POST", body)),
-    login: (body: { email: string; password: string }) => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/login", jsonInit("POST", body)),
+    register: (body: { email: string; password: string; displayName?: string }) => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/register", jsonInit("POST", body)).then(rememberAuthentication),
+    login: (body: { email: string; password: string }) => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/login", jsonInit("POST", body)).then(rememberAuthentication),
     providers: () => request<{ local: boolean; oidc: boolean; cas: boolean; fastcas: boolean; fastcasSignup: boolean }>("/api/auth/providers"),
     fastcasStatus: () => request<{ enabled: boolean; issuer?: string; proof?: { method: "password" | "external" | "none"; recent: boolean; localLoginId?: string }; links: Array<{ id: string; state: "prepared" | "active" | "revoked"; version: number }> }>("/api/auth/fastcas/status"),
     fastcasSetLocalPassword: (password: string) => request<{ loginId: string }>("/api/auth/fastcas/local-password", jsonInit("POST", { password })),
     fastcasLink: (password: string) => request<{ url: string }>("/api/auth/fastcas/link", jsonInit("POST", { password, returnTo: "/projects" })),
     fastcasReconcile: (id: string) => request(`/api/auth/fastcas/links/${encodeURIComponent(id)}/reconcile`, { method: "POST" }),
     fastcasRevoke: (id: string, password: string) => request(`/api/auth/fastcas/links/${encodeURIComponent(id)}/revoke`, jsonInit("POST", { password })),
-    refresh: () => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/refresh", { method: "POST" }),
+    refresh: () => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/refresh", { method: "POST" }).then(rememberAuthentication),
     me: (signal?: AbortSignal) => request<{ id: string; emailNormalized: string; displayName: string; platformRole: string }>("/api/auth/me", signal ? { signal } : undefined),
     logout: () => request<void>("/api/auth/logout", { method: "POST" })
   },
@@ -442,3 +453,4 @@ export const api = {
     check: (projectId: string) => request<{ projectId: string; findings: AlignmentFinding[] }>(`/api/projects/${projectId}/alignment-checks`, { method: "POST" })
   }
 };
+
