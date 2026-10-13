@@ -10,7 +10,17 @@
     <title>FastWrite</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main id="fastwrite-boot" role="status" aria-live="polite" style="display:grid;min-height:100vh;place-items:center;background:#f6f8fa;color:#475467;font:500 16px/1.5 system-ui,sans-serif">
+        <div style="display:grid;gap:12px;text-align:center;max-width:480px;padding:24px">
+          <h1 style="margin:0;color:#244f3d">FastWrite</h1>
+          <p id="fastwrite-boot-message" style="margin:0">Loading your writing workspace…</p>
+          <button id="fastwrite-boot-retry" type="button" hidden style="padding:10px 18px;border:1px solid #244f3d;border-radius:6px;background:#fff;color:#244f3d;font:inherit;cursor:pointer">Reload FastWrite</button>
+          <noscript>Enable JavaScript to open FastWrite.</noscript>
+        </div>
+      </main>
+    </div>
+    <script src="%BASE_URL%boot.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

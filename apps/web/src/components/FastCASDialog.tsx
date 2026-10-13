@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { Button, Dialog, Field, TextField } from "./ui";
+import { appPath } from "../lib/appBase";
 
 export function FastCASDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [status, setStatus] = useState<Awaited<ReturnType<typeof api.auth.fastcasStatus>>>();
@@ -28,11 +29,11 @@ export function FastCASDialog({ open, onClose }: { open: boolean; onClose: () =>
         {proof?.method === "password" ? <Field label="Confirm your FastWrite password"><TextField type="password" autoComplete="current-password" value={password} onChange={setPassword} /></Field> : null}
         {proof?.method === "password" && proof.localLoginId ? <p>Local sign-in ID: <strong>{proof.localLoginId}</strong>. Keep this ID and your password for sign-in if FastCAS is unavailable.</p> : null}
         {proof?.method === "external" ? <p>{proof.recent ? "Your recent organization or campus sign-in proves this existing account for the next five minutes." : "Sign in again with your original organization or campus account, then return here within five minutes."}</p> : null}
-        {proof?.method === "external" && !proof.recent && providers?.oidc ? <Button variant="secondary" onClick={() => window.location.assign("/api/auth/oidc/login?returnTo=/projects")}>Sign in again with organization</Button> : null}
-        {proof?.method === "external" && !proof.recent && providers?.cas ? <Button variant="secondary" onClick={() => window.location.assign("/api/auth/cas/login")}>Sign in again with campus CAS</Button> : null}
+        {proof?.method === "external" && !proof.recent && providers?.oidc ? <Button variant="secondary" onClick={() => window.location.assign(appPath(`/api/auth/oidc/login?returnTo=${encodeURIComponent(appPath("/projects"))}`))}>Sign in again with organization</Button> : null}
+        {proof?.method === "external" && !proof.recent && providers?.cas ? <Button variant="secondary" onClick={() => window.location.assign(appPath("/api/auth/cas/login"))}>Sign in again with campus CAS</Button> : null}
         {proof?.method === "none" && current?.state === "active" ? <>
           <p>{proof.recent ? "Add a local password while this FastCAS sign-in is recent. Your projects and account ID will stay the same." : "Sign in with FastCAS again, then return within five minutes to add a local password."}</p>
-          {!proof.recent ? <Button variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/login?returnTo=/projects")}>Sign in again with FastCAS</Button> : <>
+          {!proof.recent ? <Button variant="secondary" onClick={() => window.location.assign(appPath(`/api/auth/fastcas/login?returnTo=${encodeURIComponent(appPath("/projects"))}`))}>Sign in again with FastCAS</Button> : <>
             <Field label="New FastWrite password"><TextField type="password" autoComplete="new-password" value={newPassword} onChange={setNewPassword} /></Field>
             <Button variant="secondary" disabled={newPassword.length < 12 || busy} loading={busy} onClick={() => void act(() => api.auth.fastcasSetLocalPassword(newPassword))}>Add local sign-in method</Button>
           </>}

@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import wasm from "vite-plugin-wasm";
+import { startupAssets } from "./build/startupAssets";
 
 function siglumStaticHeaders(): Plugin {
   return {
@@ -24,8 +25,10 @@ export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, process.cwd(), "");
   const webPort = Number.parseInt(process.env.FASTWRITE_WEB_PORT ?? environment.FASTWRITE_WEB_PORT ?? "3002", 10);
   const apiOrigin = process.env.FASTWRITE_API_ORIGIN ?? environment.FASTWRITE_API_ORIGIN ?? `http://localhost:${process.env.FASTWRITE_PORT ?? environment.FASTWRITE_PORT ?? "3003"}`;
+  const basePath = process.env.FASTWRITE_BASE_PATH ?? environment.FASTWRITE_BASE_PATH ?? "/";
   return {
-    plugins: [siglumStaticHeaders(), react(), wasm()],
+    base: `/${basePath.replace(/^\/+|\/+$/g, "")}${basePath.replace(/^\/+|\/+$/g, "") ? "/" : ""}`,
+    plugins: [siglumStaticHeaders(), react(), wasm(), startupAssets()],
     server: {
       host: "127.0.0.1",
       port: webPort,
@@ -44,6 +47,9 @@ export default defineConfig(({ mode }) => {
       sourcemap: true,
       rollupOptions: {
         output: {
+          // Implicit dependency collection can move shared UI/helpers into the
+          // Monaco chunk, making the otherwise-lazy editor an entry dependency.
+          onlyExplicitManualChunks: true,
           manualChunks(id) {
             if (!id.includes("node_modules")) return;
             if (id.includes("monaco-editor")) return "monaco";

@@ -1,4 +1,5 @@
 import type { SiglumCompiler } from "@siglum/engine";
+import { APP_BASE, appPath } from "../lib/appBase";
 import xzwasmUrl from "xzwasm/dist/package/xzwasm.min.js?url";
 import { COMPILER_BUNDLES_URL, COMPILER_RESOURCE_VERSION, compilerDependencyPackages, compilerFontPackages, compilerPackageProgress, compilerResourceProgress, resolveCompilerBundles, type CompilerBundleManifest } from "./compilerResources";
 
@@ -35,10 +36,10 @@ async function instance(): Promise<SiglumCompiler> {
     const { SiglumCompiler } = await import("@siglum/engine");
     compiler = new SiglumCompiler({
       bundlesUrl: COMPILER_BUNDLES_URL,
-      wasmUrl: "/busytex.wasm",
-      workerUrl: "/worker.js",
+      wasmUrl: appPath("/busytex.wasm"),
+      workerUrl: appPath("/worker.js"),
       xzwasmUrl,
-      ctanProxyUrl: window.location.origin,
+      ctanProxyUrl: `${window.location.origin}${APP_BASE}`,
       enableCtan: true,
       enableLazyFS: true,
       enableDocCache: true,

@@ -1,8 +1,9 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { FASTWRITE_SAVE_EVENT, isSaveShortcut } from "./lib/keyboard";
 import { applyTheme, initialTheme } from "./lib/theme";
 import { api } from "./api/client";
-import { Link } from "./components/ui";
+import { Button, Link } from "./components/ui";
+import { appPath, relativeAppPath } from "./lib/appBase";
 
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const DiagramsPage = lazy(() => import("./pages/DiagramsPage").then((module) => ({ default: module.DiagramsPage })));
@@ -13,16 +14,38 @@ const AccessRequestPage = lazy(() => import("./pages/AccessRequestPage").then((m
 const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
 
 function routeFromLocation(): { name: "admin" } | { name: "diagrams" } | { name: "projects" } | { name: "gallery" } | { name: "workspace"; projectId: string } | { name: "shared"; token: string } | { name: "access-request"; projectId: string } {
-  if (window.location.pathname === "/admin") return { name: "admin" };
-  if (window.location.pathname === "/diagrams") return { name: "diagrams" };
-  if (window.location.pathname === "/components") return { name: "gallery" };
-  const shared = window.location.pathname.match(/^\/shared\/([^/]+)\/?$/);
+  const pathname = relativeAppPath(window.location.pathname);
+  if (pathname === "/admin") return { name: "admin" };
+  if (pathname === "/diagrams") return { name: "diagrams" };
+  if (pathname === "/components") return { name: "gallery" };
+  const shared = pathname.match(/^\/shared\/([^/]+)\/?$/);
   if (shared?.[1]) return { name: "shared", token: decodeURIComponent(shared[1]) };
-  const accessRequest = window.location.pathname.match(/^\/request-access\/([^/]+)\/?$/);
+  const accessRequest = pathname.match(/^\/request-access\/([^/]+)\/?$/);
   if (accessRequest?.[1]) return { name: "access-request", projectId: decodeURIComponent(accessRequest[1]) };
-  const match = window.location.pathname.match(/^\/projects\/([^/]+)\/?$/);
+  const match = pathname.match(/^\/projects\/([^/]+)\/?$/);
   if (match?.[1]) return { name: "workspace", projectId: decodeURIComponent(match[1]) };
   return { name: "projects" };
+}
+
+function AppLoading({ message = "Loading FastWrite…", failed = false }: { message?: string; failed?: boolean }) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSlow(true), 15_000);
+    return () => window.clearTimeout(timer);
+  }, []);
+  return <main className="app-loading" aria-live="polite"><div style={{ display: "grid", gap: 12, textAlign: "center", maxWidth: 480, padding: 24 }}>
+    <h1 style={{ margin: 0 }}>FastWrite</h1>
+    <p style={{ margin: 0 }}>{message}</p>
+    {(failed || slow) && <><p style={{ margin: 0 }}>Check your connection, then reload to try again.</p><Button onClick={() => window.location.reload()}>Reload FastWrite</Button></>}
+  </div></main>;
+}
+
+class PageLoadBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    return this.state.failed ? <AppLoading failed message="FastWrite could not load this page." /> : this.props.children;
+  }
 }
 
 export function App() {
@@ -63,7 +86,8 @@ export function App() {
     window.addEventListener("keydown", save, { capture: true });
     return () => window.removeEventListener("keydown", save, { capture: true });
   }, []);
-  if (!authenticationReady) return <main className="app-loading" aria-live="polite">Completing sign-in…</main>;
+  if (!authenticationReady) return <AppLoading message="Completing sign-in…" />;
   const page = route.name === "admin" ? <AdminPage /> : route.name === "diagrams" ? <DiagramsPage /> : route.name === "workspace" ? <WorkspacePage projectId={route.projectId} /> : route.name === "shared" ? <SharedReviewPage token={route.token} /> : route.name === "access-request" ? <AccessRequestPage projectId={route.projectId} /> : route.name === "gallery" ? <GalleryPage /> : <ProjectsPage />;
-  return <Suspense fallback={<main className="app-loading" aria-live="polite">Loading FastWrite…</main>}>{route.name !== "diagrams" && <Link href="/diagrams" style={{position:"fixed",bottom:18,right:24,zIndex:100,background:"#244f3d",color:"white",padding:"10px 18px",borderRadius:8}}>科研绘图</Link>}{page}</Suspense>;
+  const routeKey = "projectId" in route ? `${route.name}:${route.projectId}` : "token" in route ? `${route.name}:${route.token}` : route.name;
+  return <PageLoadBoundary key={routeKey}><Suspense fallback={<AppLoading />}>{route.name !== "diagrams" && <Link href={appPath("/diagrams")} style={{position:"fixed",bottom:18,right:24,zIndex:100,background:"#244f3d",color:"white",padding:"10px 18px",borderRadius:8}}>科研绘图</Link>}{page}</Suspense></PageLoadBoundary>;
 }

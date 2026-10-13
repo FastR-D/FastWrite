@@ -99,6 +99,7 @@ export class WorkspaceService {
     mainDocument: string;
     venue: TargetVenue;
     publicationTarget?: PublicationTarget;
+    personalOwnerUserId?: string;
     source: ImportSource;
   }): Promise<PaperProject> {
     const id = projectId();
@@ -115,7 +116,7 @@ export class WorkspaceService {
       await rm(projectDirectory, { recursive: true, force: true });
       throw new ApiError(400, "main_document_missing", `Main document '${normalizedMain}' was not uploaded`);
     }
-    return this.registerProject(id, input.name, normalizedMain, input.venue, input.source, files, input.publicationTarget);
+    return this.registerProject(id, input.name, normalizedMain, input.venue, input.source, files, input.publicationTarget, input.personalOwnerUserId);
   }
 
   async copyExternalDirectory(input: {
@@ -124,6 +125,7 @@ export class WorkspaceService {
     mainDocument?: string;
     venue: TargetVenue;
     publicationTarget?: PublicationTarget;
+    personalOwnerUserId?: string;
     source: ImportSource;
   }): Promise<PaperProject> {
     const temporary = join(this.dataDirectory, "imports", crypto.randomUUID());
@@ -139,6 +141,7 @@ export class WorkspaceService {
       mainDocument,
       venue: input.venue,
       ...(input.publicationTarget ? { publicationTarget: input.publicationTarget } : {}),
+      ...(input.personalOwnerUserId ? { personalOwnerUserId: input.personalOwnerUserId } : {}),
       source: input.source
     });
   }
@@ -533,7 +536,8 @@ export class WorkspaceService {
     venue: TargetVenue,
     source: ImportSource,
     files: string[],
-    publicationTarget?: PublicationTarget
+    publicationTarget?: PublicationTarget,
+    personalOwnerUserId?: string
   ): Promise<PaperProject> {
     const timestamp = now();
     const skill = paperSkillForProfile(venue);
@@ -545,6 +549,7 @@ export class WorkspaceService {
       skill,
       ...(target ? { publicationTarget: target } : {}),
       source,
+      ...(personalOwnerUserId ? { personalOwnerUserId, visibility: "private" as const } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
       version: 1
@@ -552,6 +557,10 @@ export class WorkspaceService {
     await this.database.mutate((state) => {
       state.projects.push(project);
       state.fileVersions[id] = Object.fromEntries(files.map((path) => [path, { version: 1, updatedAt: timestamp }]));
+      if (personalOwnerUserId) {
+        state.projectMembers.push({ projectId: id, userId: personalOwnerUserId, role: "owner", createdAt: timestamp, updatedAt: timestamp });
+        state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: personalOwnerUserId, action: "project.create", resourceType: "project", resourceId: id, createdAt: timestamp });
+      }
     });
     await this.snapshotHistory(id, "Import paper snapshot");
     return project;
