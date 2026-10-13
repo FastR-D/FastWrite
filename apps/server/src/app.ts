@@ -504,6 +504,20 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     }
     return changeSet;
   };
+  const authorizeMemory = async (request: Request, projectId: string, write = false, useAgent = false) => {
+    const current = principal(request);
+    if (!current) return;
+    authorization.requireProject(current, projectId, write ? "project:write" : "project:read");
+    // Memory summaries combine sources and cannot safely be split by file.
+    // Include historical sources even after the original files were deleted.
+    await requireWorkspacePathAccess(projectId, current, authorization, "project:read", workspaces);
+    for (const path of memorySourcePaths(projectId, database)) authorization.requireProjectPath(current, projectId, path, "project:read");
+    if (write) authorization.requireProjectPath(current, projectId, "memory.md", "project:write");
+    if (useAgent) {
+      await requireWorkspacePathAccess(projectId, current, authorization, "agent:propose", workspaces);
+      for (const path of memorySourcePaths(projectId, database)) authorization.requireProjectPath(current, projectId, path, "agent:propose");
+    }
+  };
   const agentContextAccess = async (request: Request, projectId: string) => {
     if (!principal(request)) return undefined;
     const canUsePath = (path: string) => {
@@ -514,7 +528,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
         return true;
       } catch { return false; }
     };
-    return { canUsePath, includeMemory: textPathsForAuthorization(await workspaces.tree(projectId)).every(canUsePath) };
+    return { canUsePath, includeMemory: [...textPathsForAuthorization(await workspaces.tree(projectId)), ...memorySourcePaths(projectId, database)].every(canUsePath) };
   };
   const uploadIdFor = (request: Request, params: Record<string, string>) => {
     const current = principal(request);
@@ -1212,27 +1226,27 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     }),
     route("POST", "/api/projects/:projectId/review-issues", async (request, params) => { const projectId = required(params, "projectId"); const body = await readJson<Parameters<ReviewService["createIssue"]>[1]>(request); const current = principal(request, authEnabled); if (current) requireReviewReportAccess(projectId, body.reportId ?? reviews.list(projectId)[0]?.id, current, authorization, database); return json(await reviews.createIssue(projectId, body), 201); }),
     route("POST", "/api/projects/:projectId/review-issues/:issueId/merge", async (request, params) => { const projectId = required(params, "projectId"); const body = await readJson<{ duplicateIds: string[]; reason?: string }>(request); const current = principal(request, authEnabled); if (current) for (const issueId of [required(params, "issueId"), ...body.duplicateIds]) requireReviewIssueAccess(projectId, issueId, current, authorization, database); return json(await reviews.mergeIssues(projectId, required(params, "issueId"), body.duplicateIds, body.reason)); }),
-    route("GET", "/api/projects/:projectId/memory", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(await memories.get(projectId)); }),
-    route("POST", "/api/projects/:projectId/memory/extract", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "project:read", workspaces); return json(await memories.extract(projectId), 201); }),
-    route("POST", "/api/projects/:projectId/memory/apply", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "project:write", workspaces); return json(await memories.applyReviewed(projectId)); }),
+    route("GET", "/api/projects/:projectId/memory", async (request, params) => { const projectId = required(params, "projectId"); await authorizeMemory(request, projectId); return json(await memories.get(projectId)); }),
+    route("POST", "/api/projects/:projectId/memory/extract", async (request, params) => { const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true, true); return json(await memories.extract(projectId), 201); }),
+    route("POST", "/api/projects/:projectId/memory/apply", async (request, params) => { const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true); return json(await memories.applyReviewed(projectId)); }),
     route("PATCH", "/api/projects/:projectId/memory/overview", async (request, params) => {
-      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
+      const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true, true);
       const body = await readJson<{ content: string; locked?: boolean }>(request);
       return json(await memories.updateOverview(projectId, body.content, body.locked !== false, request.signal));
     }),
-    route("POST", "/api/projects/:projectId/memory/overview/accept", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await memories.acceptOverviewCandidate(projectId)); }),
+    route("POST", "/api/projects/:projectId/memory/overview/accept", async (request, params) => { const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true); return json(await memories.acceptOverviewCandidate(projectId)); }),
     route("PATCH", "/api/projects/:projectId/memory/sections/:sectionId", async (request, params) => {
-      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
+      const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true, true);
       const body = await readJson<{ content: string; locked?: boolean }>(request);
       return json(await memories.updateSection(projectId, required(params, "sectionId"), body.content, body.locked !== false, request.signal));
     }),
-    route("POST", "/api/projects/:projectId/memory/sections/:sectionId/accept", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await memories.acceptSectionCandidate(projectId, required(params, "sectionId"))); }),
+    route("POST", "/api/projects/:projectId/memory/sections/:sectionId/accept", async (request, params) => { const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true); return json(await memories.acceptSectionCandidate(projectId, required(params, "sectionId"))); }),
     route("PATCH", "/api/projects/:projectId/memory/items/:itemId", async (request, params) => {
-      const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
+      const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true, true);
       return json(await memories.updateItem(projectId, required(params, "itemId"), await readJson<{ status?: MemoryItemStatus; content?: string; label?: string }>(request), request.signal));
     }),
-    route("POST", "/api/projects/:projectId/memory/items/:itemId/accept", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await memories.acceptItemCandidate(projectId, required(params, "itemId"))); }),
-    route("POST", "/api/projects/:projectId/memory/rollback", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await memories.rollback(projectId)); }),
+    route("POST", "/api/projects/:projectId/memory/items/:itemId/accept", async (request, params) => { const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true); return json(await memories.acceptItemCandidate(projectId, required(params, "itemId"))); }),
+    route("POST", "/api/projects/:projectId/memory/rollback", async (request, params) => { const projectId = required(params, "projectId"); await authorizeMemory(request, projectId, true); return json(await memories.rollback(projectId)); }),
     route("GET", "/api/projects/:projectId/agent-tasks", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(agentTasks.list(projectId)); }),
     route("GET", "/api/projects/:projectId/agent-runs", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); workspaces.getProject(projectId); return json(database.snapshot().agentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); }),
     route("GET", "/api/projects/:projectId/provenance", async (request, params) => {
@@ -1557,6 +1571,18 @@ async function requireClaimAccess(projectId: string, claimId: string, principal:
 async function requireClaimReadAccess(projectId: string, claimId: string, principal: Principal, authorization: AuthorizationService, claims: ClaimService): Promise<void> { const claim = (await claims.list(projectId)).find((item) => item.id === claimId); if (!claim) throw new ApiError(404, "claim_not_found", "Claim was not found"); authorization.requireProjectPath(principal, projectId, claim.anchor.path, "project:read"); }
 
 function canReadProjectPath(principal: Principal, projectId: string, path: string, authorization: AuthorizationService): boolean { try { authorization.requireProjectPath(principal, projectId, path, "project:read"); return true; } catch { return false; } }
+
+function memorySourcePaths(projectId: string, database: JsonDatabase): Set<string> {
+  const paths = new Set(["memory.md"]);
+  for (const memory of database.snapshot().paperMemories.filter(item => item.projectId === projectId)) {
+    for (const source of memory.overview?.candidate?.sources ?? []) paths.add(source.path);
+    for (const item of [...(memory.sections ?? []), ...memory.items]) {
+      if ("path" in item) paths.add(item.path);
+      for (const source of [...item.sources, ...(item.candidate?.sources ?? [])]) paths.add(source.path);
+    }
+  }
+  return paths;
+}
 
 function filterVisibleReviewReports(reports: ReviewReport[], projectId: string, principal: Principal, authorization: AuthorizationService, database: JsonDatabase): ReviewReport[] {
   const snapshots = new Map(database.snapshot().reviewSnapshots.filter((snapshot) => snapshot.projectId === projectId).map((snapshot) => [snapshot.id, snapshot]));
