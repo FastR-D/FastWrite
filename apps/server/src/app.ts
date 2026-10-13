@@ -81,7 +81,7 @@ import { FastCASError } from "@fastrd/fastcas/server";
 import { MailDeliveryService, SmtpMailTransport, type MailTransport } from "./notifications/mail-delivery-service";
 import { InProcessJobQueue, type JobRecord, type JobStore } from "./jobs/job-queue";
 import { InMemoryCollaborationBus, RedisCollaborationBus, type CollaborationBus } from "./collaboration/collaboration-bus";
-import { adapterCapabilities, ExternalResearchAdapters, type ExternalAdapterKind } from "./research/external-adapters";
+import { adapterCapabilities, ExternalResearchAdapters, type ExternalAdapterKind, type ResearchAdapterBaseUrls } from "./research/external-adapters";
 import { ExperimentRunner } from "./experiments/experiment-runner";
 import { BackupService } from "./storage/backup-service";
 import { LocalObjectStore, createS3ObjectStore, type ObjectStore } from "./storage/object-storage";
@@ -151,6 +151,7 @@ export interface ApplicationOptions {
   fastcasConfiguration?: FastCASConfiguration;
   mailTransport?: MailTransport;
   researchFetcher?: (input: string | Request | URL, init?: RequestInit) => Promise<Response>;
+  researchAdapterBaseUrls?: ResearchAdapterBaseUrls;
   metrics?: MetricsRegistry;
   collaborationBus?: CollaborationBus;
   postgresRepository?: import("./storage/repository").PostgresRepository;
@@ -353,7 +354,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const reviews = new ReviewService(database, workspaces, skillRegistry, asGateway(providers.review));
   const compliance = new ComplianceService(workspaces, skillRegistry);
   const research = new ResearchService(database, workspaces, options.researchFetcher ?? fetch);
-  const externalAdapters = new ExternalResearchAdapters(options.researchFetcher ?? fetch);
+  const externalAdapters = new ExternalResearchAdapters(options.researchFetcher ?? fetch, options.researchAdapterBaseUrls);
   const jobStore: JobStore = {
     load: () => database.snapshot().jobs,
     save: async (job) => { await database.mutate((state) => { const index = state.jobs.findIndex((candidate) => candidate.id === job.id); if (index >= 0) state.jobs[index] = job; else state.jobs.push(job); }); await persistToPostgres(); },
@@ -836,8 +837,8 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       const kind = required(params, "kind") as ExternalAdapterKind;
       if (!["zotero", "grobid", "pandoc"].includes(kind)) throw new ApiError(400, "external_adapter_invalid", "Unsupported research adapter");
       const body = await readJson<{ baseUrl?: string; operation?: "health" | "search" | "parse" | "convert"; input?: unknown; authorized?: boolean }>(request);
-      if (!body.baseUrl || !body.operation || body.authorized !== true) throw new ApiError(403, "external_adapter_authorization_required", "baseUrl, operation and explicit authorization are required");
-      return json(await externalAdapters.call({ kind, operation: body.operation, input: body.input, authorized: body.authorized }, { kind, baseUrl: body.baseUrl, readOnly: true, allowed: true }, request.signal));
+      if (!body.operation || body.authorized !== true) throw new ApiError(403, "external_adapter_authorization_required", "operation and explicit authorization are required");
+      return json(await externalAdapters.callConfigured({ kind, operation: body.operation, input: body.input, authorized: body.authorized }, body.baseUrl, request.signal));
     }),
     route("POST", "/api/projects/:projectId/research-works/import", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); const body = await readJson<Parameters<ResearchService["importWork"]>[1]>(request); if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiError(400, "invalid_research_request", "Research import must be an object"); return json(await research.importWork(projectId, body), 201); }),
     route("PATCH", "/api/projects/:projectId/research-works/:workId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write"); return json(await research.saveWork(projectId, required(params, "workId"), await readJson<{ status?: "candidate" | "saved" | "rejected"; citationKey?: string }>(request))); }),
