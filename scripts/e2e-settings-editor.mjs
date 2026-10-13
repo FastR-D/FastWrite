@@ -25,7 +25,7 @@ try {
   await page.goto(`${base}/projects/${project.id}`);
   const source = page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true });
   await expect(source).toBeVisible();
-  const tabs = page.getByRole('tablist', { name: 'Open editors' });
+  const tabs = page.getByRole('group', { name: 'Open editors controls' });
   const settingsTab = tabs.getByRole('tab', { name: 'Settings', exact: true });
   const panel = page.getByRole('tabpanel', { name: 'Settings', exact: true });
   await page.getByRole('button', { name: 'Workspace settings', exact: true }).click();

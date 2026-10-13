@@ -63,6 +63,14 @@ try {
   const archive = await readFile(await (await archiveDownload).path()); assert.deepEqual([...archive.subarray(0, 2)], [31, 139]);
   console.log("PASS: authenticated provenance and workspace downloads produce valid files");
 
+  const editorTabs = page.getByRole("group", { name: "Open editors controls", exact: true });
+  await editorTabs.getByRole("tab", { name: "Settings", exact: true }).focus();
+  await page.keyboard.press("Home"); await editor().waitFor({ state: "attached" });
+  await page.keyboard.press("End"); await page.getByRole("button", { name: "Export", exact: true }).waitFor();
+  await editorTabs.getByRole("button", { name: "Close Settings", exact: true }).click();
+  await expect(editorTabs.getByRole("tab", { name: "Settings", exact: true })).toHaveCount(0);
+  console.log("PASS: editor tabs retain keyboard navigation and accessible close controls");
+
   const oldToken = await page.evaluate(() => localStorage.getItem("fastwrite.session-token")); let refreshCalls = 0;
   context.on("request", request => { if (new URL(request.url()).pathname === "/api/auth/refresh") refreshCalls++; });
   await context.route("**/api/**", async route => {

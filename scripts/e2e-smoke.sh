@@ -616,7 +616,7 @@ run_code 'async (page) => {
   const hunkEditor = agentPanel.getByLabel("Edit hunk 1 for sections/method.tex");
   await hunkEditor.fill("This sentence is grounded in bounded and unmanaged evidence.");
   await agentPanel.getByRole("button", { name: "Save hunk", exact: true }).click();
-  await agentPanel.getByText("unmanaged", { exact: false }).waitFor();
+  await agentPanel.locator(".hunk-review").getByText("unmanaged", { exact: true }).waitFor();
   await agentPanel.getByRole("button", { name: "Leave review", exact: true }).click();
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await agentPanel.getByRole("button", { name: "sections/method.tex: 1 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
