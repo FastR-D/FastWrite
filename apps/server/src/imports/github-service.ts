@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { GithubImportRequest, PaperProject } from "@fastwrite/shared";
 import { ApiError } from "../http";
-import type { WorkspaceService } from "../workspace/workspace-service";
+import type { WorkspaceService, ProjectOwner } from "../workspace/workspace-service";
 
 interface GithubLocation {
   owner: string;
@@ -13,7 +13,7 @@ interface GithubLocation {
 export class GithubService {
   constructor(private readonly dataDirectory: string, private readonly workspaces: WorkspaceService) {}
 
-  async import(request: GithubImportRequest): Promise<PaperProject> {
+  async import(request: GithubImportRequest, owner?: ProjectOwner): Promise<PaperProject> {
     const location = parseGithubRepository(request.repository);
     const requestedRef = request.ref?.trim() || "HEAD";
     if (requestedRef !== "HEAD" && (!/^[\w./-]{1,200}$/.test(requestedRef) || requestedRef.startsWith("-") || requestedRef.includes("..") || requestedRef.includes("@{"))) {
@@ -47,6 +47,7 @@ export class GithubService {
 
       const importedRef = requestedRef === "HEAD" ? await currentBranch(cloneDirectory) : requestedRef;
       const project = await this.workspaces.copyExternalDirectory({
+        owner,
         sourceDirectory: cloneDirectory,
         name: request.name?.trim() || location.repository,
         ...(request.mainDocument ? { mainDocument: request.mainDocument } : {}),

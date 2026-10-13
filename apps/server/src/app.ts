@@ -32,7 +32,7 @@ import type {
   EvidenceCockpit, CitationReviewer
   ,AgentWireApi
 } from "@fastwrite/shared";
-import type { AgentProvider } from "./agent/provider";
+import { OpenAIAgentProvider, type AgentProvider } from "./agent/provider";
 import { asGateway } from "./agent/agent-gateway";
 import { DraftService } from "./agent/draft-service";
 import { ReviseService } from "./agent/revise-service";
@@ -132,7 +132,7 @@ interface Services {
 }
 
 type Handler = (request: Request, params: Record<string, string>, url: URL) => Promise<Response> | Response;
-export type ApplicationFetch = ((request: Request) => Promise<Response>) & { dispatchMail(): Promise<void>; onAuthChange?(listener: () => void): () => void };
+export type ApplicationFetch = ((request: Request) => Promise<Response>) & { dispatchMail(): Promise<void>; authorizeHarnessRun(request: Request, runId: string): void; onAuthChange?(listener: () => void): () => void };
 
 interface Route {
   method: string;
@@ -142,6 +142,7 @@ interface Route {
 }
 
 export interface ApplicationOptions {
+  bootstrapAdmin?: { email: string; password: string };
   agentProvider?: AgentProvider;
   texPackages?: TexPackageProvider;
   features?: Partial<typeof config.features>;
@@ -156,8 +157,8 @@ export interface ApplicationOptions {
 }
 
 function providerFor(configuration: AgentProviderConfiguration): AgentProvider | undefined {
-  if (!configuration.baseURL || !configuration.model) return undefined;
-  return new LocalModelProvider({ endpoint: configuration.baseURL, model: configuration.model });
+  if (!configuration.apiKey) return undefined;
+  return new OpenAIAgentProvider(configuration.apiKey, configuration.model, configuration.baseURL, configuration.wireAPI);
 }
 
 function createRedisCollaborationBus(url: string): CollaborationBus {
@@ -259,6 +260,7 @@ function harnessProvider(runs: HarnessRunService, kind: "codex" | "claude", cwd:
 export async function createApplication(dataDirectory = config.dataDirectory, options: ApplicationOptions = {}) {
   const metrics = options.metrics ?? new MetricsRegistry();
   const features = { ...config.features, ...options.features };
+  if (process.env.FASTWRITE_JOB_WORKER_MODE === "external") throw new Error("External workers are unsupported by this JSON-backed runtime. Unset FASTWRITE_JOB_WORKER_MODE to process jobs in the server.");
   const database = new JsonDatabase(dataDirectory);
   await database.initialize();
   const autoPostgres = options.postgresRepository ?? await configuredPostgresRepository(database.snapshot());
@@ -286,10 +288,10 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   if (postgresCutover && postgresMirror) await persistToPostgres();
   const comparePostgres = async () => postgresMirror && "dualReadCompare" in postgresMirror ? await (postgresMirror as import("./storage/postgres-repository").SqlPostgresRepository).dualReadCompare() : { equal: true, legacyHash: "", normalizedHash: "", mismatches: [] as string[] };
   const auth = new AuthService(database, config.collaborationRoomTokenSecret);
-  const bootstrapRequested = config.features.serverAuth || process.env.FASTWRITE_BOOTSTRAP_ADMIN_EMAIL || process.env.FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD;
-  if (bootstrapRequested) {
-    const bootstrapCreated = await auth.ensureBootstrapAdmin(config.bootstrapAdmin);
-    if (bootstrapCreated) console.warn(`FastWrite bootstrap admin created: ${config.bootstrapAdmin.email} (change FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD after first login)`);
+  const bootstrapAdmin = options.bootstrapAdmin ?? config.bootstrapAdmin;
+  if (features.serverAuth || bootstrapAdmin) {
+    const bootstrapCreated = await auth.ensureBootstrapAdmin(bootstrapAdmin);
+    if (bootstrapCreated) console.warn("FastWrite bootstrap admin created. Remove the bootstrap credentials from the environment; they do not reset existing passwords.");
   }
   const oidc = options.oidcProvider ?? (config.oidc ? new OidcIdentityProvider(config.oidc) : undefined);
   const cas = options.casProvider ?? (config.cas ? new CasIdentityProvider(config.cas) : undefined);
@@ -312,7 +314,6 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const texPackages = options.texPackages ?? new TexPackageService(dataDirectory);
   await texPackages.initialize();
   const defaultProvider = options.agentProvider;
-  const configuredProviders = defaultProvider ? { completion: defaultProvider, agent: defaultProvider, revise: defaultProvider, review: defaultProvider, memory: defaultProvider } : undefined;
   let runtimeConfiguration: AgentProviderConfiguration | undefined;
   let runtimeProvider: AgentProvider | undefined;
   const configureAgent = (input: AgentSettingsInput) => {
@@ -320,12 +321,14 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
     if (!apiKey) throw new ApiError(400, "agent_api_key_required", "Enter an API key to enable Agent tasks");
     const baseURL = boundedSetting(input.baseURL, 2_048);
     if (baseURL) {
-      try { new URL(baseURL); } catch { throw new ApiError(400, "agent_base_url_invalid", "Base URL must be a valid absolute URL"); }
+      try { const url = new URL(baseURL); if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Invalid provider URL"); } catch { throw new ApiError(400, "agent_base_url_invalid", "Base URL must be an HTTP(S) URL without embedded credentials"); }
     }
     if (input.wireAPI !== undefined && input.wireAPI !== "chat" && input.wireAPI !== "responses") throw new ApiError(400, "agent_wire_api_invalid", "Wire API must be 'chat' or 'responses'");
-    runtimeConfiguration = { apiKey, ...(baseURL ? { baseURL } : {}), ...(boundedSetting(input.model, 256) ? { model: boundedSetting(input.model, 256) } : {}), wireAPI: input.wireAPI ?? (baseURL ? "chat" : "responses") };
     if (input.harness && input.harness !== config.harness) throw new ApiError(400, "harness_runtime_switch_unsupported", "Restart the server to switch Harness implementations");
-    runtimeProvider = providerFor(runtimeConfiguration);
+    const nextConfiguration = { apiKey, ...(baseURL ? { baseURL } : {}), ...(boundedSetting(input.model, 256) ? { model: boundedSetting(input.model, 256) } : {}), wireAPI: input.wireAPI ?? (baseURL ? "chat" : "responses") };
+    const nextProvider = providerFor(nextConfiguration);
+    runtimeConfiguration = nextConfiguration;
+    runtimeProvider = nextProvider;
   };
   const skillRegistry = new SkillRegistry(config.skillsDirectory, database);
   const harnessRegistry = new HarnessRegistry();
@@ -335,9 +338,13 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   for (const server of defaultMcpServers()) mcpRegistry.register(server);
   const harnessRuns = new HarnessRunService(harnessRegistry, database);
   const harnessProviderInstance = harnessProvider(harnessRuns, config.harness, process.cwd(), config.harnessModel);
-  const providers = configuredProviders ?? { completion: harnessProviderInstance, agent: harnessProviderInstance, revise: harnessProviderInstance, review: harnessProviderInstance, memory: harnessProviderInstance };
+  const environmentProvider = providerFor(config.agentProviders.agent);
+  const activeProvider = () => runtimeProvider ?? defaultProvider ?? environmentProvider ?? harnessProviderInstance;
+  // Services retain this proxy; each new call resolves the current configuration.
+  const sharedProvider = runtimeAgentProvider(activeProvider);
+  const providers = { completion: sharedProvider, agent: sharedProvider, revise: sharedProvider, review: sharedProvider, memory: sharedProvider };
   const harnessSessions = new HarnessSessionService(database);
-  const latexCompiler = new LatexCompileService(dataDirectory, workspaces, { mode: process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host" });
+  const latexCompiler = new LatexCompileService(dataDirectory, workspaces, { mode: features.serverAuth || process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host" });
   const mcpTools = new McpToolService(mcpRegistry, workspaces, latexCompiler, database);
   const latexTemplates = new LatexTemplateService(dataDirectory, fetch, config.templateDirectory);
   const memories = new MemoryService(database, workspaces, skillRegistry, asGateway(providers.memory));
@@ -359,24 +366,31 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const jobPruneTimer = setInterval(() => { jobs.requeueExpiredLeases(); jobs.prune(); }, 15 * 60_000);
   jobPruneTimer.unref?.();
   for (const persistedJob of jobs.list("latex.compile").filter((job) => job.status === "queued" && process.env.FASTWRITE_JOB_WORKER_MODE !== "external")) {
-    jobs.start(persistedJob.id, async (input) => {
+    jobs.start(persistedJob.id, async (input, _job, signal) => {
       const projectId = (input as { projectId: string }).projectId;
       const persisted = jobs.get(persistedJob.id); const actorId = persisted?.policy?.actorUserId; if (actorId) { const actor = database.snapshot().users.find((user) => user.id === actorId); if (!actor || actor.status !== "active") throw new ApiError(403, "job_actor_revoked", "The job owner is no longer active"); }
-      return latexCompiler.compile(projectId);
+      return latexCompiler.compile(projectId, signal);
     });
   }
   const claims = new ClaimService(database, workspaces);
   const alignment = new AlignmentService(workspaces);
   const agentTasks = new AgentTaskService(database, workspaces, skillRegistry, asGateway(providers.agent), memories, asGateway(providers.review), compliance);
   const completions = new CompletionService(workspaces, skillRegistry, asGateway(providers.completion), memories);
-  const diagrams = new DiagramService(dataDirectory, options.agentProvider?.generateDiagram ? options.agentProvider : diagramProvider(dataDirectory));
+  const defaultDiagramProvider = diagramProvider(dataDirectory);
+  const diagrams = new DiagramService(dataDirectory, { generateDiagram: (input, signal) => {
+    const provider = runtimeProvider ?? defaultProvider ?? environmentProvider;
+    return (provider?.generateDiagram ? provider : defaultDiagramProvider).generateDiagram!(input, signal);
+  } });
   await diagrams.initialize();
   const services: Services = { diagrams, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
   const routes = buildRoutes(services, {
     status: () => {
       const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
       const discovered = discoverHarnessConfiguration(config.harness);
-      return { configured: Boolean(runtimeConfiguration ?? runtimeProvider ?? providers.agent) || discovered.configured, harness: config.harness, source: runtimeConfiguration || runtimeProvider ? "runtime" : providers.agent ? "environment" : "none", ...(activeConfiguration.baseURL ? { baseURL: activeConfiguration.baseURL } : discovered.baseURL ? { baseURL: discovered.baseURL } : {}), ...(activeConfiguration.model ? { model: activeConfiguration.model } : discovered.model ? { model: discovered.model } : {}), wireAPI: activeConfiguration.wireAPI ?? (activeConfiguration.baseURL ? "chat" : "responses") };
+      const configured = Boolean(runtimeProvider ?? defaultProvider ?? environmentProvider) || discovered.configured;
+      const source = runtimeProvider ? "runtime" : defaultProvider || environmentProvider || discovered.configured ? "environment" : "none";
+      const usesHTTP = Boolean(runtimeProvider ?? environmentProvider);
+      return { configured, harness: config.harness, source, ...(activeConfiguration.baseURL ? { baseURL: activeConfiguration.baseURL } : !usesHTTP && discovered.baseURL ? { baseURL: discovered.baseURL } : {}), ...(activeConfiguration.model ? { model: activeConfiguration.model } : !usesHTTP && discovered.model ? { model: discovered.model } : {}), wireAPI: activeConfiguration.wireAPI ?? (activeConfiguration.baseURL ? "chat" : "responses") };
     },
     configure: configureAgent,
     postgresMirror: () => ({ configured: Boolean(postgresMirror), healthy: Boolean(postgresMirror) && !postgresMirrorError, failures: postgresMirrorFailures, ...(postgresMirrorError ? { lastError: postgresMirrorError } : {}) }),
@@ -412,6 +426,10 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
   void stopCollaborationBus;
   applicationFetch.dispatchMail = () => mailDelivery.dispatchPending();
+  applicationFetch.authorizeHarnessRun = (request, runId) => {
+    requireHarnessAccess(auth, request, features.serverAuth);
+    if (!harnessRuns.get(runId)) throw new ApiError(404, "harness_run_not_found", "Harness run not found");
+  };
   applicationFetch.onAuthChange = listener => fastcas?.onRevocation(listener) ?? (() => {});
   return applicationFetch;
 }
@@ -448,24 +466,49 @@ function pathAuthorizesIndividually(pathname: string): boolean {
   return /\/api\/projects\/[^/]+\/(?:file|asset|files|assets)$/.test(pathname);
 }
 
+// Raw Harness sessions share host CLI credentials and accept arbitrary working
+// directories. They are host administration APIs, not project-scoped AI APIs.
+function requireHarnessAccess(auth: AuthService, request: Request, authEnabled: boolean, adminOnly = true): Principal | undefined {
+  if (!authEnabled) return undefined;
+  const actor = auth.principal(request)!;
+  if (adminOnly) requireRole(actor.user, "platform_admin");
+  return actor;
+}
+
 function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry(), fastcas?: FastCASService): Route[] {
   const presence = new Map<string, Map<string, { clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>();
   const principal = (request: Request, required = authEnabled): Principal | undefined => auth.principal(request, required);
+  const harnessRoute = (method: string, path: string, handler: Handler, adminOnly = true): Route => route(method, path, (request, params, url) => {
+    requireHarnessAccess(auth, request, authEnabled, adminOnly);
+    return handler(request, params, url);
+  });
   const authorize = (request: Request, projectId: string, action: Parameters<AuthorizationService["requireProject"]>[2]) => {
     const current = principal(request);
     if (current) authorization.requireProject(current, projectId, action);
     return current;
   };
-  const assignProjectOwner = async (project: { id: string }, current?: Principal, teamId?: string) => {
-    if (!current) return;
-    if (teamId) authorization.requireTeamRole(current, teamId, ["owner", "admin"]);
-    const timestamp = new Date().toISOString();
-    await database.mutate((state) => {
-      const stored = state.projects.find((item) => item.id === project.id);
-      if (stored) { if (teamId) { stored.teamId = teamId; stored.visibility = "team"; } else { stored.personalOwnerUserId = current.user.id; stored.visibility = "private"; } }
-      if (!state.projectMembers.some((item) => item.projectId === project.id && item.userId === current.user.id)) state.projectMembers.push({ projectId: project.id, userId: current.user.id, role: "owner", createdAt: timestamp, updatedAt: timestamp });
-      state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: current.user.id, action: "project.create", resourceType: "project", resourceId: project.id, createdAt: timestamp });
-    });
+  const uploadIdFor = (request: Request, params: Record<string, string>) => {
+    const current = principal(request);
+    const id = required(params, "uploadId");
+    const session = uploads.get(id);
+    if (current && session.ownerUserId !== current.user.id && current.user.platformRole !== "platform_admin") throw new ApiError(404, "upload_not_found", "Upload session not found");
+    return id;
+  };
+  const authorizeHistoryPaths = async (request: Request, projectId: string, paths?: string[]) => {
+    const current = principal(request);
+    if (paths !== undefined && (!Array.isArray(paths) || paths.length === 0 || paths.some(path => typeof path !== "string"))) throw new ApiError(400, "history_paths_required", "At least one file path is required");
+    let selected: string[] | undefined;
+    try {
+      selected = paths?.map(normalizeWorkspacePath);
+      if (selected?.some(path => !path)) throw new Error("empty path");
+    } catch { throw new ApiError(400, "history_path_invalid", "History paths must be nonempty relative paths"); }
+    if (current) {
+      const status = await workspaces.workingStatus(projectId);
+      const known = new Set([...workspacePathsForAuthorization(await workspaces.tree(projectId)), ...Object.keys(database.snapshot().fileVersions[projectId] ?? {}), ...status.files.flatMap(file => file.oldPath ? [file.path, file.oldPath] : [file.path]), ...(selected ?? [])]);
+      for (const path of known) if (!selected || selected.some(prefix => path === prefix || path.startsWith(`${prefix}/`))) authorization.requireProjectPath(current, projectId, path, "project:write");
+      for (const file of status.files) if (file.oldPath && selected?.some(prefix => file.path === prefix || file.path.startsWith(`${prefix}/`))) authorization.requireProjectPath(current, projectId, file.oldPath, "project:write");
+    }
+    return selected;
   };
   return [
     route("GET", "/api/health", async () => json({ status: "ok", version: "0.1.0" })),
@@ -609,20 +652,20 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("POST", "/api/collaboration/room-update", async (request) => { const grant = auth.collaborationRoomGrant(request.headers.get("x-fastwrite-room-token") ?? ""); if (grant.scope !== "write") throw new ApiError(403, "collaboration_write_denied", "This room is read-only"); const user = database.snapshot().users.find((item) => item.id === grant.userId)!; authorization.requireProjectPath({ user, sessionId: grant.sessionId }, grant.projectId, grant.path, "project:write"); const body = await readJson<{ update?: string }>(request); if (!body.update || body.update.length > 7_000_000) throw new ApiError(400, "collaboration_update_invalid", "A bounded Yjs update is required"); return json(await collaboration.applyLive(grant.projectId, grant.path, body.update)); }),
     route("GET", "/api/collaboration/access", async (request, _params, url) => { const projectId = requiredQuery(url, "projectId"); const path = requiredQuery(url, "path"); const current = principal(request, true)!; authorization.requireProject(current, projectId, "project:write"); await workspaces.readTextFile(projectId, path); const palette = ["#2563eb", "#059669", "#c2410c", "#7c3aed", "#be123c"]; const color = palette[Number.parseInt(current.user.id.replace(/\D/g, "").slice(-4) || "0", 10) % palette.length]!; return json({ projectId, path, userId: current.user.id, displayName: current.user.displayName, color }); }),
     route("GET", "/api/diagrams/schema", () => json(diagramSchema)),
-    route("GET", "/api/diagrams", async () => json((await diagrams.list()).map(({scene,...record})=>({...record,title:scene?.title})))),
-    route("POST", "/api/diagrams", async request => {const body=await readJson<{scene:unknown;parentId?:string}>(request);return json(await diagrams.save(body.scene,body.parentId),201)}),
-    route("POST", "/api/diagrams/generate", async request => json(await diagrams.generate(await readJson(request)),202)),
-    route("GET", "/api/diagrams/:diagramId", async (_request,params)=>json(await diagrams.get(required(params,"diagramId")))),
-    route("GET", "/api/diagrams/:diagramId/export/:format", async (_request,params)=>{
-      const record=await diagrams.get(required(params,"diagramId"));if(!record.scene)throw new ApiError(409,"diagram_not_ready","图尚未生成完成");
+    route("GET", "/api/diagrams", async request => json((await diagrams.list(principal(request))).map(({scene,...record})=>({...record,title:scene?.title})))),
+    route("POST", "/api/diagrams", async request => {const actor=principal(request);const body=await readJson<{scene:unknown;parentId?:string}>(request);return json(await diagrams.save(body.scene,body.parentId,actor),201)}),
+    route("POST", "/api/diagrams/generate", async request => { const actor=principal(request); return json(await diagrams.generate(await readJson(request),actor),202); }),
+    route("GET", "/api/diagrams/:diagramId", async (request,params)=>json(await diagrams.get(required(params,"diagramId"),principal(request)))),
+    route("GET", "/api/diagrams/:diagramId/export/:format", async (request,params)=>{
+      const record=await diagrams.get(required(params,"diagramId"),principal(request));if(!record.scene)throw new ApiError(409,"diagram_not_ready","图尚未生成完成");
       const format=required(params,"format");
       if(format==='svg')return new Response(renderSvg(record.scene),{headers:{'content-type':'image/svg+xml','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'",'content-disposition':'inline; filename="diagram.svg"'}});
       if(format==='drawio')return new Response(renderDrawio(record.scene),{headers:{'content-type':'application/xml','content-disposition':'attachment; filename="diagram.drawio"'}});
       if(format==='pptx')return new Response(await renderPptx(record.scene),{headers:{'content-type':'application/vnd.openxmlformats-officedocument.presentationml.presentation','content-disposition':'attachment; filename="diagram.pptx"'}});
       throw new ApiError(400,'diagram_format_invalid','支持 SVG、draw.io 和 PPTX');
     }),
-    route("GET", "/api/harness-settings", async () => json(agentSettings.status())),
-    route("PUT", "/api/harness-settings", async (request) => { agentSettings.configure(await readJson<AgentSettingsInput>(request)); return json(agentSettings.status()); }),
+    harnessRoute("GET", "/api/harness-settings", async () => json(agentSettings.status()), false),
+    harnessRoute("PUT", "/api/harness-settings", async (request) => { agentSettings.configure(await readJson<AgentSettingsInput>(request)); return json(agentSettings.status()); }),
     route("GET", "/api/venues", async () => json(await skillRegistry.catalog())),
     route("GET", "/api/skills/workflows", async () => json((await skillRegistry.workflowCatalog()).map(({ instructions: _instructions, ...descriptor }) => descriptor))),
     route("GET", "/api/skills/releases", async () => json(await skillRegistry.publishedCatalog())),
@@ -630,26 +673,34 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("POST", "/api/skills/releases/:skillId/evaluate", async (request, params) => { const actor = principal(request, authEnabled); if (actor) requireRole(actor.user, "platform_admin"); try { return json(await skillRegistry.evaluate(required(params, "skillId"))); } catch (error) { throw new ApiError(404, "skill_release_not_found", error instanceof Error ? error.message : "Skill release not found"); } }),
     route("POST", "/api/skills/releases/:skillId/rollback", async (request, params) => { const actor = principal(request, authEnabled); if (actor) requireRole(actor.user, "platform_admin"); const body = await readJson<{ reason?: string }>(request); if (!body.reason?.trim()) throw new ApiError(400, "skill_rollback_reason_required", "A rollback reason is required"); try { return json(await skillRegistry.rollback(required(params, "skillId"), body.reason)); } catch (error) { throw new ApiError(404, "skill_release_not_found", error instanceof Error ? error.message : "Skill release not found"); } }),
     route("GET", "/api/agent-skills", async () => json(await skillRegistry.taskCatalog())),
-    route("GET", "/api/harnesses", async () => json(await Promise.all(harnessRegistry.list().map(async (adapter) => ({ status: await adapter.getStatus(), capabilities: await adapter.getCapabilities() }))))),
-    route("GET", "/api/harness-sessions", async () => json(harnessSessions.list())),
-    route("GET", "/api/mcp", async () => json(mcpRegistry.list())),
-    route("GET", "/api/mcp/audit", async (_request, params, url) => json(mcpTools.audit(url.searchParams.get("projectId") ?? undefined))),
+    harnessRoute("GET", "/api/harnesses", async () => json(await Promise.all(harnessRegistry.list().map(async (adapter) => ({ status: await adapter.getStatus(), capabilities: await adapter.getCapabilities() })))), false),
+    harnessRoute("GET", "/api/harness-sessions", async () => json(harnessSessions.list())),
+    harnessRoute("GET", "/api/mcp", async () => json(mcpRegistry.list()), false),
+    harnessRoute("GET", "/api/mcp/audit", async (request, _params, url) => {
+      const projectId = url.searchParams.get("projectId") || undefined;
+      if (authEnabled) {
+        const actor = principal(request)!;
+        if (projectId) authorization.requireProject(actor, projectId, "harness:use");
+        else requireRole(actor.user, "platform_admin");
+      }
+      return json(mcpTools.audit(projectId));
+    }, false),
     route("POST", "/api/projects/:projectId/mcp/call", async (request, params) => { const body = await readJson<{ name?: string; input?: unknown; allow?: string[]; deny?: string[] }>(request); if (!body.name) throw new ApiError(400, "mcp_tool_required", "name is required"); const projectId = required(params, "projectId"); const current = principal(request, false); if (current) await authorizeMcpWorkspaceInput(projectId, current, authorization, body.name, body.input, workspaces); const policy = current ? { allow: harnessProfiles.resolve(current, projectId).allowedTools } : { allow: body.allow ?? [], ...(body.deny ? { deny: body.deny } : {}) }; return json(await mcpTools.call(projectId, body.name, body.input ?? {}, policy)); }),
-    route("GET", "/api/harness-runs", async () => json(harnessRuns.list())),
-    route("GET", "/api/harness-runs/:runId", async (_request, params) => {
+    harnessRoute("GET", "/api/harness-runs", async () => json(harnessRuns.list())),
+    harnessRoute("GET", "/api/harness-runs/:runId", async (_request, params) => {
       const run = harnessRuns.get(required(params, "runId"));
       if (!run) throw new ApiError(404, "harness_run_not_found", "Harness run not found");
       return json(run);
     }),
-    route("GET", "/api/harness-runs/:runId/events", async (_request, params, url) => {
+    harnessRoute("GET", "/api/harness-runs/:runId/events", async (_request, params, url) => {
       const run = harnessRuns.get(required(params, "runId"));
       if (!run) throw new ApiError(404, "harness_run_not_found", "Harness run not found");
       const since = Math.max(0, Number.parseInt(url.searchParams.get("since") ?? "0", 10) || 0);
       const limit = Math.min(2000, Math.max(1, Number.parseInt(url.searchParams.get("limit") ?? "2000", 10) || 2000));
       return json(run.events.slice(since, since + limit));
     }),
-    route("GET", "/api/harness-runs/:runId/approvals", async (_request, params) => json(harnessRuns.listApprovals(required(params, "runId")))),
-    route("POST", "/api/harness-approvals/:approvalId", async (request, params) => {
+    harnessRoute("GET", "/api/harness-runs/:runId/approvals", async (_request, params) => json(harnessRuns.listApprovals(required(params, "runId")))),
+    harnessRoute("POST", "/api/harness-approvals/:approvalId", async (request, params) => {
       const body = await readJson<{ decision?: "approved" | "denied" }>(request);
       if (body.decision !== "approved" && body.decision !== "denied") throw new ApiError(400, "approval_decision_invalid", "decision must be approved or denied");
       let approval;
@@ -658,7 +709,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       if (!approval) throw new ApiError(404, "approval_not_found", "Approval not found");
       return json(approval);
     }),
-    route("POST", "/api/harness-runs", async (request) => {
+    harnessRoute("POST", "/api/harness-runs", async (request) => {
       const body = await readJson<{ kind?: "claude" | "codex"; sessionId?: string; cwd?: string; content?: string; model?: string; projectId?: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }>(request);
       if (!body.kind || !body.sessionId || !body.cwd?.trim() || !body.content?.trim()) throw new ApiError(400, "harness_run_invalid", "kind, sessionId, cwd and content are required");
       const actor = body.projectId ? principal(request)! : principal(request, false);
@@ -669,19 +720,19 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       for await (const event of harnessRuns.send({ kind: body.kind, session: { harness: body.kind, sessionId: body.sessionId, cwd: body.cwd.trim() }, content: body.content.trim(), ...(body.model?.trim() ? { model: body.model.trim() } : {}), ...(body.skills ? { skills: body.skills } : {}), ...(actor ? { actorUserId: actor.user.id } : {}), ...(body.projectId ? { projectId: body.projectId } : {}), ...(projectVersion !== undefined ? { projectVersion } : {}), ...(resolved ? { resolvedHarnessProfile: { profileId: resolved.profileId, version: resolved.version, fingerprint: resolved.fingerprint, sourceChain: resolved.sourceChain } } : {}), signal: request.signal })) events.push(event);
       return json({ events }, 201);
     }),
-    route("POST", "/api/harnesses/:kind/sessions", async (request, params) => {
+    harnessRoute("POST", "/api/harnesses/:kind/sessions", async (request, params) => {
       const adapter = harnessAdapter(harnessRegistry, required(params, "kind"));
       const body = await readJson<{ cwd?: string; title?: string }>(request);
       if (!body.cwd?.trim()) throw new ApiError(400, "harness_cwd_required", "cwd is required");
       return json(await harnessSessions.create(adapter, { cwd: body.cwd.trim(), ...(body.title?.trim() ? { title: body.title.trim().slice(0, 200) } : {}) }), 201);
     }),
-    route("POST", "/api/harnesses/:kind/sessions/:sessionId/resume", async (request, params) => {
+    harnessRoute("POST", "/api/harnesses/:kind/sessions/:sessionId/resume", async (request, params) => {
       const adapter = harnessAdapter(harnessRegistry, required(params, "kind"));
       const body = await readJson<{ cwd?: string }>(request);
       if (!body.cwd?.trim()) throw new ApiError(400, "harness_cwd_required", "cwd is required");
       return json(await harnessSessions.resume(adapter, { harness: adapter.kind, sessionId: required(params, "sessionId"), cwd: body.cwd.trim() }));
     }),
-    route("POST", "/api/harnesses/:kind/sessions/:sessionId/messages", async (request, params) => {
+    harnessRoute("POST", "/api/harnesses/:kind/sessions/:sessionId/messages", async (request, params) => {
       const adapter = harnessAdapter(harnessRegistry, required(params, "kind"));
       const body = await readJson<{ cwd?: string; content?: string; model?: string; skills?: Array<{ id: string; name: string; path: string; version: string }> }>(request);
       if (!body.cwd?.trim() || !body.content?.trim()) throw new ApiError(400, "harness_message_invalid", "cwd and content are required");
@@ -848,17 +899,20 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       return json(!authEnabled ? workspaces.listProjects() : workspaces.listProjects().filter((project) => current && authorization.projectRole(current.user.id, project.id)));
     }),
     route("POST", "/api/projects", async (request) => {
+      const current = principal(request);
       const body = await readJson<CreateProjectRequest>(request);
+      if (body.teamId && current) authorization.requireTeamRole(current, body.teamId, ["owner", "admin"]);
+      const owner = current ? { userId: current.user.id, ...(body.teamId ? { teamId: body.teamId } : {}) } : undefined;
       if (body.initializeFromTemplate) {
         if (!body.publicationTarget) throw new ApiError(400, "template_target_required", "Select a conference or journal before using its template");
         const venue = body.venue ?? body.publicationTarget.domain;
         const template = await latexTemplates.materialize(body.name, venue, body.publicationTarget);
-        const project = await workspaces.importStagingDirectory({ stagingDirectory: template.stagingDirectory, name: body.name, mainDocument: template.mainDocument, venue, publicationTarget: body.publicationTarget, source: { type: "local", displayName: template.displayName } });
-        await assignProjectOwner(project, principal(request, false), body.teamId);
+        const project = await workspaces.importStagingDirectory({ owner, stagingDirectory: template.stagingDirectory, name: body.name, mainDocument: template.mainDocument, venue, publicationTarget: body.publicationTarget, source: { type: "local", displayName: template.displayName } });
+
         return json(project, 201);
       }
-      const project = await workspaces.createEmpty(body.name, body.mainDocument, body.venue, body.publicationTarget);
-      await assignProjectOwner(project, principal(request, false), body.teamId);
+      const project = await workspaces.createEmpty(body.name, body.mainDocument, body.venue, body.publicationTarget, owner);
+
       return json(project, 201);
     }),
     route("GET", "/api/projects/:projectId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(workspaces.getProject(projectId)); }),
@@ -876,28 +930,37 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "project:read", workspaces);
       return workspaces.exportProject(projectId);
     }),
-    route("POST", "/api/projects/:projectId/history/checkpoint", async (_request, params) => {
+    route("POST", "/api/projects/:projectId/history/checkpoint", async (request, params) => {
+      await authorizeHistoryPaths(request, required(params, "projectId"));
       return json(await workspaces.createHistoryCheckpoint(required(params, "projectId")), 201);
     }),
-    route("GET", "/api/projects/:projectId/history/working-status", async (_request, params) => {
-      return json(await workspaces.workingStatus(required(params, "projectId")));
+    route("GET", "/api/projects/:projectId/history/working-status", async (request, params) => {
+      const projectId = required(params, "projectId");
+      const current = principal(request);
+      const status = await workspaces.workingStatus(projectId);
+      if (current) status.files = status.files.filter(file => [file.path, ...(file.oldPath ? [file.oldPath] : [])].every(path => authorization.projectPathDecision(current, projectId, path, "project:read").allowed));
+      return json(status);
     }),
     route("POST", "/api/projects/:projectId/history/stage", async (request, params) => {
       const body = await readJson<{ paths?: string[] }>(request);
-      await workspaces.stagePaths(required(params, "projectId"), body.paths ?? []);
+      const paths = await authorizeHistoryPaths(request, required(params, "projectId"), body.paths ?? []);
+      await workspaces.stagePaths(required(params, "projectId"), paths!);
       return new Response(null, { status: 204 });
     }),
     route("POST", "/api/projects/:projectId/history/unstage", async (request, params) => {
       const body = await readJson<{ paths?: string[] }>(request);
-      await workspaces.unstagePaths(required(params, "projectId"), body.paths ?? []);
+      const paths = await authorizeHistoryPaths(request, required(params, "projectId"), body.paths ?? []);
+      await workspaces.unstagePaths(required(params, "projectId"), paths!);
       return new Response(null, { status: 204 });
     }),
     route("POST", "/api/projects/:projectId/history/discard", async (request, params) => {
       const body = await readJson<{ paths?: string[] }>(request);
-      await workspaces.discardPaths(required(params, "projectId"), body.paths ?? []);
+      const paths = await authorizeHistoryPaths(request, required(params, "projectId"), body.paths ?? []);
+      await collaboration.discardPaths(required(params, "projectId"), paths!);
       return new Response(null, { status: 204 });
     }),
     route("POST", "/api/projects/:projectId/history/commit", async (request, params) => {
+      await authorizeHistoryPaths(request, required(params, "projectId"));
       const body = await readJson<{ message?: string }>(request);
       const message = (body.message ?? "").trim();
       if (!message) throw new ApiError(400, "history_message_required", "A commit message is required");
@@ -1179,7 +1242,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       workspaces.getProject(projectId);
       return json(database.snapshot().compileRecords.filter((record) => record.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null);
     }),
-    route("POST", "/api/projects/:projectId/compile", async (request, params) => { const projectId = required(params, "projectId"); await collaboration.flushProject(projectId); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); const paths = current ? await visibleTextPaths(projectId, current, authorization, "compile:run", workspaces) : []; const job = jobs.enqueue("latex.compile", { projectId }, async ({ projectId: queuedProjectId }) => { const result = await latexCompiler.compile(queuedProjectId); if (current) await requireWorkspacePathAccess(queuedProjectId, current, authorization, "compile:run", workspaces); return result; }, { policy: { ...(current ? { actorUserId: current.user.id, authorizationVersion: current.user.authzVersion, action: "compile:run", paths } : {}), projectId, projectVersion: workspaces.getProject(projectId).version }, recheck: async () => { if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); } }); return json(job, 202); }),
+    route("POST", "/api/projects/:projectId/compile", async (request, params) => { const projectId = required(params, "projectId"); await collaboration.flushProject(projectId); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); const paths = current ? await visibleTextPaths(projectId, current, authorization, "compile:run", workspaces) : []; const job = jobs.enqueue("latex.compile", { projectId }, async ({ projectId: queuedProjectId }, _job, signal) => { const result = await latexCompiler.compile(queuedProjectId, signal); if (current) await requireWorkspacePathAccess(queuedProjectId, current, authorization, "compile:run", workspaces); return result; }, { policy: { ...(current ? { actorUserId: current.user.id, authorizationVersion: current.user.authzVersion, action: "compile:run", paths } : {}), projectId, projectVersion: workspaces.getProject(projectId).version }, recheck: async () => { if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); } }); return json(job, 202); }),
     route("POST", "/api/projects/:projectId/experiments", async (request, params) => {
       const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces);
       const body = await readJson<{ scriptPath: string; authorization: "user-approved"; timeoutMs?: number; memoryLimitMb?: number; cpuSeconds?: number }>(request);
@@ -1188,14 +1251,14 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       const experimentId = `experiment_${crypto.randomUUID()}`;
       const projectVersion = workspaces.getProject(projectId).version;
       await database.mutate((state) => { state.experimentRuns.push({ id: experimentId, projectId, projectVersion, scriptPath: body.scriptPath, status: "queued", authorization: "user-approved", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); });
-      try { job = jobs.enqueue("experiment.run", { experimentId, projectId, scriptPath: body.scriptPath, authorization: body.authorization, timeoutMs: body.timeoutMs, memoryLimitMb: body.memoryLimitMb, cpuSeconds: body.cpuSeconds }, async (input) => { await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.status = "running"; run.updatedAt = new Date().toISOString(); } }); try { const result = await experiments.run(input as Parameters<ExperimentRunner["run"]>[0]); await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.status = result.success ? "completed" : "failed"; run.inputSnapshotHash = result.inputSnapshotHash; run.result = result; run.updatedAt = new Date().toISOString(); } }); return result; } catch (error) { await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.status = "failed"; run.updatedAt = new Date().toISOString(); } }); throw error; } }, { start: process.env.FASTWRITE_JOB_WORKER_MODE !== "external", policy: { ...(current ? { actorUserId: current.user.id, authorizationVersion: current.user.authzVersion, action: "compile:run" } : {}), projectId, projectVersion }, recheck: async () => { if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); } }); await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.jobId = job.id; run.updatedAt = new Date().toISOString(); } }); }
+      try { job = jobs.enqueue("experiment.run", { experimentId, projectId, scriptPath: body.scriptPath, authorization: body.authorization, timeoutMs: body.timeoutMs, memoryLimitMb: body.memoryLimitMb, cpuSeconds: body.cpuSeconds }, async (input, _job, signal) => { signal.throwIfAborted(); await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.status = "running"; run.updatedAt = new Date().toISOString(); } }); try { const result = await experiments.run(input as Parameters<ExperimentRunner["run"]>[0], signal); signal.throwIfAborted(); await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.status = signal.aborted ? "cancelled" : result.success ? "completed" : "failed"; run.inputSnapshotHash = result.inputSnapshotHash; run.result = result; run.updatedAt = new Date().toISOString(); } }); return result; } catch (error) { await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.status = signal.aborted ? "cancelled" : "failed"; run.updatedAt = new Date().toISOString(); } }); throw error; } }, { start: process.env.FASTWRITE_JOB_WORKER_MODE !== "external", policy: { ...(current ? { actorUserId: current.user.id, authorizationVersion: current.user.authzVersion, action: "compile:run" } : {}), projectId, projectVersion }, recheck: async () => { if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); } }); await database.mutate((state) => { const run = state.experimentRuns.find((item) => item.id === experimentId); if (run) { run.jobId = job.id; run.updatedAt = new Date().toISOString(); } }); }
       catch (error) { if (error instanceof Error && error.message === "job_quota_exceeded") throw new ApiError(429, "job_quota_exceeded", "Too many active jobs; retry later."); throw error; }
       return json(job, 202);
     }),
     route("GET", "/api/projects/:projectId/experiments", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); workspaces.getProject(projectId); return json(database.snapshot().experimentRuns.filter((run) => run.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }),
     route("GET", "/api/jobs/:jobId", async (request, params) => { const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); const current = principal(request, authEnabled); authorizeJob(request, job, current); if (current && job.policy?.projectId) authorization.requireProject(current, job.policy.projectId, "project:read"); return json(job); }),
     route("POST", "/api/jobs/:jobId/progress", async (request, params) => { const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); const current = principal(request, authEnabled); authorizeJob(request, job, current); if (current && job.policy?.projectId) authorization.requireProject(current, job.policy.projectId, "project:write"); const body = await readJson<{ completed: number; total?: number; message?: string }>(request); if (!Number.isFinite(body.completed) || (body.total !== undefined && !Number.isFinite(body.total))) throw new ApiError(400, "job_progress_invalid", "Job progress must contain finite numbers"); try { return json(jobs.updateProgress(job.id, body)); } catch (error) { if (error instanceof Error && error.message === "Job is not active") throw new ApiError(409, "job_not_active", "Job is no longer active"); throw error; } }),
-    route("POST", "/api/jobs/:jobId/cancel", async (request, params) => { try { const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); const current = principal(request, authEnabled); authorizeJob(request, job, current); if (current && job.policy?.projectId) authorization.requireProject(current, job.policy.projectId, "project:manage"); return json(jobs.cancel(job.id)); } catch (error) { if (error instanceof ApiError) throw error; throw new ApiError(404, "job_not_found", "Job not found"); } }),
+    route("POST", "/api/jobs/:jobId/cancel", async (request, params) => { try { const job = jobs.get(required(params, "jobId")); if (!job) throw new ApiError(404, "job_not_found", "Job not found"); const current = principal(request, authEnabled); authorizeJob(request, job, current); if (current && job.policy?.projectId) authorization.requireProject(current, job.policy.projectId, "project:manage"); const cancelled = jobs.cancel(job.id); if (cancelled.status === "cancelled" && job.kind === "experiment.run") await database.mutate(state => { const run = state.experimentRuns.find(item => item.id === (job.input as { experimentId?: string })?.experimentId); if (run) { run.status = "cancelled"; run.updatedAt = new Date().toISOString(); } }); return json(cancelled); } catch (error) { if (error instanceof ApiError) throw error; throw new ApiError(404, "job_not_found", "Job not found"); } }),
     route("POST", "/api/projects/:projectId/compile-results", async (request, params) => {
       const projectId = required(params, "projectId");
       const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:write");
@@ -1266,6 +1329,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
       return json(rolledBack);
     }),
     route("POST", "/api/upload-sessions", async (request) => {
+      const current = principal(request);
       const body = await readJson<{
         projectName: string;
         mainDocument: string;
@@ -1274,22 +1338,23 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
         sourceName: string;
         entries: UploadManifestEntry[];
       }>(request);
-      return json(await uploads.create(body), 201);
+      return json(await uploads.create(body, current?.user.id), 201);
     }),
-    route("GET", "/api/upload-sessions/:uploadId", async (_request, params) => json(uploads.get(required(params, "uploadId")))),
+    route("GET", "/api/upload-sessions/:uploadId", async (request, params) => json(uploads.get(uploadIdFor(request, params)))),
     route("PUT", "/api/upload-sessions/:uploadId/files", async (request, params, url) => {
-      return json(await uploads.uploadFile(required(params, "uploadId"), requiredQuery(url, "path"), await request.arrayBuffer()));
+      return json(await uploads.uploadFile(uploadIdFor(request, params), requiredQuery(url, "path"), await request.arrayBuffer()));
     }),
-    route("POST", "/api/upload-sessions/:uploadId/complete", async (_request, params) => {
-      return json(await uploads.complete(required(params, "uploadId")), 201);
+    route("POST", "/api/upload-sessions/:uploadId/complete", async (request, params) => {
+      return json(await uploads.complete(uploadIdFor(request, params)), 201);
     }),
-    route("DELETE", "/api/upload-sessions/:uploadId", async (_request, params) => {
-      await uploads.cancel(required(params, "uploadId"));
+    route("DELETE", "/api/upload-sessions/:uploadId", async (request, params) => {
+      await uploads.cancel(uploadIdFor(request, params));
       return new Response(null, { status: 204 });
     }),
     route("POST", "/api/project-imports/github", async (request) => {
+      const current = principal(request);
       const body = await readJson<GithubImportRequest>(request);
-      return json(await github.import(body), 201);
+      return json(await github.import(body, current ? { userId: current.user.id } : undefined), 201);
     })
   ];
 }
@@ -1429,7 +1494,7 @@ function filterVisibleTree(nodes: WorkspaceTreeNode[], principal: Principal, pro
     try { authorization.requireProjectPath(principal, projectId, node.path, "project:read"); } catch { continue; }
     if (node.type === "file") { visible.push(node); continue; }
     const children = filterVisibleTree(node.children, principal, projectId, authorization);
-    if (children.length) visible.push({ ...node, children });
+    if (node.loaded === false || children.length) visible.push({ ...node, children });
   }
   return visible;
 }
@@ -1440,7 +1505,7 @@ function filterSupportTree(nodes: WorkspaceTreeNode[], prefix: string): Workspac
     if (!(node.path === prefix || prefix === "" || node.path.startsWith(`${prefix}/`) || prefix.startsWith(`${node.path}/`))) continue;
     if (node.type === "file") { result.push(node); continue; }
     const children = filterSupportTree(node.children, prefix);
-    if (children.length) result.push({ ...node, children });
+    if (node.loaded === false || children.length) result.push({ ...node, children });
   }
   return result;
 }

@@ -34,6 +34,11 @@ run_code() {
 
 run_accessibility() {
   run_code 'async (page) => {
+  // Serve the test tool from this origin so the application CSP stays enabled.
+  const axeUrl = await page.evaluate(() => location.origin + "/__e2e__/axe.min.js");
+  await page.route(axeUrl, route => route.fulfill({ path: "node_modules/axe-core/axe.min.js", contentType: "application/javascript" }));
+  try { await page.addScriptTag({ url: axeUrl }); }
+  finally { await page.unroute(axeUrl); }
   const result = await page.evaluate(async () => await window.axe.run(document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] }
   }));
@@ -45,6 +50,13 @@ run_accessibility() {
 }
 
 cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    mkdir -p "$PROJECT_ROOT/output/playwright"
+    cp "$QA_DATA/server.log" "$PROJECT_ROOT/output/playwright/server.log" 2>/dev/null || true
+    bun -e 'const db = await Bun.file(Bun.argv[1]).json(); for (const job of db.jobs ?? []) if (job.kind === "latex.compile") console.error(JSON.stringify({ id: job.id, status: job.status, error: job.error, compileError: job.output?.error, log: job.output?.log }));' "$QA_DATA/database.json" 2>&1 || true
+    pw run-code 'async (page) => { await page.screenshot({ path: "output/playwright/smoke-failure.png", fullPage: true }); }' >/dev/null 2>&1 || true
+  fi
   pw close >/dev/null 2>&1 || true
   if [ -n "$SERVER_PID" ]; then kill "$SERVER_PID" >/dev/null 2>&1 || true; fi
   case "$QA_DATA" in
@@ -54,11 +66,15 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$PROJECT_ROOT"
+# Synthetic credentials for this disposable database only.
+export FASTWRITE_SERVER_AUTH=true
+export FASTWRITE_BOOTSTRAP_ADMIN_EMAIL=e2e-admin@example.test
+export FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD=fastwrite-e2e-only-password
 if [ "${FASTWRITE_E2E_SKIP_BUILD:-0}" != "1" ]; then bun run build >/dev/null; fi
 if [ -n "$E2E_SERVER_BIN" ]; then
-  FASTWRITE_SERVER_AUTH=false FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" "$E2E_SERVER_BIN" >"$QA_DATA/server.log" 2>&1 &
+  FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" "$E2E_SERVER_BIN" >"$QA_DATA/server.log" 2>&1 &
 else
-  FASTWRITE_SERVER_AUTH=false FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" bun apps/server/src/server.ts >"$QA_DATA/server.log" 2>&1 &
+  FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" bun apps/server/src/server.ts >"$QA_DATA/server.log" 2>&1 &
 fi
 SERVER_PID=$!
 
@@ -73,22 +89,24 @@ until curl --fail --silent "http://127.0.0.1:$E2E_PORT/projects" >/dev/null; do
 done
 
 pw open "http://127.0.0.1:$E2E_PORT/projects" --browser "$E2E_BROWSER"
-# Browser initialization scripts are installed by the test driver before page CSP.
-# Keep production CSP intact while making axe available across navigations.
-run_code 'async (page) => {
-  await page.context().addInitScript({ path: "node_modules/axe-core/axe.min.js" });
-  await page.reload();
-}'
 run_accessibility
 
 run_code 'async (page) => {
-  const registered = await page.request.post(page.url().replace(/\/projects.*$/, "") + "/api/auth/register", {
-    data: { email: "smoke@fastwrite.test", password: "smoke-fixture-password" }
-  });
-  if (!registered.ok()) throw new Error("Could not register isolated smoke-test account");
-  const account = await registered.json();
-  await page.evaluate(token => localStorage.setItem("fastwrite.session-token", token), account.token);
-  await page.reload();
+  await page.getByRole("button", { name: "Sign in", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Sign in", exact: true });
+  await dialog.getByLabel("Email", { exact: true }).fill("e2e-admin@example.test");
+  await dialog.getByLabel("Password", { exact: true }).fill("fastwrite-e2e-only-password");
+  await dialog.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "New paper", exact: true }).waitFor();
+  const token = await page.evaluate(() => localStorage.getItem("fastwrite.session-token"));
+  if (!token) throw new Error("UI login did not establish a session");
+  // The API fixtures below use page.request and need the same identity as the UI.
+  await page.context().setExtraHTTPHeaders({ Authorization: "Bearer " + token });
+  const identity = await page.request.get(await page.evaluate(() => location.origin + "/api/auth/me"));
+  if (!identity.ok()) throw new Error("E2E fixture authentication failed");
+}'
+
+run_code 'async (page) => {
   await page.getByRole("button", { name: "New paper" }).click();
   await page.getByRole("textbox", { name: "Project name" }).fill("E2E Smoke Paper");
   await page.getByRole("button", { name: "Create paper" }).click();
@@ -116,7 +134,7 @@ run_code 'async (page) => {
 run_code 'async (page) => {
   const toolbar = page.locator(".pdf-toolbar");
   const idleBox = await toolbar.boundingBox();
-  await page.locator(".pdf-pane").getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
+  await page.locator(".pdf-pane .compile-strip").getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
   await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 90000 });
   const successBox = await toolbar.boundingBox();
   for (const box of [successBox]) {
@@ -600,7 +618,7 @@ run_code 'async (page) => {
   const hunkEditor = agentPanel.getByLabel("Edit hunk 1 for sections/method.tex");
   await hunkEditor.fill("This sentence is grounded in bounded and unmanaged evidence.");
   await agentPanel.getByRole("button", { name: "Save hunk", exact: true }).click();
-  await agentPanel.getByText("unmanaged", { exact: false }).waitFor();
+  await agentPanel.locator(".hunk-review").getByText("unmanaged", { exact: true }).waitFor();
   await agentPanel.getByRole("button", { name: "Leave review", exact: true }).click();
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await agentPanel.getByRole("button", { name: "sections/method.tex: 1 pending, 0 accepted, 0 rejected", exact: true }).waitFor();
@@ -878,7 +896,7 @@ run_code 'async (page) => {
   await revisionPanel.getByRole("button", { name: "Accept all & complete", exact: true }).click();
   await revisionPanel.getByText("needs review", { exact: true }).waitFor();
   await revisionPanel.getByRole("button", { name: "Compile current version" }).click();
-  await page.locator(".pdf-pane").getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
+  await page.locator(".pdf-pane .compile-strip").getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
   const rereview = revisionPanel.getByRole("button", { name: "Targeted re-review" });
   await rereview.waitFor();
   await rereview.click();
@@ -941,7 +959,7 @@ run_code 'async (page) => {
   if (!metrics.suggested || !metrics.accepted || Object.values(metrics).some(value => typeof value !== "number")) throw new Error("Completion metrics were not privacy-safe counters");
 
   const toggle = page.getByRole("checkbox", { name: "Complete" });
-  await page.locator("label").filter({ has: toggle }).click();
+  await toggle.press("Space");
   if (await toggle.isChecked()) throw new Error("Completion toggle did not switch off");
   const beforeDisabledEdit = completionRequests;
   const disabledValue = acceptedContent;
@@ -974,16 +992,13 @@ run_code 'async (page) => {
   await editor.focus();
   await editor.press("ControlOrMeta+A");
   await page.keyboard.insertText("\\documentclass{article}\n\\begin{document}\n\\undefinedFastWriteCommand\n\\end{document}");
-  await page.locator(".compile-strip--error").waitFor({ timeout: 90000 });
-  await page.getByRole("tab", { name: /^Problems/ }).click();
-  const diagnostics = page.locator(".diagnostic-list");
-  await diagnostics.waitFor();
   const errorIcon = page.locator(".compile-status-icon--error");
-  await errorIcon.waitFor();
+  await errorIcon.waitFor({ timeout: 90000 });
   if (await errorIcon.getAttribute("aria-label") !== "Compilation error") throw new Error("Compilation failure does not expose an unambiguous error icon");
-  if (!await diagnostics.getByText(/Undefined control sequence/, { exact: false }).first().isVisible()) {
-    throw new Error("Compilation failure did not expose diagnostics or its log");
-  }
+  await page.getByRole("tab", { name: /^Problems/ }).click();
+  const diagnostics = page.locator(".bottom-panel-problems");
+  await diagnostics.getByText("Compilation failed", { exact: true }).waitFor();
+  await diagnostics.getByText(/Undefined control sequence/).first().waitFor();
   if (await page.locator(".react-pdf__Page__canvas").count() < 1) {
     throw new Error("Previous PDF disappeared after a failed compile");
   }
@@ -1082,9 +1097,13 @@ run_code 'async (page) => {
   await dialog.getByLabel(/Branch, tag or commit/).fill("camera-ready");
   await dialog.getByLabel(/Project name/).fill("Imported Security Paper");
   await dialog.getByLabel(/Main document/).fill("paper.tex");
-  await dialog.getByRole("combobox", { name: "Research domain", exact: true }).click();
-  await page.getByRole("option", { name: "网络与信息安全", exact: true }).click();
+  await dialog.getByRole("combobox", { name: "Research domain" }).click();
+  await dialog.getByRole("option", { name: "网络与信息安全", exact: true }).click();
   await page.waitForTimeout(350);
+  const axeUrl = await page.evaluate(() => location.origin + "/__e2e__/axe.min.js");
+  await page.route(axeUrl, route => route.fulfill({ path: "node_modules/axe-core/axe.min.js", contentType: "application/javascript" }));
+  try { await page.addScriptTag({ url: axeUrl }); }
+  finally { await page.unroute(axeUrl); }
   const accessibility = await page.evaluate(async () => await window.axe.run(document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] }
   }));

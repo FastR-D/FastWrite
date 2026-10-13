@@ -28,7 +28,7 @@ import type {
   WorkspaceTreeNode,
   EvidenceCockpit,
 } from "@fastwrite/shared";
-import { api } from "../api/client";
+import { api, ApiClientError } from "../api/client";
 import { Button, Dialog, Field, Icon, IconButton, Link, SegmentedControl, Select, TabBar, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { FileTree } from "../components/workspace/FileTree";
 import { AddFileDialog } from "../components/workspace/AddFileDialog";
@@ -53,7 +53,7 @@ import { FASTWRITE_SAVE_EVENT } from "../lib/keyboard";
 import { publicationTargetAbbreviation } from "../lib/labels";
 import { ProjectSearchDialog } from "../components/workspace/ProjectSearchDialog";
 import { ProvenanceDialog } from "../components/workspace/ProvenanceDialog";
-import { loadWorkspaceFile, loadWorkspaceSnapshot, saveWorkspaceFile, saveWorkspaceSnapshot } from "../lib/offlineWorkspace";
+import { canUseOfflineCache, loadWorkspaceFile, loadWorkspaceSnapshot, saveWorkspaceFile, saveWorkspaceSnapshot } from "../lib/offlineWorkspace";
 
 const SourceEditor = lazy(() =>
   import("../components/workspace/SourceEditor").then((module) => ({
@@ -122,6 +122,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [offlineNotice, setOfflineNotice] = useState("");
   const [sidebarWidth, setSidebarWidth] = useStoredNumber(
     `fastwrite.workbench-layout:${projectId}:sidebar-width`,
     254,
@@ -310,7 +311,8 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           setOutline(nextOutline);
           setClaims(nextClaims);
           setEvidenceCockpit(nextCockpit);
-          saveWorkspaceSnapshot(projectId, { project: nextProject, tree: nextTree, outline: nextOutline, claims: nextClaims });
+          setOfflineNotice("");
+          void saveWorkspaceSnapshot(projectId, { project: nextProject, tree: nextTree, outline: nextOutline, claims: nextClaims });
           setSelectedPath(nextProject.mainDocument);
           if (latestCompile)
             setCompileState({
@@ -322,14 +324,17 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             });
         },
       )
-      .catch((loadError) => {
+      .catch(async (loadError) => {
         if ((loadError as DOMException).name === "AbortError") return;
-        const snapshot = loadWorkspaceSnapshot(projectId);
+        const snapshot = canUseOfflineCache(loadError) ? await loadWorkspaceSnapshot(projectId) : null;
+        if (controller.signal.aborted) return;
         if (snapshot) {
           setProject(snapshot.project); commitTree(snapshot.tree); setTree(snapshot.tree); setOutline(snapshot.outline); setClaims(snapshot.claims); setSelectedPath(snapshot.project.mainDocument);
-          const cachedMain = loadWorkspaceFile<FileContentResponse>(projectId, snapshot.project.mainDocument);
+          const cachedMain = await loadWorkspaceFile<FileContentResponse>(projectId, snapshot.project.mainDocument);
+          if (controller.signal.aborted) return;
           if (cachedMain) setFileDocument(cachedMain);
-          setError("Offline workspace snapshot loaded. Unsaved and cached files remain available; reconnect to refresh the project.");
+          setError("");
+          setOfflineNotice("Offline workspace snapshot loaded. Cached files remain available; reconnect and reload to refresh the project.");
         } else setError(loadError instanceof Error ? loadError.message : "Could not open project");
       })
       .finally(() => setLoading(false));
@@ -356,7 +361,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       .readFile(projectId, selectedPath, controller.signal)
       .then((nextDocument) => {
         if (controller.signal.aborted) return;
-        saveWorkspaceFile(projectId, selectedPath, nextDocument);
+        void saveWorkspaceFile(projectId, selectedPath, nextDocument);
         setFileDocument(nextDocument);
         setCursorLocation((current) =>
           current.path === selectedPath
@@ -364,9 +369,10 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             : { path: selectedPath, line: 1 },
         );
       })
-      .catch((readError) => {
+      .catch(async (readError) => {
         if ((readError as DOMException).name === "AbortError") return;
-        const cachedFile = loadWorkspaceFile<FileContentResponse>(projectId, selectedPath);
+        const cachedFile = canUseOfflineCache(readError) ? await loadWorkspaceFile<FileContentResponse>(projectId, selectedPath) : null;
+        if (controller.signal.aborted) return;
         if (cachedFile) setFileDocument(cachedFile);
         else setError(readError instanceof Error ? readError.message : "Could not open file");
       });
@@ -660,6 +666,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
 
   return (
     <div className="workspace-page">
+      {offlineNotice ? <div role="status" className="workspace-offline-notice">{offlineNotice}</div> : null}
       <header className="workspace-topbar">
         <div className="workspace-topbar__left">
           <IconButton
@@ -965,6 +972,26 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                */
               await editorRef.current?.flush();
               await registry.flush();
+            }} onDiscard={async paths => {
+              await api.projects.discardPaths(projectId, paths);
+              const matches = (path: string) => paths.some(prefix => path === prefix || path.startsWith(prefix + "/"));
+              const removed = new Set<string>();
+              for (const entry of registry.entries.values()) if (matches(entry.session.path)) {
+                try {
+                  const document = await api.projects.readFile(projectId, entry.session.path);
+                  if (entry.collaboration) await entry.collaboration.refresh(); else registry.open(document);
+                  if (selectedPath === entry.session.path) setFileDocument(document);
+                } catch (failure) {
+                  if (!(failure instanceof ApiClientError) || failure.status !== 404) throw failure;
+                  await registry.forget(entry.session.path);
+                  removed.add(entry.session.path);
+                }
+              }
+              if (removed.size) {
+                setSourceTabs(tabs => tabs.filter(tab => !removed.has(tab.path)));
+                if (selectedPath && removed.has(selectedPath)) { setSelectedPath(null); setFileDocument(null); }
+              }
+              await refreshWorkspace();
             }} onCommit={async (message) => {
               /*
                * No flush here: the sidebar's `act` has already run `onFlush`
@@ -2195,6 +2222,25 @@ function AssetPreview({
   path: string;
   name: string;
 }) {
+  const assetKey = JSON.stringify([projectId, path]);
+  const [preview, setPreview] = useState<{ key: string; url?: string; error?: string }>();
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectURL: string | undefined;
+    setPreview({ key: assetKey });
+    void api.projects.readAsset(projectId, path, controller.signal).then(blob => {
+      if (controller.signal.aborted) return;
+      objectURL = URL.createObjectURL(blob);
+      setPreview({ key: assetKey, url: objectURL });
+    }).catch(error => {
+      if (!controller.signal.aborted) setPreview({ key: assetKey, error: error instanceof Error ? error.message : "Could not load image" });
+    });
+    return () => {
+      controller.abort();
+      if (objectURL) URL.revokeObjectURL(objectURL);
+    };
+  }, [assetKey, projectId, path]);
+  const current = preview?.key === assetKey ? preview : undefined;
   return (
     <div className="asset-preview">
       <div className="editor-toolbar">
@@ -2204,10 +2250,9 @@ function AssetPreview({
         </div>
       </div>
       <div className="asset-preview__canvas">
-        <img
-          src={`/api/projects/${projectId}/asset?path=${encodeURIComponent(path)}`}
-          alt={name}
-        />
+        {current?.error ? <p role="alert">{current.error}</p> : current?.url ? (
+          <img src={current.url} alt={name} onError={() => setPreview({ key: assetKey, error: "Could not display image" })} />
+        ) : <p role="status">Loading image…</p>}
       </div>
     </div>
   );

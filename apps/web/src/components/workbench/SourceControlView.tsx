@@ -14,7 +14,7 @@ export interface DiffRequest { baseRef: string; targetRef: string; path: string;
  * lands — their server routes are all still live, and the e2e cases that drove
  * them through this panel were removed with a note rather than left failing.
  */
-export function SourceControlView({ projectId, version, selectedPath, onCompare, onCommit, onFlush, onSync }: {
+export function SourceControlView({ projectId, version, selectedPath, onCompare, onCommit, onDiscard, onFlush, onSync }: {
   /**
    * The editor's document registry. Phase A does not read it — the old list
    * merged unsaved buffers into its rows, and the new one reports git state
@@ -28,6 +28,7 @@ export function SourceControlView({ projectId, version, selectedPath, onCompare,
   selectedPath: string | null;
   onCompare: (request: DiffRequest) => void;
   onCommit: (message: string) => Promise<void>;
+  onDiscard: (paths: string[]) => Promise<void>;
   /**
    * Flushes pending editor saves to disk. Every working-tree mutation needs it
    * first — see the comment on `act` in WorkingChangesView.
@@ -41,6 +42,6 @@ export function SourceControlView({ projectId, version, selectedPath, onCompare,
   return <section className="source-control-view" aria-label="Source control">
     <header className="panel-heading"><span>Source Control</span><div>{onSync ? <IconButton label="Sync with GitHub" icon={<Icon name={icons.sync} />} onClick={onSync} /> : null}<IconButton label="Show history" icon={<Icon name={icons.history} />} onClick={() => void loadHistory()} /></div></header>
     {historyOpen ? <div className="source-control-history" aria-label="History">{commits.map((commit) => <Button variant="ghost" key={commit.oid} onClick={() => onCompare({ baseRef: commit.oid, targetRef: "working", path: selectedPath ?? "main.tex" })}><strong>{commit.message}</strong><small>{new Date(commit.createdAt).toLocaleString()}</small></Button>)}</div> : null}
-    <WorkingChangesView projectId={projectId} version={version} selectedPath={selectedPath} onCompare={onCompare} onCommit={onCommit} onFlush={onFlush} />
+    <WorkingChangesView projectId={projectId} version={version} selectedPath={selectedPath} onCompare={onCompare} onCommit={onCommit} onDiscard={onDiscard} onFlush={onFlush} />
   </section>;
 }

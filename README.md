@@ -2,6 +2,8 @@
 
 需要 [Bun](https://bun.sh/) 1.3+ 和 Git。
 
+FastCAS SDK 固定在仓库内的 `packages/fastcas-sdk`，来源为 [FastR-D/FastCAS 的 sdk/typescript](https://github.com/FastR-D/FastCAS/tree/676d49b18f700c009f1f491280a93de7da294836/sdk/typescript)，版本提交 `676d49b18f700c009f1f491280a93de7da294836`。本地使用 TypeScript 源码导出并适配严格可选属性检查；无需克隆相邻的 FastCAS 仓库或预先构建 SDK。更新 SDK 时应同步检查上游接口和身份认证契约测试。
+
 ## 开发运行
 
 ```bash
@@ -11,7 +13,7 @@ bun run dev
 
 打开 <http://localhost:3002>（Vite 前端代理 API）。
 
-浏览器 WASM 编译器会在编译时自动识别缺少的 TeX 包，由 FastWrite Server 从兼容的 TeX Live/CTAN 源按需下载；下载结果会在服务端和浏览器中缓存，不需要预先同步 `local-packages`。
+工作区 PDF 预览使用服务器 LaTeX 编译，需要安装 `latexmk` 或 `pdflatex` 以及论文使用的 TeX 包。启用 `FASTWRITE_SERVER_AUTH=true` 时强制使用 Linux `bubblewrap` 沙箱，宿主机必须允许其创建隔离命名空间；缺少沙箱会拒绝编译。Windows 本地开发如需在开启鉴权的情况下编译，应把服务部署到具备这些依赖的 Linux/WSL 环境。单人、受信任的本地模式可使用宿主编译，但不会加载项目的 latexmk 配置或启用 shell escape。
 
 选定 venue 的 LaTeX 模板首次成功获取后会缓存到 `FASTWRITE_DATA_DIR/templates/`（未配置时为默认数据目录）；后续初始化直接使用本地缓存，不会重复下载。
 
@@ -27,7 +29,15 @@ bun start
 
 可通过 `FASTWRITE_PORT` 修改端口，通过 `FASTWRITE_DATA_DIR` 指定 Workspace 数据目录。
 
+设置 `FASTWRITE_SERVER_AUTH=true` 后，Harness 状态与 MCP 目录查询需要登录；共享 CLI 的原始会话、运行记录、事件、审批及全局 Harness 配置修改仅允许平台管理员访问。项目内 AI 操作继续遵循项目权限，指定项目的 MCP 审计需要该项目的 Harness 使用权限，全局审计仅限管理员。原始 Harness WebSocket 使用与 HTTP 相同的 `Authorization: Bearer ...` 或 `X-FastWrite-Session` 请求头认证，不接受 URL 中的登录令牌；连接在握手、历史回放、每次事件推送及定时检查时校验权限。浏览器原生 WebSocket 无法设置这些请求头，浏览器客户端可使用已认证的 HTTP 事件接口。
+
+启用 `FASTWRITE_SERVER_AUTH=true` 时，若数据库没有有效管理员，必须同时设置 `FASTWRITE_BOOTSTRAP_ADMIN_EMAIL` 和 `FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD`（自行生成至少 12 位的唯一密码），否则服务拒绝启动。没有默认管理员账号或密码；公开注册始终创建普通用户。初始化成功后可以移除这两个变量，已有管理员可正常登录。修改初始化变量不会重置已有账号密码；升级前已使用旧版默认账号的部署需单独轮换该账号密码。
+
 ## 开发说明
+
+原始 Claude Harness 已内置 CLI 执行桥接，无需注入 SDK 才能发送消息。它要求 Claude Code 2.1.286 或更新版本，支持文本流、会话恢复和取消；使用 `--bare` 并关闭工具、MCP 和项目配置自动加载。此模式需要按 Claude 的提供商要求配置凭据（如 `ANTHROPIC_API_KEY`），不使用订阅登录。审批、自动加载技能及 MCP 能力会报告为不支持；需要这些能力时可注入完整的 `ClaudeSdkBridge`。CLI 参数与事件格式参考 [Claude 官方程序化调用文档](https://code.claude.com/docs/en/headless)。FastWrite 写作 API 的 `FASTWRITE_HARNESS_*` 配置与原始 CLI 凭据是分别配置的。
+
+当前运行时由单个服务进程处理任务队列和邮件；不要设置 `FASTWRITE_JOB_WORKER_MODE=external` 或另外启动 `worker:jobs` / `worker:mail`。这些入口现在会明确拒绝启动，避免独立进程使用过期 JSON 快照覆盖数据。PostgreSQL mirror/cutover 配置仍使用本地队列快照，不代表已经支持分布式 worker。每个数据目录仅运行一个服务；检测到其他写入者时会拒绝保存过期状态。若进程被强制终止留下 `database.json.write.lock`，先停止使用此目录的全部进程，再移除该锁文件并重启。
 
 写作质量接口：`POST /api/projects/:projectId/writing-checks` 执行确定性检查；`GET /api/projects/:projectId/argument-graph` 获取论证关系；`POST /api/projects/:projectId/adversarial-memo` 生成仅供参考的对抗预检意见。Claim 侧栏支持 stale claim 的 reanchor；Agent 生成候选会校验 Writing Guard 与 evidence dependencies；Review 报告会显示各 pass 的完成、失败或跳过状态。评测可运行 `bun run writing:eval`。
 
@@ -35,6 +45,14 @@ bun start
 等待期间，去测试功能，将Bug记录到BUG-new，等完成再继续下一轮Bug修改。
 
 ## 可运行发布包
+
+数据库备份恢复必须停服执行，在线恢复接口返回 `409 offline_restore_required`。源码目录中运行：
+
+```bash
+bun run backup:restore -- --data-dir /absolute/path/to/paperdata --file /absolute/path/to/backup.json --confirm replace-database
+```
+
+对象存储备份可把 `--file` 换成 `--object-key backups/backup-name.json`，并提供部署时相同的 `FASTWRITE_OBJECT_STORE_*` 配置。命令校验备份格式和当前 schema，保存恢复前的安全副本，再替换数据库；完成后重新启动服务。JSON 备份仅包含数据库，项目文件需另外备份并放回匹配的数据目录。服务和恢复命令使用 `.fastwrite-process.lock` 互斥；若被强制终止留下锁文件，须确认该目录的全部进程已停止后再移除。旧版本备份应先使用匹配版本恢复，再按升级流程迁移。
 
 ```bash
 bun run package:app

@@ -11,8 +11,8 @@ export function TextModelComparison({ original, modified, originalLabel, modifie
   const editor = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const [inline, setInline] = useState(false);
   useEffect(() => {
-    // A parent may release its old models in the same commit that changes
-    // readOnly/labels. Wait for the replacement props instead of reattaching them.
+    // A parent may replace its models in an effect during this commit. The
+    // previous pair can already be disposed until its state update rerenders us.
     if (!host.current || original.isDisposed() || modified.isDisposed()) return;
     configureMonaco();
     const instance = monaco.editor.createDiffEditor(host.current, { automaticLayout: true, readOnly, originalEditable: false, originalAriaLabel: originalLabel, modifiedAriaLabel: modifiedLabel, wordWrap: "on", minimap: { enabled: false }, scrollBeyondLastLine: false });

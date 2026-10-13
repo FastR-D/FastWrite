@@ -159,6 +159,27 @@ export class CollaborationService {
     return this.serialized(projectId, () => this.flushProjectNow(projectId));
   }
 
+  async discardPaths(projectId: string, paths: string[]): Promise<void> {
+    await this.serialized(projectId, async () => {
+      const documents = this.database.snapshot().collaborationDocuments.filter(item => item.projectId === projectId && item.status === "active" && paths.some(path => item.path === path || item.path.startsWith(`${path}/`)));
+      for (const document of documents) await this.flush(projectId, document.path, document.id, this.restore(document.id));
+      await this.workspaces.discardPaths(projectId, paths);
+      for (const document of documents) {
+        if (!await this.workspaces.fileExists(projectId, document.path)) {
+          await this.database.mutate(state => { const stored = state.collaborationDocuments.find(item => item.id === document.id)!; stored.status = "archived"; });
+          continue;
+        }
+        const file = await this.workspaces.readTextFile(projectId, document.path);
+        const ydoc = this.restore(document.id); const text = ydoc.getText("content");
+        ydoc.transact(() => { text.delete(0, text.length); text.insert(0, file.content); }, "git-discard");
+        await this.compact(document.id, ydoc);
+        await this.database.mutate(state => { const stored = state.collaborationDocuments.find(item => item.id === document.id)!; stored.fileVersion = file.file.version; stored.updatedAt = new Date().toISOString(); });
+        await this.bus?.publish(`fastwrite:collab:${document.id}`, JSON.stringify({ documentId: document.id, update: encode(Y.encodeStateAsUpdate(ydoc)) }));
+        ydoc.destroy();
+      }
+    });
+  }
+
   private async flushProjectNow(projectId: string): Promise<void> {
     const documents = this.database.snapshot().collaborationDocuments.filter((item) => item.projectId === projectId && item.status === "active");
     for (const document of documents) await this.flush(projectId, document.path, document.id, this.restore(document.id));

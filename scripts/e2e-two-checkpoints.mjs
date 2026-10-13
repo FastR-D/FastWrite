@@ -41,7 +41,7 @@ try {
   await files.getByRole('button', { name: /R old name.tex → 新 name.tex/ }).click();
   await until(async () => (await diffText()).includes('unchanged'), 'renamed file uses its old path for original');
   assert.ok(!(await activeDiff().locator('.diff-identities').innerText()).includes('file does not exist'));
-  const tablist = page.getByRole('group', { name: 'Open editors' });
+  const tablist = page.getByRole('group', { name: 'Open editors controls' });
   const firstTab = tablist.getByRole('tab', { name: `main.tex (${original.slice(0, 8)} → ${modified.slice(0, 8)})`, exact: true });
   assert.equal(await tablist.getByRole('tab').count(), 3, 'source and two comparison tabs coexist');
   await firstTab.click();

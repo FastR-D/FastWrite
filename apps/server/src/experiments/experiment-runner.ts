@@ -1,6 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ApiError } from "../http";
+import { processResult } from "../jobs/process-result";
 import type { WorkspaceService } from "../workspace/workspace-service";
 
 export interface ExperimentRequest { projectId: string; scriptPath: string; authorization: "user-approved"; timeoutMs?: number; memoryLimitMb?: number; cpuSeconds?: number; }
@@ -8,7 +9,8 @@ export interface ExperimentResult { success: boolean; exitCode: number; log: str
 
 export class ExperimentRunner {
   constructor(private readonly dataDirectory: string, private readonly workspaces: WorkspaceService) {}
-  async run(request: ExperimentRequest): Promise<ExperimentResult> {
+  async run(request: ExperimentRequest, signal?: AbortSignal): Promise<ExperimentResult> {
+    signal?.throwIfAborted();
     if (request.authorization !== "user-approved") throw new ApiError(403, "experiment_authorization_required", "Experiment execution requires explicit user authorization.");
     if (!/^(?:scripts|experiments)\/[A-Za-z0-9._/-]+\.(?:sh|py|js|mjs)$/.test(request.scriptPath) || request.scriptPath.includes("..")) throw new ApiError(400, "experiment_script_invalid", "Only project-local scripts under scripts/ or experiments/ may run.");
     const runId = crypto.randomUUID();
@@ -24,10 +26,9 @@ export class ExperimentRunner {
     if (!bwrap) throw new ApiError(503, "experiment_sandbox_unavailable", "Bubblewrap is required for experiment execution.");
     const output = join(root, ".fastwrite-experiment-output");
     await mkdir(output, { recursive: true });
-    const child = Bun.spawn([bwrap, "--die-with-parent", "--unshare-net", "--new-session", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib", "--ro-bind", "/lib64", "/lib64", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--bind", root, "/workspace", "--chdir", "/workspace", "--", "sh", "-c", `ulimit -t ${cpuSeconds}; ulimit -v ${memoryLimitMb * 1024}; exec "$@"`, "fastwrite-experiment", ...command.map((part) => part.replace(root, "/workspace"))], { cwd: root, stdout: "pipe", stderr: "pipe", env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: "/tmp", FASTWRITE_EXPERIMENT_OUTPUT: "/workspace/.fastwrite-experiment-output" } });
-    const timer = setTimeout(() => child.kill(), timeoutMs);
-    const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    clearTimeout(timer);
+    signal?.throwIfAborted();
+    const child = Bun.spawn([bwrap, "--die-with-parent", "--unshare-net", "--new-session", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib", "--ro-bind", "/lib64", "/lib64", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--bind", root, "/workspace", "--chdir", "/workspace", "--", "sh", "-c", `ulimit -t ${cpuSeconds}; ulimit -v ${memoryLimitMb * 1024}; exec "$@"`, "fastwrite-experiment", ...command.map((part) => part.replace(root, "/workspace"))], { cwd: root, detached: true, windowsHide: true, stdout: "pipe", stderr: "pipe", env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: "/tmp", FASTWRITE_EXPERIMENT_OUTPUT: "/workspace/.fastwrite-experiment-output" } });
+    const { exitCode, stdout, stderr } = await processResult(child, timeoutMs, signal);
     const log = `${stdout}\n${stderr}`.slice(-500_000);
     const artifactPaths = await this.listArtifacts(output, root);
     return { success: exitCode === 0, exitCode, log, artifactPaths, inputSnapshotHash, runId };

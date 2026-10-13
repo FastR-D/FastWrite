@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LocalObjectStore, S3ObjectStore } from "./object-storage";
+import { LocalObjectStore, S3ObjectStore, createS3ObjectStore } from "./object-storage";
 
 test("local object store persists bounded binary artifacts with content metadata", async () => {
   const store = new LocalObjectStore(`/tmp/fastwrite-objects-${crypto.randomUUID()}`);
@@ -9,6 +9,27 @@ test("local object store persists bounded binary artifacts with content metadata
   expect([...((await store.get(saved.key)).body)]).toEqual([1, 2, 3]);
   await store.remove(saved.key);
   await expect(store.get(saved.key)).rejects.toThrow();
+});
+
+test("real AWS SDK performs PUT, GET and DELETE against an S3 HTTP endpoint", async () => {
+  const calls: string[] = [];
+  let stored = new Uint8Array();
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    calls.push(request.method);
+    expect(new URL(request.url).pathname).toBe("/test-bucket/backups/test.json");
+    expect(request.headers.get("authorization")).toStartWith("AWS4-HMAC-SHA256");
+    if (request.method === "PUT") { stored = new Uint8Array(await request.arrayBuffer()); return new Response(null, { headers: { etag: '"test-etag"' } }); }
+    if (request.method === "GET") return new Response(stored, { headers: { "content-type": "application/json", "content-length": String(stored.byteLength) } });
+    stored = new Uint8Array(); return new Response(null, { status: 204 });
+  } });
+  try {
+    const store = await createS3ObjectStore({ endpoint: server.url.href, region: "us-east-1", bucket: "test-bucket", accessKey: "synthetic-access", secretKey: "synthetic-secret" });
+    const body = new TextEncoder().encode('{"test":true}');
+    expect((await store.put("backups/test.json", body, "application/json")).etag).toBe("test-etag");
+    expect((await store.get("backups/test.json")).body).toEqual(body);
+    await store.remove("backups/test.json");
+    expect(calls).toEqual(["PUT", "GET", "DELETE"]);
+  } finally { await server.stop(true); }
 });
 
 test("S3 object store bounds keys and maps content metadata", async () => {

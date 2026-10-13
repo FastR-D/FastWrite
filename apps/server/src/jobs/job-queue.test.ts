@@ -1,5 +1,38 @@
 import { expect, test } from "bun:test";
 import { InProcessJobQueue } from "./job-queue";
+import { processResult } from "./process-result";
+
+test.each([false, true])("cancelled running jobs stay cancelled after handler settles (failure=%s)", async (fails) => {
+  const queue = new InProcessJobQueue();
+  let entered!: () => void; const started = new Promise<void>(resolve => { entered = resolve; });
+  let finish!: () => void; const barrier = new Promise<void>(resolve => { finish = resolve; });
+  let signal: AbortSignal | undefined;
+  const job = queue.enqueue("test", {}, async (_input, _job, cancellation) => { signal = cancellation; entered(); await barrier; if (fails) throw new Error("late failure"); return "late result"; });
+  await started;
+  queue.cancel(job.id); expect(signal!.aborted).toBe(true); finish();
+  await queue.settled(job.id);
+  expect(queue.get(job.id)).toMatchObject({ status: "cancelled", attempts: 1 });
+  expect(queue.get(job.id)?.output).toBeUndefined();
+});
+
+test("cancel prevents queued execution and invalidates outstanding claims", async () => {
+  const queue = new InProcessJobQueue(); let calls = 0;
+  const job = queue.enqueue("test", {}, async () => { calls++; }, { start: false });
+  queue.cancel(job.id); queue.start(job.id, async () => { calls++; }); await queue.settled(job.id);
+  expect(calls).toBe(0);
+  const claimed = queue.enqueue("test", {}, async () => undefined, { start: false }); queue.claim("worker"); queue.cancel(claimed.id);
+  await expect(queue.finishClaim(claimed.id, "worker", { output: "late" })).rejects.toThrow();
+  expect(queue.get(claimed.id)?.status).toBe("cancelled");
+});
+
+test("cancellation terminates a running child process", async () => {
+  const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { detached: true, windowsHide: true, stdout: "pipe", stderr: "pipe" });
+  const controller = new AbortController();
+  const result = processResult(child, 10_000, controller.signal);
+  controller.abort();
+  await expect(result).rejects.toMatchObject({ name: "AbortError" });
+  expect(await child.exited).not.toBe(0);
+});
 
 test("retries bounded jobs and records terminal state", async () => {
   const queue = new InProcessJobQueue(); let attempts = 0;

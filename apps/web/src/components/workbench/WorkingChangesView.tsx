@@ -13,7 +13,7 @@ import type { DiffRequest } from "./SourceControlView";
  * appear in both at once (staged, then edited again), which is why the model is
  * one record with two statuses rather than two lists.
  */
-export function WorkingChangesView({ projectId, version, onCompare, onCommit, onFlush }: {
+export function WorkingChangesView({ projectId, version, onCompare, onCommit, onDiscard, onFlush }: {
   projectId: string;
   version: number;
   /**
@@ -29,6 +29,7 @@ export function WorkingChangesView({ projectId, version, onCompare, onCommit, on
    * before every mutation, this one included.
    */
   onCommit: (message: string) => Promise<void>;
+  onDiscard: (paths: string[]) => Promise<void>;
   /** Writes every pending editor save to disk. `act` awaits it before each mutation. */
   onFlush: () => Promise<void>;
 }) {
@@ -116,7 +117,7 @@ export function WorkingChangesView({ projectId, version, onCompare, onCommit, on
     <Group title="Changes" files={changes} group="changes" count={changes.length} onOpen={open}
       bulkAction={changes.length ? { label: "Stage all changes", run: () => act(() => api.projects.stagePaths(projectId, changes.map((file) => file.path))) } : undefined}
       perFile={{ stage: (file) => act(() => api.projects.stagePaths(projectId, [file.path])),
-                 discard: (file) => act(() => api.projects.discardPaths(projectId, [file.path])) }} />
+                 discard: (file) => act(() => onDiscard([file.path])) }} />
     <Group title="Staged Changes" files={staged} group="staged" count={staged.length} onOpen={open}
       bulkAction={staged.length ? { label: "Unstage all changes", run: () => act(() => api.projects.unstagePaths(projectId, staged.map((file) => file.path))) } : undefined}
       perFile={{ unstage: (file) => act(() => api.projects.unstagePaths(projectId, [file.path])) }} />

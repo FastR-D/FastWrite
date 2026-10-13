@@ -245,6 +245,13 @@ export class CollaborationProvider {
     return operation;
   }
   async flush() { await this.ready(); if (this.dirty) await this.persist(); }
+  async refresh() {
+    await this.ready();
+    const state = await api.projects.collaboration(this.projectId, this.entry.session.path);
+    if (state.documentId !== this.documentId) throw new Error("The collaboration document was replaced. Reopen it before editing.");
+    Y.applyUpdate(this.doc, fromBase64(state.update), REMOTE);
+    await this.entry.session.flush();
+  }
   attachEditor(editor: monaco.editor.IStandaloneCodeEditor) {
     this.editors.add(editor);
     const cursor = editor.onDidChangeCursorSelection(() => {

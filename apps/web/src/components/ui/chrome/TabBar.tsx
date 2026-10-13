@@ -46,7 +46,8 @@ export interface TabBarProps {
  */
 export function TabBar({ tabs, activeId, onSelect, label, onClose, onActivate, closeLabel, scrollActiveIntoView = false, className = "" }: TabBarProps) {
   const host = useRef<HTMLDivElement>(null);
-  const tabIdPrefix = useId();
+  const listId = useId();
+  const tabId = (index: number) => `${listId}-tab-${index}`;
 
   useEffect(() => {
     if (!scrollActiveIntoView) return;
@@ -63,15 +64,16 @@ export function TabBar({ tabs, activeId, onSelect, label, onClose, onActivate, c
     <div
       ref={host}
       className={`${styles.bar} ${onClose ? "" : styles.simple} ${className}`.trim()}
-      role={onClose ? "group" : "tablist"}
-      aria-label={label}
+      role="group"
+      aria-label={`${label} controls`}
       onWheel={(event) => {
         // A vertical wheel over a horizontal strip scrolls the strip.
         if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY;
       }}
     >
-      {/* Close buttons remain independent controls, outside the owned tablist. */}
-      {onClose ? <div role="tablist" aria-label={label} aria-owns={tabs.map((_, index) => `${tabIdPrefix}-${index}`).join(" ")} /> : null}
+      {/* Keep close buttons outside the tablist's accessibility children while
+          retaining their visual position beside each tab. */}
+      <div role="tablist" aria-label={label} aria-owns={tabs.map((_, index) => tabId(index)).join(" ") || undefined} />
       {tabs.map((tab, index) => {
         const selected = tab.id === activeId;
         return (
@@ -84,8 +86,8 @@ export function TabBar({ tabs, activeId, onSelect, label, onClose, onActivate, c
           >
             <button
               type="button"
+              id={tabId(index)}
               role="tab"
-              id={`${tabIdPrefix}-${index}`}
               className={`${styles.tab} ${selected ? styles.active : ""} ${tab.preview ? styles.preview : ""}`.trim()}
               aria-controls={tab.controls}
               aria-selected={selected}

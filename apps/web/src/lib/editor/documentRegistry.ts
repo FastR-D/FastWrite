@@ -183,7 +183,15 @@ export class DocumentRegistry {
   acquire(entry: DocumentEntry): () => void {
     entry.references++; entry.lastAccess = performance.now();
     let released = false;
-    return () => { if (released) return; released = true; entry.references--; entry.lastAccess = performance.now(); this.evict(); };
+    return () => { if (released) return; released = true; entry.references--; entry.lastAccess = performance.now(); if (!entry.references && !this.entries.has(entry.session.key)) entry.dispose(); this.evict(); };
+  }
+  async forget(path: string) {
+    const key = this.key(path); const entry = this.entries.get(key); if (!entry) return;
+    if (this.dirtyEntry(entry)) await this.preserve(entry, entry.model.getValue(), "before-recovery");
+    entry.collaboration?.dispose();
+    this.entries.delete(key);
+    if (!entry.references) entry.dispose();
+    this.emit(entry);
   }
   retain(paths: string[]) { this.retained = new Set(paths.map(normalizeWorkspacePath)); this.evict(); }
   private evict() {

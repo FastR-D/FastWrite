@@ -18,7 +18,7 @@ afterEach(async () => {
 async function testApplication(agentProvider?: AgentProvider, features?: { serverAuth?: boolean }, oidcProvider?: IdentityProvider, casProvider?: IdentityProvider, mailTransport?: MailTransport, researchFetcher?: typeof fetch) {
   const directory = await mkdtemp(join(tmpdir(), "fastwrite-test-"));
   temporaryDirectories.push(directory);
-  const app = await createApplication(directory, { ...(agentProvider ? { agentProvider } : {}), ...(features ? { features } : {}), ...(oidcProvider ? { oidcProvider } : {}), ...(casProvider ? { casProvider } : {}), ...(mailTransport ? { mailTransport } : {}), ...(researchFetcher ? { researchFetcher } : {}) });
+  const app = await createApplication(directory, { ...(features?.serverAuth ? { bootstrapAdmin: { email: "platform-admin@example.test", password: "correct-horse-battery-staple" } } : {}), ...(agentProvider ? { agentProvider } : {}), ...(features ? { features } : {}), ...(oidcProvider ? { oidcProvider } : {}), ...(casProvider ? { casProvider } : {}), ...(mailTransport ? { mailTransport } : {}), ...(researchFetcher ? { researchFetcher } : {}) });
   return (path: string, init?: RequestInit) => app(new Request(`http://fastwrite.test${path}`, init));
 }
 
@@ -30,6 +30,8 @@ describe("workspace API", () => {
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(response.headers.get("content-security-policy")).toContain("style-src 'self' 'unsafe-inline'");
     expect(response.headers.get("content-security-policy")).toContain("default-src 'self';");
+    expect(response.headers.get("content-security-policy")).toContain("img-src 'self' blob:;");
+    expect(response.headers.get("content-security-policy")).toContain("font-src 'self' data:;");
     expect(response.headers.get("x-request-id")).toMatch(/^req_/);
   });
 
@@ -225,7 +227,7 @@ describe("workspace API", () => {
 
   test("limits administrator account controls to audited metadata and revokes sessions", async () => {
     const request = await testApplication(undefined, { serverAuth: true });
-    const admin = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const admin = await (await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const user = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "managed-user@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const adminHeaders = { authorization: `Bearer ${admin.token}`, "content-type": "application/json" };
     const userHeaders = { authorization: `Bearer ${user.token}`, "content-type": "application/json" };
@@ -447,8 +449,8 @@ describe("workspace API", () => {
   });
 
   test("stores scoped Harness secrets without returning them and resolves a versioned profile", async () => {
-    const request = await testApplication();
-    const registered = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "admin@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const request = await testApplication(undefined, { serverAuth: true });
+    const registered = await (await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
     const headers = { authorization: `Bearer ${registered.token}`, "content-type": "application/json" };
     const response = await request("/api/harness/profiles", { method: "POST", headers, body: JSON.stringify({ scope: "system", name: "System Codex", provider: "codex", model: "gpt-test", wireApi: "responses", allowedTools: ["workspace.read"], maxConcurrentRuns: 2, apiKey: "secret-never-returned" }) });
     expect(response.status).toBe(201);
@@ -759,7 +761,7 @@ describe("workspace API", () => {
   test("enforces two-person, scoped, one-time support access grants", async () => {
     const request = await testApplication(undefined, { serverAuth: true });
     const register = async (email: string) => await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
-    const requester = await register("support-requester@example.test");
+    const requester = await (await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const approver = await register("support-approver@example.test");
     const requesterHeaders = { authorization: `Bearer ${requester.token}`, "content-type": "application/json" };
     const approverHeaders = { authorization: `Bearer ${approver.token}`, "content-type": "application/json" };

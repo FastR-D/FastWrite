@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeSet, ClaimEvidenceLink, CitationReviewer, FastReadBundleReceipt, PaperClaim, PaperProject, ProjectResearchWorkDetails, ResearchRun, SourceEvidence, WorkspaceTreeNode } from "@fastwrite/shared";
 import { api } from "../../api/client";
-import { Checkbox, FileField, Button, Dialog, Field, Icon, IconButton, Select, Stepper, TextArea, TextField, icons } from "../ui";
+import { Button, Checkbox, Dialog, Field, FileField, Icon, IconButton, Select, Stepper, TextArea, TextField, icons } from "../ui";
 
 type ResearchWorkView = ProjectResearchWorkDetails;
 type ResearchTab = "sources" | "evidence" | "claims";

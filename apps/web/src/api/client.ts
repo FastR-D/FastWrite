@@ -55,19 +55,58 @@ export class ApiClientError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+const refreshes = new Map<string, Promise<string | null>>();
+const sessionKey = "fastwrite.session-token";
+
+function refreshSession(expiredToken: string): Promise<string | null> {
+  const existing = refreshes.get(expiredToken);
+  if (existing) return existing;
+  const refresh = async () => {
+    if (localStorage.getItem(sessionKey) !== expiredToken) return localStorage.getItem(sessionKey);
+    const response = await fetch("/api/auth/refresh", { method: "POST" });
+    if (localStorage.getItem(sessionKey) !== expiredToken) return localStorage.getItem(sessionKey);
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) localStorage.removeItem(sessionKey);
+      return null;
+    }
+    const session = await response.json() as { token?: unknown };
+    if (typeof session.token !== "string" || !session.token) throw new ApiClientError(502, "invalid_session_response", "Invalid session refresh response");
+    if (localStorage.getItem(sessionKey) !== expiredToken) return localStorage.getItem(sessionKey);
+    localStorage.setItem(sessionKey, session.token);
+    return session.token;
+  };
+  // Cookies are shared across tabs; serialize their rotation as well as same-tab requests.
+  const promise = (async () => typeof navigator !== "undefined" && navigator.locks
+    ? await navigator.locks.request("fastwrite.session-refresh", refresh) : await refresh())()
+    .finally(() => { refreshes.delete(expiredToken); });
+  refreshes.set(expiredToken, promise);
+  return promise;
+}
+
+function waitForRefresh(promise: Promise<string | null>, signal?: AbortSignal | null): Promise<string | null> {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    promise.then(value => { signal.removeEventListener("abort", abort); if (!signal.aborted) resolve(value); }, error => { signal.removeEventListener("abort", abort); reject(error); });
+  });
+}
+
+export async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   const token = localStorage.getItem("fastwrite.session-token");
-  if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
+  const usesSession = !headers.has("authorization");
+  if (token && usesSession) headers.set("authorization", `Bearer ${token}`);
   let response = await fetch(path, { ...init, headers });
-  if (response.status === 401 && token && !path.startsWith("/api/auth/")) {
-    const refreshed = await fetch("/api/auth/refresh", { method: "POST" });
-    if (refreshed.ok) {
-      const session = await refreshed.json() as { token: string };
-      localStorage.setItem("fastwrite.session-token", session.token);
-      headers.set("authorization", `Bearer ${session.token}`);
+  if (response.status === 401 && token && usesSession && !/^\/api\/auth\/(?:login|register|refresh|logout)(?:[/?]|$)/.test(path)) {
+    init?.signal?.throwIfAborted();
+    const refreshed = await waitForRefresh(refreshSession(token), init?.signal);
+    init?.signal?.throwIfAborted();
+    if (refreshed) {
+      headers.set("authorization", `Bearer ${refreshed}`);
       response = await fetch(path, { ...init, headers });
-    } else localStorage.removeItem("fastwrite.session-token");
+    }
   }
   if (!response.ok) {
     let body: { error?: { code?: string; message?: string; details?: unknown } } = {};
@@ -78,8 +117,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiClientError(response.status, body.error?.code ?? "request_failed", body.error?.message ?? `Request failed (${response.status})`, body.error?.details);
   }
+  return response;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await requestResponse(path, init);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const response = await requestResponse(path);
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestInit {
@@ -184,13 +240,17 @@ export const api = {
   },
   agentSkills: { list: (signal?: AbortSignal) => request<AgentTaskSkillDescriptor[]>("/api/agent-skills", signal ? { signal } : undefined), releases: (signal?: AbortSignal) => request<PublishedSkillDescriptor[]>("/api/skills/releases", signal ? { signal } : undefined), release: (id: string) => request<PublishedSkillDescriptor>(`/api/skills/releases/${encodeURIComponent(id)}`), evaluate: (id: string) => request<PublishedSkillDescriptor>(`/api/skills/releases/${encodeURIComponent(id)}/evaluate`, { method: "POST" }), rollback: (id: string, reason: string) => request<PublishedSkillDescriptor>(`/api/skills/releases/${encodeURIComponent(id)}/rollback`, jsonInit("POST", { reason })) },
   projects: {
+    readAsset: async (id: string, path: string, signal?: AbortSignal): Promise<Blob> => {
+      const response = await requestResponse(`/api/projects/${encodeURIComponent(id)}/asset?path=${encodeURIComponent(path)}`, signal ? { signal } : undefined);
+      return response.blob();
+    },
     accessRequestInfo: (id: string) => request<{ id: string; name: string }>(`/api/access-requests/${encodeURIComponent(id)}`),
     requestAccess: (id: string, body: { role: "maintainer" | "editor" | "commenter" | "viewer"; message?: string }) => request<{ id: string; status: "pending" }>(`/api/projects/${encodeURIComponent(id)}/access-requests`, jsonInit("POST", body)),
     list: (signal?: AbortSignal) => request<PaperProject[]>("/api/projects", signal ? { signal } : undefined),
     get: (id: string, signal?: AbortSignal) => request<PaperProject>(`/api/projects/${id}`, signal ? { signal } : undefined),
     create: (body: { name: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget; initializeFromTemplate?: boolean; teamId?: string }) => request<PaperProject>("/api/projects", jsonInit("POST", body)),
     update: (id: string, body: Partial<Pick<PaperProject, "name" | "mainDocument">> & { venue?: TargetVenue; publicationTarget?: PublicationTarget | null }) => request<PaperProject>(`/api/projects/${id}`, jsonInit("PATCH", body)),
-    exportUrl: (id: string) => `/api/projects/${id}/export`,
+    exportUrl: (id: string) => `/api/projects/${encodeURIComponent(id)}/export`,
     checkpoint: (id: string) => request<{ createdAt: string }>(`/api/projects/${id}/history/checkpoint`, { method: "POST" }),
     history: (id: string, limit = 50, signal?: AbortSignal) => request<HistoryCommit[]>(`/api/projects/${id}/history?limit=${limit}`, signal ? { signal } : undefined),
     historySummary: (id: string, oid: string, signal?: AbortSignal) => request<HistorySummary>(`/api/projects/${id}/history/${encodeURIComponent(oid)}`, signal ? { signal } : undefined),

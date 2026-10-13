@@ -5,10 +5,11 @@ PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$PROJECT_ROOT"
 
 bun run typecheck
+bun run build
 bun run test
 bun run writing:eval
 bun run security:check
-bun run build
+node scripts/e2e-authenticated-smoke.mjs
 FASTWRITE_E2E_SKIP_BUILD=1 bun run e2e:smoke
 
 echo "FastWrite release checks passed"

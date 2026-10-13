@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AgentRun, ChangeSet } from "@fastwrite/shared";
-import { api } from "../../api/client";
+import { api, downloadFile } from "../../api/client";
 import { Button, Dialog, Disclosure, Icon, icons } from "../ui";
 
 type ProvenanceDossier = { disclosureDraft: string; runs: Array<Pick<AgentRun, "id" | "type" | "status" | "objective" | "skill" | "changeSetId" | "createdAt" | "auditTrail">>; changeSets: Array<Pick<ChangeSet, "id" | "status" | "summary" | "changes">>; experiments: Array<{ id: string; projectVersion: number; scriptPath: string; status: string; inputSnapshotHash?: string; result?: { success: boolean; exitCode: number; artifactPaths: string[]; runId: string }; createdAt: string }> };
@@ -8,6 +8,7 @@ type ProvenanceDossier = { disclosureDraft: string; runs: Array<Pick<AgentRun, "
 export function ProvenanceDialog({ open, projectId, onClose }: { open: boolean; projectId: string; onClose: () => void }) {
   const [dossier, setDossier] = useState<ProvenanceDossier | null>(null);
   const [error, setError] = useState("");
+  const [exporting, setExporting] = useState(false);
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
@@ -16,11 +17,12 @@ export function ProvenanceDialog({ open, projectId, onClose }: { open: boolean; 
     return () => controller.abort();
   }, [open, projectId]);
   const download = async () => {
-    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/provenance/export`);
-    if (!response.ok) throw new Error("Could not export provenance");
-    const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `fastwrite-provenance-${projectId}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setExporting(true); setError("");
+    try { await downloadFile(`/api/projects/${encodeURIComponent(projectId)}/provenance/export`, `fastwrite-provenance-${projectId}.json`); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "Could not export provenance"); }
+    finally { setExporting(false); }
   };
-  return <Dialog open={open} width="wide" title="AI provenance dossier" description="Auditable runs, reviewed changes, hunk decisions, and disclosure draft" onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Close</Button><Button variant="secondary" onClick={() => void download()}>Export dossier</Button></>}>
+  return <Dialog open={open} width="wide" title="AI provenance dossier" description="Auditable runs, reviewed changes, hunk decisions, and disclosure draft" onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Close</Button><Button variant="secondary" loading={exporting} onClick={() => void download()}>Export dossier</Button></>}>
     {error ? <p className="form-error" role="alert">{error}</p> : dossier ? <div className="provenance-dialog">
       <section className="provenance-disclosure"><header><div><h3>Disclosure draft</h3><p>Review this wording against the target venue before submission.</p></div><Icon name={icons.fileText} /></header><blockquote>{dossier.disclosureDraft}</blockquote></section>
       <section><header className="provenance-section-heading"><div><h3>Operations</h3><p>{dossier.runs.length} recorded AI run{dossier.runs.length === 1 ? "" : "s"} · {dossier.changeSets.length} ChangeSet{dossier.changeSets.length === 1 ? "" : "s"}</p></div></header>

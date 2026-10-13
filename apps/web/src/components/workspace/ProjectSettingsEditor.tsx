@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { isIgnoredWorkspacePath, WRITING_PROFILES, type AgentWireApi, type PaperProject, type ProjectAclAction, type PublicationTarget, type PublishedSkillDescriptor, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
-import { api } from "../../api/client";
+import { api, downloadFile } from "../../api/client";
 import { Button, Field, Icon, icons, Select, TextField, Link } from "../ui";
 import { PublicationTargetFields } from "../ui/PublicationTargetFields";
 import { harnessSettingsSaveDecision, type HarnessSettingsBaseline, type HarnessSettingsDraft } from "./harnessSettings";
@@ -26,6 +26,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
   const [profile, setProfile] = useState<WritingProfile>(project.skill.venue);
   const [publicationTarget, setPublicationTarget] = useState<PublicationTarget | undefined>(project.publicationTarget);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [agentConfigured, setAgentConfigured] = useState<boolean | null>(null);
   const [agentSource, setAgentSource] = useState<"runtime" | "environment" | "none">("none");
@@ -244,7 +245,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
             <h2 id="backup-settings-title">History & Export</h2>
             <p className={styles.description}>Keep a local history of your work and download a portable copy.</p>
         <div className="settings-export"><div><strong>Automatic Git history</strong><span>Accepted saves create local Git checkpoints in the FastWrite project history.</span></div></div>
-        <div className="settings-export"><div><strong>Workspace snapshot</strong><span>Download all source files as a portable tar.gz archive.</span></div><Link variant="button" href={api.projects.exportUrl(project.id)} download><Icon name={icons.cloudDownload} />Export</Link></div>
+        <div className="settings-export"><div><strong>Workspace snapshot</strong><span>Download all source files as a portable tar.gz archive.</span></div><Button loading={exporting} onClick={() => { setExporting(true); setError(""); void downloadFile(api.projects.exportUrl(project.id), `fastwrite-${project.id}.tar.gz`).catch(failure => setError(failure instanceof Error ? failure.message : "Could not export workspace")).finally(() => setExporting(false)); }}><Icon name={icons.cloudDownload} />Export</Button></div>
           </section>
         </div>
       </div>

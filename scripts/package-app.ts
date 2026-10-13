@@ -55,16 +55,18 @@ Open the local address printed in the terminal. Your papers and compiler cache a
 Create \`.env\` beside \`${executableName}\` (or copy \`.env.example\` when present):
 
 \`\`\`dotenv
-OPENAI_API_KEY=...
-OPENAI_BASE_URL=https://api.openai.com/v1
-FASTWRITE_OPENAI_MODEL=gpt-5.6
+FASTWRITE_HARNESS=codex
+FASTWRITE_HARNESS_API_KEY=...
+FASTWRITE_HARNESS_BASE_URL=https://api.openai.com/v1
+FASTWRITE_HARNESS_MODEL=gpt-5.6
+FASTWRITE_HARNESS_WIRE_API=chat
 \`\`\`
 
 The API base URL and model are optional. The \`skills/\` directory must remain beside the binary. Keep \`paperdata/\` when upgrading FastWrite; it contains your local workspace data.
 `);
 
 if (await exists(sourceEnvironment) && !await exists(releaseEnvironment)) await cp(sourceEnvironment, releaseEnvironment);
-else if (!await exists(releaseEnvironment)) await Bun.write(join(output, ".env.example"), "# Copy to .env and configure your AI provider.\n# OPENAI_API_KEY=...\n# OPENAI_BASE_URL=https://api.openai.com/v1\n# FASTWRITE_OPENAI_MODEL=gpt-5.6\n");
+else if (!await exists(releaseEnvironment)) await Bun.write(join(output, ".env.example"), "# Copy to .env and configure your AI provider.\n# FASTWRITE_HARNESS=codex\n# FASTWRITE_HARNESS_API_KEY=...\n# FASTWRITE_HARNESS_BASE_URL=https://api.openai.com/v1\n# FASTWRITE_HARNESS_MODEL=gpt-5.6\n# FASTWRITE_HARNESS_WIRE_API=chat\n");
 
 if (!windowsTarget && await Bun.spawn(["chmod", "+x", executablePath]).exited !== 0) throw new Error("Failed to mark the packaged binary executable");
 

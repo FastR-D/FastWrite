@@ -5,14 +5,17 @@ import { dirname, join } from "node:path";
 export interface ObjectStore { put(key: string, body: Uint8Array, contentType: string): Promise<{ key: string; etag: string; bytes: number }>; get(key: string): Promise<{ body: Uint8Array; contentType?: string }>; remove(key: string): Promise<void>; }
 
 export interface S3ClientLike {
-  send(command: { input: Record<string, unknown> }): Promise<{ ETag?: string; Body?: AsyncIterable<Uint8Array> | Uint8Array; ContentType?: string }>;
+  send(command: { operation: "put" | "get" | "delete"; input: Record<string, unknown> }): Promise<{ ETag?: string; Body?: AsyncIterable<Uint8Array> | Uint8Array; ContentType?: string }>;
 }
 
 export async function createS3ObjectStore(configuration: { endpoint: string; region: string; bucket: string; accessKey: string; secretKey: string; prefix?: string; maxBytes?: number }): Promise<S3ObjectStore> {
   let sdk: any;
   try { sdk = await import("@aws-sdk/client-s3"); } catch { throw new Error("Install @aws-sdk/client-s3 to enable S3/MinIO object storage"); }
   const client = new sdk.S3Client({ endpoint: configuration.endpoint, region: configuration.region, forcePathStyle: true, credentials: { accessKeyId: configuration.accessKey, secretAccessKey: configuration.secretKey } });
-  return new S3ObjectStore({ send: (command) => client.send(command) }, configuration.bucket, configuration.prefix, configuration.maxBytes);
+  return new S3ObjectStore({ send: (command) => {
+    const Command = command.operation === "put" ? sdk.PutObjectCommand : command.operation === "get" ? sdk.GetObjectCommand : sdk.DeleteObjectCommand;
+    return client.send(new Command(command.input));
+  } }, configuration.bucket, configuration.prefix, configuration.maxBytes);
 }
 
 export class S3ObjectStore implements ObjectStore {
@@ -22,16 +25,16 @@ export class S3ObjectStore implements ObjectStore {
   async put(key: string, body: Uint8Array, contentType: string) {
     const normalized = objectKey(key, this.prefix);
     if (body.byteLength > this.maxBytes) throw new Error("Object exceeds configured size limit");
-    const result = await this.client.send({ input: { Bucket: this.bucket, Key: normalized, Body: body, ContentType: contentType, ContentLength: body.byteLength, ChecksumSHA256: createHash("sha256").update(body).digest("base64") } });
+    const result = await this.client.send({ operation: "put", input: { Bucket: this.bucket, Key: normalized, Body: body, ContentType: contentType, ContentLength: body.byteLength, ChecksumSHA256: createHash("sha256").update(body).digest("base64") } });
     return { key, etag: (result.ETag ?? createHash("sha256").update(body).digest("hex")).replaceAll('"', ""), bytes: body.byteLength };
   }
   async get(key: string) {
-    const result = await this.client.send({ input: { Bucket: this.bucket, Key: objectKey(key, this.prefix) } });
-    const body = result.Body instanceof Uint8Array ? result.Body : await collectBody(result.Body);
+    const result = await this.client.send({ operation: "get", input: { Bucket: this.bucket, Key: objectKey(key, this.prefix) } });
+    const body = result.Body instanceof Uint8Array ? result.Body : await collectBody(result.Body, this.maxBytes);
     if (body.byteLength > this.maxBytes) throw new Error("Object exceeds configured size limit");
     return { body, ...(result.ContentType ? { contentType: result.ContentType } : {}) };
   }
-  async remove(key: string) { await this.client.send({ input: { Bucket: this.bucket, Key: objectKey(key, this.prefix) } }); }
+  async remove(key: string) { await this.client.send({ operation: "delete", input: { Bucket: this.bucket, Key: objectKey(key, this.prefix) } }); }
 }
 
 export class LocalObjectStore implements ObjectStore {
@@ -48,11 +51,11 @@ function objectKey(key: string, prefix: string): string {
   return normalizedPrefix ? `${normalizedPrefix}/${key}` : key;
 }
 
-async function collectBody(body: AsyncIterable<Uint8Array> | Uint8Array | undefined): Promise<Uint8Array> {
+async function collectBody(body: AsyncIterable<Uint8Array> | Uint8Array | undefined, maxBytes: number): Promise<Uint8Array> {
   if (!body) return new Uint8Array();
   if (body instanceof Uint8Array) return body;
   const chunks: Uint8Array[] = []; let size = 0;
-  for await (const chunk of body) { chunks.push(chunk); size += chunk.byteLength; }
+  for await (const chunk of body) { size += chunk.byteLength; if (size > maxBytes) throw new Error("Object exceeds configured size limit"); chunks.push(chunk); }
   const result = new Uint8Array(size); let offset = 0;
   for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
   return result;
