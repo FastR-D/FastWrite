@@ -45,6 +45,7 @@ export class GithubSyncService {
     let run: GithubSyncRun = {
       id,
       projectId,
+      projectVersion: project.version,
       status: "failed",
       repository: project.source.repository,
       branch: project.source.ref,
@@ -150,7 +151,7 @@ export class GithubSyncService {
     const mergedTree = (await git(["-C", repositoryDirectory, "write-tree"])).stdout.trim();
     const remoteTree = await revision(repositoryDirectory, `${run.remoteCommit}^{tree}`);
     const before = this.workspaces.getProject(run.projectId);
-    const project = await this.workspaces.applyGithubSyncTree(run.projectId, repositoryDirectory);
+    const project = await this.workspaces.applyGithubSyncTree(run.projectId, repositoryDirectory, run.projectVersion);
     const hasChangesToPush = mergedTree !== remoteTree;
     if (project.version === before.version && !hasChangesToPush) {
       await this.workspaces.updateGithubSyncSource(run.projectId, run.branch, run.remoteCommit);

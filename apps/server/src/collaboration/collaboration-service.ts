@@ -8,12 +8,59 @@ import type { CollaborationBus, CollaborationPersistence } from "./collaboration
 const COMPACT_AFTER_UPDATES = 1_000;
 const COMPACT_AFTER_BYTES = 5 * 1024 * 1024;
 const LIVE_FLUSH_IDLE_MS = 1_000;
+export interface CollaborationDocumentUpdate { projectId: string; path: string; update: string; }
 
 export class CollaborationService {
-  private readonly projectLocks = new Map<string, Promise<unknown>>();
+  private readonly documentListeners = new Set<(change: CollaborationDocumentUpdate) => void>();
   private readonly liveFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly persistedDocuments = new Map<string, Promise<void>>();
-  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly bus?: CollaborationBus, private readonly persistence?: CollaborationPersistence) {}
+  constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly bus?: CollaborationBus, private readonly persistence?: CollaborationPersistence) {
+    workspaces.setTextWriteHooks({
+      beforeWrite: (projectId, path) => this.serialized(projectId, async () => {
+        const document = this.database.snapshot().collaborationDocuments.find(item => item.projectId === projectId && item.path === path && item.status === "active");
+        if (document) {
+          const ydoc = this.restore(document.id);
+          try { await this.flush(projectId, path, document.id, ydoc); }
+          finally { ydoc.destroy(); }
+        }
+      }),
+      beforeReplace: projectId => this.flushProject(projectId),
+      afterWrite: (projectId, path, content, version) => this.reconcileWrittenFile(projectId, path, content, version),
+      afterDelete: (projectId, path) => this.archivePath(projectId, path)
+    });
+  }
+
+  onDocumentChange(listener: (change: CollaborationDocumentUpdate) => void): () => void {
+    this.documentListeners.add(listener);
+    return () => { this.documentListeners.delete(listener); };
+  }
+
+  private async reconcileWrittenFile(projectId: string, path: string, content: string, version: number): Promise<void> {
+    await this.serialized(projectId, async () => {
+      const document = this.database.snapshot().collaborationDocuments.find(item => item.projectId === projectId && item.path === path && item.status === "active");
+      if (!document) return;
+      const ydoc = this.restore(document.id);
+      try {
+        const text = ydoc.getText("content"); const before = text.toString();
+        const vector = Y.encodeStateVector(ydoc);
+        let start = 0, end = 0;
+        while (start < Math.min(before.length, content.length) && before[start] === content[start]) start++;
+        while (end < Math.min(before.length, content.length) - start && before[before.length - end - 1] === content[content.length - end - 1]) end++;
+        if (before !== content) ydoc.transact(() => {
+          text.delete(start, before.length - start - end);
+          text.insert(start, content.slice(start, content.length - end));
+        }, "workspace-write");
+        await this.compact(document.id, ydoc);
+        await this.database.mutate(state => {
+          const stored = state.collaborationDocuments.find(item => item.id === document.id)!;
+          stored.fileVersion = version; stored.updatedAt = new Date().toISOString();
+        });
+        const update = encode(Y.encodeStateAsUpdate(ydoc, vector));
+        await this.bus?.publish(`fastwrite:collab:${document.id}`, JSON.stringify({ documentId: document.id, update }));
+        for (const listener of this.documentListeners) listener({ projectId, path, update });
+      } finally { ydoc.destroy(); }
+    });
+  }
 
   /** Attach a cross-node listener. Incoming updates are persisted through the
    * same serialized path as local websocket updates, preventing divergent
@@ -55,10 +102,13 @@ export class CollaborationService {
   }
 
   async open(projectId: string, path: string) {
-    const document = await this.document(projectId, path);
-    await this.ensurePersisted(document.id);
-    const ydoc = this.restore(document.id);
-    return { documentId: document.id, path: document.path, fileVersion: document.fileVersion, update: encode(Y.encodeStateAsUpdate(ydoc)) };
+    return this.serialized(projectId, async () => {
+      const document = await this.document(projectId, path);
+      await this.ensurePersisted(document.id);
+      const ydoc = this.restore(document.id);
+      try { return { documentId: document.id, path: document.path, fileVersion: document.fileVersion, update: encode(Y.encodeStateAsUpdate(ydoc)) }; }
+      finally { ydoc.destroy(); }
+    });
   }
 
   async positions(projectId: string, path: string, from: number, to: number) {
@@ -212,15 +262,9 @@ export class CollaborationService {
   private nextSequence(documentId: string) { const state = this.database.snapshot(); return Math.max(0, ...state.yDocumentSnapshots.filter((item) => item.documentId === documentId).map((item) => item.sequence), ...state.yDocumentUpdates.filter((item) => item.documentId === documentId).map((item) => item.sequence)) + 1; }
   private shouldCompact(documentId: string) { const updates = this.database.snapshot().yDocumentUpdates.filter((item) => item.documentId === documentId); return updates.length >= COMPACT_AFTER_UPDATES || updates.reduce((sum, item) => sum + item.bytes, 0) >= COMPACT_AFTER_BYTES; }
   private async compact(documentId: string, ydoc: Y.Doc) { const sequence = this.nextSequence(documentId); const update = encode(Y.encodeStateAsUpdate(ydoc)); const createdAt = new Date().toISOString(); await this.database.mutate((current) => { current.yDocumentSnapshots.push({ documentId, sequence, update, createdAt }); current.yDocumentUpdates = current.yDocumentUpdates.filter((item) => item.documentId !== documentId); }); await this.persistence?.saveSnapshot({ documentId, sequence, update, createdAt }); }
-  private async flush(projectId: string, path: string, documentId: string, ydoc: Y.Doc) { const current = this.database.snapshot().collaborationDocuments.find((item) => item.id === documentId); if (!current) throw new ApiError(404, "collaboration_document_not_found", "Collaboration document not found"); const content = ydoc.getText("content").toString(); const file = await this.workspaces.readTextFile(projectId, path); if (file.content === content) return { fileVersion: file.file.version }; const saved = await this.workspaces.saveTextFile(projectId, path, { content, baseVersion: current.fileVersion }); await this.database.mutate((state) => { const stored = state.collaborationDocuments.find((item) => item.id === documentId); if (stored) { stored.fileVersion = saved.file.version; stored.updatedAt = new Date().toISOString(); } }); return { fileVersion: saved.file.version }; }
+  private async flush(projectId: string, path: string, documentId: string, ydoc: Y.Doc) { const current = this.database.snapshot().collaborationDocuments.find((item) => item.id === documentId); if (!current) throw new ApiError(404, "collaboration_document_not_found", "Collaboration document not found"); const content = ydoc.getText("content").toString(); const file = await this.workspaces.readTextFile(projectId, path); if (file.content === content) return { fileVersion: file.file.version }; const saved = await this.workspaces.saveTextFile(projectId, path, { content, baseVersion: current.fileVersion }, "collaboration"); await this.database.mutate((state) => { const stored = state.collaborationDocuments.find((item) => item.id === documentId); if (stored) { stored.fileVersion = saved.file.version; stored.updatedAt = new Date().toISOString(); } }); return { fileVersion: saved.file.version }; }
   private async serialized<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.projectLocks.get(projectId) ?? Promise.resolve();
-    let release!: () => void;
-    const next = new Promise<void>((resolve) => { release = resolve; });
-    const queued = previous.then(() => next);
-    this.projectLocks.set(projectId, queued);
-    await previous;
-    try { return await operation(); } finally { release(); if (this.projectLocks.get(projectId) === queued) this.projectLocks.delete(projectId); }
+    return this.workspaces.withProjectLock(projectId, operation);
   }
   private scheduleLiveFlush(projectId: string) {
     const previous = this.liveFlushTimers.get(projectId);

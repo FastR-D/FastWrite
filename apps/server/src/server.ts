@@ -31,7 +31,7 @@ export async function startServer() {
   return server;
 }
 
-export function createServerOptions(fetch: ((request: Request) => Promise<Response>) & Pick<Partial<ApplicationFetch>, "onAuthChange" | "authorizeHarnessRun">) {
+export function createServerOptions(fetch: ((request: Request) => Promise<Response>) & Pick<Partial<ApplicationFetch>, "onAuthChange" | "authorizeHarnessRun" | "onDocumentChange">) {
   const rooms = new Map<string, Set<ServerWebSocket<CollaborationSocketData>>>();
   const harnessUnsubscribers = new Map<ServerWebSocket<HarnessSocketData>, () => void>();
   const harnessReauthorizationTimers = new Map<ServerWebSocket<HarnessSocketData>, ReturnType<typeof setInterval>>();
@@ -58,6 +58,18 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
   fetch.onAuthChange?.(() => {
     for (const socket of harnessUnsubscribers.keys()) reauthorizeHarnessSocket(socket);
     for (const room of rooms.values()) for (const socket of room) void reauthorizeCollaborationSocket(socket).catch(() => socket.close(1011, "Collaboration authorization unavailable"));
+  });
+  fetch.onDocumentChange?.(({ projectId, path, update }) => {
+    const room = rooms.get(`${projectId}:${path}`);
+    if (!room) return;
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MESSAGE_SYNC);
+    writeUpdate(encoder, Buffer.from(update, "base64"));
+    const payload = encoding.toUint8Array(encoder);
+    for (const socket of room) void (async () => {
+      try { if (await reauthorizeCollaborationSocket(socket)) socket.send(payload); }
+      catch { socket.close(1011, "Collaboration update unavailable"); }
+    })();
   });
   const presenceExpiryTimer = setInterval(() => {
     const deadline = Date.now() - PRESENCE_EXPIRY_MS;

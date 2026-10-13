@@ -52,6 +52,20 @@ try {
   assert.ok(!(await api("/file?path=main.tex")).content.includes("DISCARD_REGRESSION_MARKER"));
   console.log("PASS: discard updates the visible editor and subsequent saves preserve restored text");
 
+  await page.locator('label').filter({ has: page.locator("#collaboration-enabled") }).click();
+  await expect(page.locator("#collaboration-enabled")).toBeChecked();
+  await expect(page.locator(".collaboration-status")).toHaveText(/Connected|Persisted to file/);
+  const beforeRestSave = await api("/file?path=main.tex");
+  await api("/file?path=main.tex", "PUT", { content: beforeRestSave.content + "\n% REST_SYNC_REGRESSION", baseVersion: beforeRestSave.file.version });
+  await expect(page.locator(".monaco-editor .view-lines")).toContainText("REST_SYNC_REGRESSION");
+  await editor().focus(); await editor().press("ControlOrMeta+End"); await editor().press("Enter"); await page.keyboard.type("% LIVE_AFTER_REST");
+  await expect.poll(async () => (await api("/file?path=main.tex")).content).toContain("LIVE_AFTER_REST");
+  const flushedRestSave = await api("/collaboration/flush", "POST", { path: "main.tex" });
+  assert.ok(flushedRestSave.content.includes("REST_SYNC_REGRESSION"));
+  console.log("PASS: REST saves update the live editor and later collaboration saves preserve both edits");
+  await page.locator('label').filter({ has: page.locator("#collaboration-enabled") }).click();
+  await expect(page.locator("#collaboration-enabled")).not.toBeChecked();
+
   await page.getByRole("button", { name: "Provenance", exact: true }).click();
   const dossier = page.getByRole("dialog", { name: "AI provenance dossier", exact: true });
   const provenanceDownload = page.waitForEvent("download"); await dossier.getByRole("button", { name: "Export dossier", exact: true }).click();
@@ -95,10 +109,13 @@ try {
   console.log("PASS: offline cache renders on network failure and stays hidden on access denial");
 
   await page.unroute("**/api/projects/**");
-  const memberResponse = await context.request.post(setup.origin + "/api/auth/register", { data: { email: "draft-member@example.test", password: "fastwrite-e2e-only-password", displayName: "Draft member" } });
+  // Provision the second account without replacing the first browser's refresh cookie.
+  const memberContext = await browser.newContext();
+  const memberResponse = await memberContext.request.post(setup.origin + "/api/auth/register", { data: { email: "draft-member@example.test", password: "fastwrite-e2e-only-password", displayName: "Draft member" } });
   assert.ok(memberResponse.ok()); const member = await memberResponse.json();
   const invitation = await api("/invitations", "POST", { email: "draft-member@example.test", role: "editor" });
-  assert.ok((await context.request.post(setup.origin + "/api/invitations/" + invitation.token + "/accept", { headers: { authorization: `Bearer ${member.token}` } })).ok());
+  assert.ok((await memberContext.request.post(setup.origin + "/api/invitations/" + invitation.token + "/accept", { headers: { authorization: `Bearer ${member.token}` } })).ok());
+  await memberContext.close();
   await page.goto(projectUrl); await editor().waitFor({ state: "attached" });
   await page.route("**/api/projects/**/file?*", route => route.request().method() === "PUT" ? route.abort("internetdisconnected") : route.continue());
   await editor().focus(); await editor().press("ControlOrMeta+Home"); await page.keyboard.insertText("% ACCOUNT_A_PRIVATE_DRAFT\n");

@@ -73,7 +73,7 @@ import { AuthService, requireAdminReadRole, requireRole, type AuthResult, type P
 import { AuthorizationService, type ProjectAction } from "./auth/authorization-service";
 import { TeamService } from "./teams/team-service";
 import { HarnessProfileService } from "./harness/profile-service";
-import { CollaborationService } from "./collaboration/collaboration-service";
+import { CollaborationService, type CollaborationDocumentUpdate } from "./collaboration/collaboration-service";
 import { CommentService } from "./comments/comment-service";
 import { CasIdentityProvider, OidcIdentityProvider, type IdentityProvider } from "./auth/identity-provider";
 import { FastCASService, type FastCASConfiguration } from "./auth/fastcas-service";
@@ -132,7 +132,7 @@ interface Services {
 }
 
 type Handler = (request: Request, params: Record<string, string>, url: URL) => Promise<Response> | Response;
-export type ApplicationFetch = ((request: Request) => Promise<Response>) & { dispatchMail(): Promise<void>; authorizeHarnessRun(request: Request, runId: string): void; onAuthChange?(listener: () => void): () => void };
+export type ApplicationFetch = ((request: Request) => Promise<Response>) & { dispatchMail(): Promise<void>; authorizeHarnessRun(request: Request, runId: string): void; onAuthChange?(listener: () => void): () => void; onDocumentChange?(listener: (change: CollaborationDocumentUpdate) => void): () => void };
 
 interface Route {
   method: string;
@@ -431,6 +431,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
     if (!harnessRuns.get(runId)) throw new ApiError(404, "harness_run_not_found", "Harness run not found");
   };
   applicationFetch.onAuthChange = listener => fastcas?.onRevocation(listener) ?? (() => {});
+  applicationFetch.onDocumentChange = listener => collaboration.onDocumentChange(listener);
   return applicationFetch;
 }
 

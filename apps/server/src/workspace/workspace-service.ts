@@ -50,6 +50,15 @@ export class WorkspaceService {
   private readonly projectsDirectory: string;
   private readonly gitHistory = new GitHistory();
   private readonly projectQueue = new ProjectQueue();
+  private textWriteHooks?: {
+    beforeWrite(projectId: string, path: string): Promise<void>;
+    beforeReplace(projectId: string): Promise<void>;
+    afterWrite(projectId: string, path: string, content: string, version: number): Promise<void>;
+    afterDelete(projectId: string, path: string): Promise<void>;
+  };
+
+  setTextWriteHooks(hooks: NonNullable<WorkspaceService["textWriteHooks"]>): void { this.textWriteHooks = hooks; }
+  withProjectLock<T>(id: string, operation: () => Promise<T>): Promise<T> { return this.projectQueue.run(id, operation); }
 
   constructor(private readonly dataDirectory: string, private readonly database: JsonDatabase) {
     this.projectsDirectory = join(dataDirectory, "projects");
@@ -200,13 +209,16 @@ export class WorkspaceService {
     });
   }
 
-  async saveTextFile(id: string, requestedPath: string, request: SaveFileRequest): Promise<SaveFileResponse> {
+  async saveTextFile(id: string, requestedPath: string, request: SaveFileRequest, source: "external" | "collaboration" = "external"): Promise<SaveFileResponse> {
     return this.projectQueue.run(id, async () => {
-      const project = this.getProject(id);
       const root = this.workspaceRoot(id);
       const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
       if (!isTextFile(relativePath)) throw new ApiError(415, "binary_file", "Binary files cannot be saved as source text");
       await this.safeFileStat(absolutePath);
+      // Flush live edits before checking the caller's version. This rejects a
+      // stale REST/AI write instead of silently discarding pending collaboration.
+      if (source === "external") await this.textWriteHooks?.beforeWrite(id, relativePath);
+      const project = this.getProject(id);
       const currentVersion = this.database.snapshot().fileVersions[id]?.[relativePath]?.version ?? 1;
       if (request.baseVersion !== currentVersion) {
         throw new ApiError(409, "version_conflict", "The file changed since it was opened", { currentVersion });
@@ -225,6 +237,7 @@ export class WorkspaceService {
           storedProject.updatedAt = timestamp;
         }
       });
+      if (source === "external") await this.textWriteHooks?.afterWrite(id, relativePath, request.content, nextFileVersion);
       return {
         file: this.paperFile(relativePath, Buffer.byteLength(request.content), nextFileVersion, timestamp),
         projectVersion: nextProjectVersion
@@ -444,9 +457,12 @@ export class WorkspaceService {
     });
   }
 
-  async applyGithubSyncTree(id: string, sourceDirectory: string): Promise<PaperProject> {
+  async applyGithubSyncTree(id: string, sourceDirectory: string, expectedVersion?: number): Promise<PaperProject> {
     return this.projectQueue.run(id, async () => {
+      await this.textWriteHooks?.beforeReplace(id);
       const project = this.getProject(id);
+      if (expectedVersion !== undefined && project.version !== expectedVersion)
+        throw new ApiError(409, "github_sync_workspace_changed", "The paper changed during Sync. Run Sync again so the new edits are included");
       const root = this.workspaceRoot(id);
       const syncedMain = resolveWorkspacePath(sourceDirectory, project.mainDocument).absolutePath;
       await this.safeFileStat(syncedMain).catch(() => {
@@ -477,6 +493,13 @@ export class WorkspaceService {
         stored.updatedAt = timestamp;
         return stored;
       });
+      for (const path of changedPaths) {
+        if (!afterHashes.has(path)) await this.textWriteHooks?.afterDelete(id, path);
+        else if (isTextFile(path)) {
+          const file = await this.readTextFile(id, path);
+          await this.textWriteHooks?.afterWrite(id, path, file.content, file.file.version);
+        }
+      }
       await this.snapshotHistory(id, "Apply GitHub sync");
       return updated;
     });
@@ -807,6 +830,7 @@ export class WorkspaceService {
 
   async restoreHistoryFiles(id: string, oid: string, paths: string[], expectedVersion?: number): Promise<{ oid?: string; restored: string[] }> {
     return this.projectQueue.run(id, async () => {
+      for (const path of paths) await this.textWriteHooks?.beforeWrite(id, normalizeWorkspacePath(path));
       const project = this.getProject(id);
       if (expectedVersion !== undefined && expectedVersion !== project.version)
         throw new ApiError(409, "version_conflict", "The project changed before history restoration", { currentVersion: project.version });
