@@ -51,6 +51,7 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
           bun scripts/compiler-sandbox-smoke.ts
+          bun scripts/experiment-sandbox-smoke.ts
 
       - name: Run release checks
         run: bun run release:check
