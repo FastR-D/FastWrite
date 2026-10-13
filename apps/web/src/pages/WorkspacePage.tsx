@@ -189,6 +189,8 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   );
   const fixCompileWithAgent = useCallback(
     (failure: CompileFailureContext) => {
+      setBottomPanelTab("ai");
+      setPanelCollapsed(false);
       setCompileRepairRequest((current) => ({
         id: (current?.id ?? 0) + 1,
         failure,
