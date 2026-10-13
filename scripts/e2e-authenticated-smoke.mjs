@@ -7,7 +7,7 @@ import { rm, readFile, mkdir } from "node:fs/promises";
 import assert from "node:assert/strict";
 
 const child = spawn(process.env.FASTWRITE_E2E_BUN || "bun", ["scripts/fixtures/authenticated-server.ts"], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-let browser, setup, page;
+let browser, setup, page, context;
 try {
   setup = await new Promise((resolveReady, reject) => {
     let output = "";
@@ -18,7 +18,12 @@ try {
     child.once("exit", code => { clearTimeout(timer); reject(new Error(`Server exited ${code}`)); });
   });
   browser = await chromium.launch({ ...(process.env.FASTWRITE_E2E_BROWSER_PATH ? { executablePath: process.env.FASTWRITE_E2E_BROWSER_PATH } : {}), headless: true });
-  const context = await browser.newContext(); page = await context.newPage();
+  context = await browser.newContext();
+  await context.tracing.start({ screenshots: true, snapshots: true });
+  page = await context.newPage();
+  // Leaving an offline draft is intentional once its local persistence is asserted.
+  page.on("dialog", dialog => dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss());
+  page.on("pageerror", error => console.error("Browser error:", error.message));
   await page.goto(setup.origin + "/projects");
   await page.getByRole("button", { name: "Sign in", exact: true }).first().click();
   const login = page.getByRole("dialog", { name: "Sign in", exact: true });
@@ -148,6 +153,7 @@ try {
 } catch (error) {
   await mkdir("output/playwright", { recursive: true });
   await page?.screenshot({ path: "output/playwright/authenticated-regression-failure.png", fullPage: true }).catch(() => undefined);
+  await context?.tracing.stop({ path: "output/playwright/authenticated-regression-trace.zip" }).catch(() => undefined);
   throw error;
 } finally {
   await browser?.close();
