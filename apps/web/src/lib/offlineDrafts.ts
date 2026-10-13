@@ -57,4 +57,3 @@ function request<T>(db: IDBDatabase, name: string, mode: IDBTransactionMode, ope
     transaction.onerror = () => { db.close(); reject(transaction.error); };
   });
 }
-

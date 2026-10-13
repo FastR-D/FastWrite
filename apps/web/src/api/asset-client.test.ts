@@ -2,10 +2,12 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { api } from "./client";
 
 const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const fetchTarget = globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> };
 let values: Map<string, string>;
 let fetchMock: ReturnType<typeof spyOn<typeof fetchTarget, "fetch">>;
 beforeEach(() => {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: new EventTarget() });
   values = new Map([["fastwrite.session-token", "test-access-token"]]);
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
     getItem: (key: string) => values.get(key) ?? null,
@@ -16,6 +18,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   fetchMock.mockRestore();
+  if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+  else Reflect.deleteProperty(globalThis, "window");
   if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
   else Reflect.deleteProperty(globalThis, "localStorage");
 });
@@ -89,6 +93,7 @@ test.each([200, 401])("a late refresh response (%s) cannot replace or delete new
     if (values.get("fastwrite.session-token") === "test-access-token") return new Response(null, { status: 401 });
     return new Response("bytes");
   });
-  await api.projects.readAsset("project", "image.png");
+  await expect(api.projects.readAsset("project", "image.png")).rejects.toMatchObject({ code: "session_changed" });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(values.get("fastwrite.session-token")).toBe("new-login");
 });

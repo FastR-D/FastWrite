@@ -453,4 +453,3 @@ export const api = {
     check: (projectId: string) => request<{ projectId: string; findings: AlignmentFinding[] }>(`/api/projects/${projectId}/alignment-checks`, { method: "POST" })
   }
 };
-
