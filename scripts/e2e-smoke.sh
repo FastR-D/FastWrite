@@ -430,8 +430,8 @@ run_code 'async (page) => {
   });
   await page.route("**/api/projects/*/agent-tasks/agent-plan-review-e2e/confirm", async route => {
     agentRun = { ...agentRun, status: "running", steps: [
-      { id: "agent-generate-1", label: "Process main.tex", status: "completed" },
-      { id: "agent-generate-2", label: "Process sections/method.tex", status: "running" }
+      { id: "agent-generate-1", label: "处理 main.tex", status: "completed" },
+      { id: "agent-generate-2", label: "处理 sections/method.tex", status: "running" }
     ] };
     await page.waitForTimeout(900);
     const main = await (await page.request.get(apiRoot + "/file?path=main.tex")).json();
@@ -542,18 +542,18 @@ run_code 'async (page) => {
   const agentPanel = page.getByRole("region", { name: "智能助手工作区" });
   await agentPanel.waitFor();
   const objective = agentPanel.getByLabel("希望智能助手做什么？");
-  const commandButtons = ["/draft", "/continue", "/revise"].map(label => agentPanel.getByRole("button", { name: label, exact: true }));
+  const commandButtons = ["起草", "续写", "修改"].map(label => agentPanel.getByRole("button", { name: label, exact: true }));
   const commandBoxes = await Promise.all(commandButtons.map(button => button.boundingBox()));
   const commandContainer = await agentPanel.locator(".agent-command-buttons").boundingBox();
   const commandWidth = commandBoxes.reduce((total, box) => total + (box?.width || 0), 0);
   if (!commandContainer || commandBoxes.some(box => !box || box.width > 115) || commandContainer.width - commandWidth < 40) throw new Error("Agent command buttons still stretch across the composer");
-  await agentPanel.getByRole("button", { name: "/draft", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "起草", exact: true }).click();
   await objective.fill("/draft Create an initial paper outline for a bounded endpoint defense.");
-  await agentPanel.getByRole("button", { name: "/continue", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "续写", exact: true }).click();
   if (!(await objective.inputValue()).startsWith("/continue Create an initial")) throw new Error("Continue command did not preserve the Agent objective");
-  await agentPanel.getByRole("button", { name: "/revise", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "修改", exact: true }).click();
   if (!(await objective.inputValue()).startsWith("/revise Create an initial")) throw new Error("Revise command did not preserve the Agent objective");
-  await agentPanel.getByRole("button", { name: "/draft", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "起草", exact: true }).click();
   await objective.fill("Refine the paper one file at a time");
   const creatingAgentPlan = agentPanel.getByRole("button", { name: "创建计划", exact: true }).click();
   await agentPanel.getByText("正在规划智能助手任务", { exact: true }).waitFor();
@@ -565,7 +565,7 @@ run_code 'async (page) => {
   const overviewCounts = agentPanel.locator(".agent-review-overview .review-counts b");
   const overviewLabels = await overviewCounts.allTextContents();
   const overviewColors = await overviewCounts.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
-  if (overviewLabels.join("|") !== "Pending 3|Accepted 0|Rejected 0" || new Set(overviewColors).size !== 3) {
+  if (overviewLabels.join("|") !== "待处理 3|已接受 0|已拒绝 0" || new Set(overviewColors).size !== 3) {
     throw new Error("Agent review overview does not show three complete, distinctly colored status totals");
   }
   await agentPanel.getByRole("button", { name: "拒绝待审核更改并完成", exact: true }).click();
@@ -596,7 +596,7 @@ run_code 'async (page) => {
   const fileCounts = agentPanel.locator(".draft-diff__file > header .review-counts b");
   const fileLabels = await fileCounts.allTextContents();
   const fileColors = await fileCounts.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
-  if (fileLabels.join("|") !== "Pending 2/2|Accepted 0/2|Rejected 0/2" || new Set(fileColors).size !== 3) {
+  if (fileLabels.join("|") !== "待处理 2/2|已接受 0/2|已拒绝 0/2" || new Set(fileColors).size !== 3) {
     throw new Error("Agent file review does not show three complete, distinctly colored status totals");
   }
   await agentPanel.getByRole("button", { name: "拒绝", exact: true }).first().click();
