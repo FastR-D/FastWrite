@@ -23,19 +23,19 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${base}/projects/${project.id}`);
-  const source = page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true });
+  const source = page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true });
   await expect(source).toBeVisible();
   const tabs = page.getByRole('group', { name: 'Open editors controls' });
-  const settingsTab = tabs.getByRole('tab', { name: 'Settings', exact: true });
-  const panel = page.getByRole('tabpanel', { name: 'Settings', exact: true });
-  await page.getByRole('button', { name: 'Workspace settings', exact: true }).click();
+  const settingsTab = tabs.getByRole('tab', { name: "设置", exact: true });
+  const panel = page.getByRole('tabpanel', { name: "设置", exact: true });
+  await page.getByRole('button', { name: "工作区设置", exact: true }).click();
   await expect(settingsTab).toHaveAttribute('aria-selected', 'true');
   await expect(panel).toBeVisible();
-  await expect(page.getByRole('dialog', { name: 'Project settings' })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Project settings', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: "项目设置" })).toHaveCount(0);
+  await page.getByRole('button', { name: "项目设置", exact: true }).click();
   await expect(settingsTab).toHaveCount(1);
 
-  const name = panel.getByRole('textbox', { name: 'Project name', exact: true });
+  const name = panel.getByRole('textbox', { name: "项目名称", exact: true });
   await name.fill('Settings draft preserved');
   await tabs.getByRole('tab', { name: 'main.tex', exact: true }).click();
   await expect(source).toBeVisible();
@@ -47,16 +47,16 @@ try {
   await settingsTab.click();
   await expect(name).toHaveValue('Settings draft preserved');
 
-  const navigation = panel.getByRole('navigation', { name: 'Settings categories' });
-  await navigation.getByRole('button', { name: 'Writing', exact: true }).click();
-  await expect(panel.getByRole('combobox', { name: 'Research domain', exact: true })).toBeVisible();
-  await panel.getByRole('searchbox', { name: 'Search settings' }).fill('api key');
-  await expect(panel.getByLabel('API key', { exact: true })).toBeVisible();
+  const navigation = panel.getByRole('navigation', { name: "设置类别" });
+  await navigation.getByRole('button', { name: "写作", exact: true }).click();
+  await expect(panel.getByRole('combobox', { name: "研究领域", exact: true })).toBeVisible();
+  await panel.getByRole('searchbox', { name: "搜索设置" }).fill('api key');
+  await expect(panel.getByLabel("API 密钥", { exact: true })).toBeVisible();
   await expect(name).toBeHidden();
-  await panel.getByRole('searchbox', { name: 'Search settings' }).fill('no-such-setting');
-  await expect(panel.getByRole('heading', { name: 'No settings found' })).toBeVisible();
-  await navigation.getByRole('button', { name: 'General', exact: true }).click();
-  await panel.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await panel.getByRole('searchbox', { name: "搜索设置" }).fill('no-such-setting');
+  await expect(panel.getByRole('heading', { name: "未找到设置项" })).toBeVisible();
+  await navigation.getByRole('button', { name: "常规", exact: true }).click();
+  await panel.getByRole('button', { name: "保存更改", exact: true }).click();
   await expect(panel.getByRole('status')).toHaveText('Settings saved');
   await expect(settingsTab).toHaveAttribute('aria-selected', 'true');
   assert.equal((await (await context.request.get(`${base}/api/projects/${project.id}`)).json()).name, 'Settings draft preserved');
@@ -65,12 +65,12 @@ try {
   await expect(panel.getByRole('status')).toHaveText('Settings saved');
   assert.equal((await (await context.request.get(`${base}/api/projects/${project.id}`)).json()).name, 'Settings keyboard save');
 
-  await tabs.getByRole('button', { name: 'Close Settings', exact: true }).click();
+  await tabs.getByRole('button', { name: "关闭设置", exact: true }).click();
   await expect(settingsTab).toHaveCount(0);
   await expect(source).toBeVisible();
-  await page.getByRole('button', { name: 'Workspace settings', exact: true }).click();
+  await page.getByRole('button', { name: "工作区设置", exact: true }).click();
   await expect(name).toHaveValue('Settings keyboard save');
-  await page.getByRole('button', { name: 'Hide panel', exact: true }).click();
+  await page.getByRole('button', { name: "隐藏面板", exact: true }).click();
   mkdirSync('output/settings-editor', { recursive: true });
   await page.screenshot({ path: 'output/settings-editor/light.png' });
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
@@ -85,7 +85,7 @@ try {
     }));
     assert.ok(fits, `${category} controls fit the narrow editor`);
   }
-  await navigation.getByRole('button', { name: 'General', exact: true }).click();
+  await navigation.getByRole('button', { name: "常规", exact: true }).click();
   await page.screenshot({ path: 'output/settings-editor/narrow.png' });
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ result: 'pass', cases: ['single editor tab', 'draft survives source navigation', 'category and search', 'save stays open', 'keyboard save', 'close and reopen', 'narrow layout'], screenshots: 'output/settings-editor' }));

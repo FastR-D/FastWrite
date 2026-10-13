@@ -45,7 +45,7 @@ function request<T>(db: IDBDatabase, name: string, mode: IDBTransactionMode, ope
     const result = operation(transaction.objectStore(name));
     // Only transaction completion confirms durable local storage.
     transaction.oncomplete = () => { db.close(); resolve(result.result); };
-    transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error("Draft transaction aborted")); };
+    transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error("草稿保存事务已中止")); };
     transaction.onerror = () => { db.close(); reject(transaction.error); };
   });
 }

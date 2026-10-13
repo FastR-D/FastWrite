@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import * as monaco from "monaco-editor";
+import * as monaco from "../../lib/editor/monacoRuntime";
 import type { HistoryComparison } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
 import type { DocumentRegistry, DocumentEntry } from "../../lib/editor/documentRegistry";
@@ -8,9 +8,9 @@ import { Button, Select } from "../ui";
 import type { DiffRequest } from "./SourceControlView";
 
 const DIFF_LAYOUTS = [
-  { value: "auto", label: "Automatic layout" },
-  { value: "split", label: "Side by side" },
-  { value: "inline", label: "Inline" }
+  { value: "auto", label: "自动布局" },
+  { value: "split", label: "并排对比" },
+  { value: "inline", label: "行内对比" }
 ];
 
 export function WorkspaceDiffEditor({ registry, projectId, projectVersion, dirty, request, onClose, onRestored, onSaveCheckpoint }: { registry: DocumentRegistry; projectId: string; projectVersion: number; dirty: boolean; request: DiffRequest; onClose: () => void; onRestored: (path: string) => Promise<void>; onSaveCheckpoint: () => Promise<number> }) {
@@ -36,26 +36,26 @@ export function WorkspaceDiffEditor({ registry, projectId, projectVersion, dirty
       if (!entry) {
         try {
           const document = await api.projects.readFile(projectId, request.path, controller.signal);
-          if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+          if (controller.signal.aborted) throw new DOMException("已中止", "AbortError");
           entry = registry.open(document);
         } catch (failure) {
           if (failure instanceof ApiClientError && failure.status === 404) return { original, modified: { ref: "working", path: request.path, exists: false, binary: false, size: 0 } };
           throw failure;
         }
       }
-      if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      if (controller.signal.aborted) throw new DOMException("已中止", "AbortError");
       release = registry.acquire(entry);
       working.current = entry;
       return { original, modified: { ref: "working", path: request.path, exists: true, binary: false, content: entry.model.getValue(), size: new Blob([entry.model.getValue()]).size } };
     };
-    void load().then(result => { if (!controller.signal.aborted) setComparison(result); }).catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Comparison unavailable"); });
+    void load().then(result => { if (!controller.signal.aborted) setComparison(result); }).catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "对比暂不可用"); });
     return () => { controller.abort(); queueMicrotask(() => release?.()); };
   }, [projectId, request, registry]);
   useEffect(() => {
     if (!host.current || !comparison || comparison.original.binary || comparison.modified.binary) return;
     configureMonaco();
     const entry = working.current;
-    const instance = monaco.editor.createDiffEditor(host.current, { automaticLayout: true, readOnly: !entry, originalEditable: false, renderSideBySide: host.current.clientWidth >= 800, minimap: { enabled: false }, hideUnchangedRegions: { enabled: true }, scrollBeyondLastLine: false, wordWrap: "on", originalAriaLabel: "Historical original", modifiedAriaLabel: entry ? `Working buffer for ${request.path}` : "Historical modified" });
+    const instance = monaco.editor.createDiffEditor(host.current, { automaticLayout: true, readOnly: !entry, originalEditable: false, renderSideBySide: host.current.clientWidth >= 800, minimap: { enabled: false }, hideUnchangedRegions: { enabled: true }, scrollBeyondLastLine: false, wordWrap: "on", originalAriaLabel: "历史原始版本", modifiedAriaLabel: entry ? `当前编辑内容： ${request.path}` : "历史修改版本" });
     const identity = crypto.randomUUID();
     const model = (side: "original" | "modified") => monaco.editor.createModel(comparison[side].content ?? "", languageForPath(comparison[side].path), monaco.Uri.from({ scheme: "fastwrite-history", authority: projectId, path: `/${comparison[side].ref}/${comparison[side].path}`, query: `${side}-${identity}` }));
     const original = model("original"), modified = entry?.model ?? model("modified");
@@ -63,8 +63,8 @@ export function WorkspaceDiffEditor({ registry, projectId, projectVersion, dirty
     instance.setModel({ original, modified });
     host.current.dataset.originalModelId = original.id;
     host.current.dataset.modifiedModelId = modified.id;
-    instance.getOriginalEditor().updateOptions({ ariaLabel: "Historical original" });
-    instance.getModifiedEditor().updateOptions({ ariaLabel: entry ? `Working buffer for ${request.path}` : "Historical modified" });
+    instance.getOriginalEditor().updateOptions({ ariaLabel: "历史原始版本" });
+    instance.getModifiedEditor().updateOptions({ ariaLabel: entry ? `当前编辑内容： ${request.path}` : "历史修改版本" });
     let provider = entry?.collaboration;
     let detachCollaboration = provider?.attachEditor(instance.getModifiedEditor());
     const unsubscribeProvider = registry.subscribe(changed => {
@@ -97,14 +97,14 @@ export function WorkspaceDiffEditor({ registry, projectId, projectVersion, dirty
       const version = saveFirst ? await onSaveCheckpoint() : previewVersion;
       await api.projects.restoreHistory(projectId, request.targetRef, [request.path], version);
       await onRestored(request.path);
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "Restore failed; local content retained"); }
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "恢复失败，已保留本地内容"); }
     finally { setRestoring(false); }
   };
-  return <section className="workspace-diff" aria-label="History comparison" data-diff-target={request.targetRef} data-diff-path={request.path}>
-    <div className="workbench-actions"><strong>{request.oldPath ? `${request.oldPath} → ` : ""}{request.path}</strong><Select aria-label="Diff layout" value={mode} onChange={value => setMode(value as typeof mode)} options={DIFF_LAYOUTS} /><Button variant="ghost" disabled={!changeCount} onClick={() => jump(-1)}>Previous change</Button><Button variant="ghost" disabled={!changeCount} onClick={() => jump(1)}>Next change</Button><span>{changeCount} changes</span><Button variant="ghost" disabled={(request.targetRef === "working" || request.targetRef === "working-tree") || !comparison?.modified.exists || comparison.modified.binary || restoring} onClick={() => setConfirmRestore(true)}>Restore file</Button><Button variant="ghost" disabled={restoring} onClick={onClose}>Close comparison</Button></div>
-    {confirmRestore ? <div className="diff-restore-confirmation" role="group" aria-label="Confirm history restore"><p>Replace {request.path} with checkpoint {request.targetRef.slice(0, 8)}. A new history commit will record this restore.</p>{dirty ? <p>Local edits must be saved to a checkpoint before restoring.</p> : null}<Button variant="primary" disabled={dirty || restoring} onClick={() => void restore(false)}>Confirm restore</Button><Button variant="secondary" disabled={restoring} onClick={() => void restore(true)}>Save checkpoint then restore</Button><Button variant="ghost" disabled={restoring} onClick={() => setConfirmRestore(false)}>Cancel</Button></div> : null}
-    <div className="diff-identities" data-original-exists={!comparison ? "unknown" : comparison.original.exists ? "true" : "false"} data-modified-exists={!comparison ? "unknown" : comparison.modified.exists ? "true" : "false"}><span>Original: {request.baseRef.slice(0, 8)} {comparison && !comparison.original.exists ? "· file does not exist" : ""}</span><span>Modified: {request.targetRef === "working" ? "Working buffer · editable" : request.targetRef === "working-tree" ? `Saved tree v${request.projectVersion}` : request.targetRef.slice(0, 8)} {comparison && !comparison.modified.exists ? "· file does not exist" : ""}</span></div>
-    {error ? <p role="alert">{error}</p> : !comparison ? <p role="status">Loading comparison…</p> : comparison.original.binary || comparison.modified.binary ? <p>Binary comparison · original {comparison.original.size} bytes · modified {comparison.modified.size} bytes</p> : null}
+  return <section className="workspace-diff" aria-label="历史对比" data-diff-target={request.targetRef} data-diff-path={request.path}>
+    <div className="workbench-actions"><strong>{request.oldPath ? `${request.oldPath} → ` : ""}{request.path}</strong><Select aria-label="差异布局" value={mode} onChange={value => setMode(value as typeof mode)} options={DIFF_LAYOUTS} /><Button variant="ghost" disabled={!changeCount} onClick={() => jump(-1)}>上一处更改</Button><Button variant="ghost" disabled={!changeCount} onClick={() => jump(1)}>下一处更改</Button><span>{changeCount} 处更改</span><Button variant="ghost" disabled={(request.targetRef === "working" || request.targetRef === "working-tree") || !comparison?.modified.exists || comparison.modified.binary || restoring} onClick={() => setConfirmRestore(true)}>恢复文件</Button><Button variant="ghost" disabled={restoring} onClick={onClose}>关闭对比</Button></div>
+    {confirmRestore ? <div className="diff-restore-confirmation" role="group" aria-label="确认恢复历史版本"><p>替换 {request.path} 为检查点版本 {request.targetRef.slice(0, 8)}。此次恢复将记录为新的历史提交。</p>{dirty ? <p>恢复前必须先将本地更改保存到检查点。</p> : null}<Button variant="primary" disabled={dirty || restoring} onClick={() => void restore(false)}>确认恢复</Button><Button variant="secondary" disabled={restoring} onClick={() => void restore(true)}>保存检查点后恢复</Button><Button variant="ghost" disabled={restoring} onClick={() => setConfirmRestore(false)}>取消</Button></div> : null}
+    <div className="diff-identities" data-original-exists={!comparison ? "unknown" : comparison.original.exists ? "true" : "false"} data-modified-exists={!comparison ? "unknown" : comparison.modified.exists ? "true" : "false"}><span>原始版本： {request.baseRef.slice(0, 8)} {comparison && !comparison.original.exists ? "· 文件不存在" : ""}</span><span>修改版本： {request.targetRef === "working" ? "当前编辑内容 · 可编辑" : request.targetRef === "working-tree" ? `已保存工作区版本${request.projectVersion}` : request.targetRef.slice(0, 8)} {comparison && !comparison.modified.exists ? "· 文件不存在" : ""}</span></div>
+    {error ? <p role="alert">{error}</p> : !comparison ? <p role="status">正在加载对比…</p> : comparison.original.binary || comparison.modified.binary ? <p>二进制对比 · 原始版本 {comparison.original.size} 字节 · 修改版本 {comparison.modified.size} 字节</p> : null}
     <div className="diff-editor-host" ref={host} />
   </section>;
 }

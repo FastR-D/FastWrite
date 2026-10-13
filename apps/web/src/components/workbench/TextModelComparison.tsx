@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import * as monaco from "monaco-editor";
+import * as monaco from "../../lib/editor/monacoRuntime";
 import { configureMonaco } from "../../lib/editor/monaco";
 import { Button, Checkbox } from "../ui";
 
@@ -32,5 +32,5 @@ export function TextModelComparison({ original, modified, originalLabel, modifie
     const change = sorted.find(item => direction > 0 ? item.modifiedStartLineNumber > line : item.modifiedStartLineNumber < line) ?? sorted[0]!;
     const next = Math.max(1, change.modifiedStartLineNumber); target.setPosition({ lineNumber: next, column: 1 }); target.revealLineInCenter(next); target.focus();
   };
-  return <div className="text-model-comparison"><div className="workbench-actions"><span>{originalLabel} → {modifiedLabel}</span><Button variant="ghost" onClick={() => jump(-1)}>Previous change</Button><Button variant="ghost" onClick={() => jump(1)}>Next change</Button><Checkbox checked={inline} onChange={setInline}>Inline comparison</Checkbox></div><div className="text-model-comparison__editor" ref={host} /></div>;
+  return <div className="text-model-comparison"><div className="workbench-actions"><span>{originalLabel} → {modifiedLabel}</span><Button variant="ghost" onClick={() => jump(-1)}>上一处更改</Button><Button variant="ghost" onClick={() => jump(1)}>下一处更改</Button><Checkbox checked={inline} onChange={setInline}>行内对比</Checkbox></div><div className="text-model-comparison__editor" ref={host} /></div>;
 }

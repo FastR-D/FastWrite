@@ -92,7 +92,8 @@ export async function compileLatex(source: string, additionalFiles: Record<strin
       success: result.success,
       ...(result.pdf ? { pdf: new Uint8Array(result.pdf) } : {}),
       ...(result.syncTexData ? { syncTexData: result.syncTexData } : {}),
-      log: `[FastWrite resources] ${networkSummary} Missing TeX packages are downloaded on demand and cached in the browser.\n${result.log || logMessages.join("\n")}`,
+      log: `[FastWrite 资源] ${networkSummary} 缺少的 TeX 包将按需下载并缓存到浏览器。
+${result.log || logMessages.join("\n")}`,
       ...(result.error ? { error: result.error } : {}),
       ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode })
     };
@@ -103,9 +104,9 @@ export async function compileLatex(source: string, additionalFiles: Record<strin
 
 async function preloadFontMetrics(activeCompiler: SiglumCompiler, packages: string[]): Promise<void> {
   for (const packageName of packages) {
-    notifyProgress({ stage: "packages", detail: `Loading TeX font metrics for ${packageName}…` });
+    notifyProgress({ stage: "packages", detail: `正在加载 TeX 字体度量： ${packageName}…` });
     const result = await activeCompiler.ctanFetcher.fetchPackage(packageName);
-    if (!result) throw new Error(`Could not load required TeX font metrics for ${packageName}`);
+    if (!result) throw new Error(`无法加载所需的 TeX 字体度量： ${packageName}`);
   }
 }
 
@@ -126,7 +127,7 @@ export async function repairCompilerCache(): Promise<void> {
   const { fileSystem } = await import("@siglum/filesystem");
   if (await fileSystem.exists("/bundle-cache/bundles")) {
     await fileSystem.rmdir("/bundle-cache/bundles", { recursive: true, silent: true });
-    if (await fileSystem.exists("/bundle-cache/bundles")) throw new Error("Could not clear the TeX bundle cache");
+    if (await fileSystem.exists("/bundle-cache/bundles")) throw new Error("无法清除 TeX 资源包缓存");
   }
   await Promise.all([
     "/bundle-cache/version",
@@ -149,7 +150,7 @@ export async function repairCompilerCache(): Promise<void> {
     const entries = root as unknown as AsyncIterable<[string, FileSystemHandle]>;
     for await (const [name, handle] of entries) if (handle.kind === "file" && name.endsWith(".fmt")) await root.removeEntry(name);
   }
-  notifyProgress({ stage: "repair", detail: "Compiler cache repaired. Resources will be verified again." });
+  notifyProgress({ stage: "repair", detail: "编译缓存已修复，将重新验证资源。" });
 }
 
 function notifyProgress(progress: CompilerProgress) {
@@ -167,16 +168,16 @@ async function preloadCompilerResources(source: string, additionalFiles: Record<
   if (previousVersion && previousVersion !== COMPILER_RESOURCE_VERSION && localStorage.getItem(NETWORK_FORCE_REFRESH_KEY) !== "1") {
     await repairCompilerCache();
   }
-  if (localStorage.getItem(NETWORK_VERSION_KEY) === COMPILER_RESOURCE_VERSION) return `WASM/bundle cache version ${COMPILER_RESOURCE_VERSION} reused without resource downloads.`;
+  if (localStorage.getItem(NETWORK_VERSION_KEY) === COMPILER_RESOURCE_VERSION) return `WASM/资源包缓存版本 ${COMPILER_RESOURCE_VERSION} 已复用，无需下载资源。`;
   const forceRefresh = localStorage.getItem(NETWORK_FORCE_REFRESH_KEY) === "1";
-  notifyProgress({ stage: "resources", detail: "Inspecting WASM and TeX bundle resources…" });
+  notifyProgress({ stage: "resources", detail: "正在检查 WASM 和 TeX 资源包…" });
   const manifestResponse = await fetch(`${COMPILER_BUNDLES_URL}/bundles.json`, { signal, cache: forceRefresh ? "reload" : "default" });
-  if (!manifestResponse.ok) throw new Error("TeX bundle manifest is unavailable");
+  if (!manifestResponse.ok) throw new Error("TeX 资源包清单不可用");
   const manifest = await manifestResponse.json() as CompilerBundleManifest;
   const resources = ["/busytex.wasm", ...resolveCompilerBundles(source, manifest, EAGER_BUNDLES, additionalFiles).map((bundle) => `${COMPILER_BUNDLES_URL}/${bundle}.data.gz`)];
   const sizes = await Promise.all(resources.map(async (url) => {
     const response = await fetch(url, { method: "HEAD", signal, cache: forceRefresh ? "reload" : "default" });
-    if (!response.ok) throw new Error(`Could not inspect compiler resource '${url}'`);
+    if (!response.ok) throw new Error(`无法检查编译资源“${url}'`);
     return Number(response.headers.get("content-length")) || 0;
   }));
   const totalBytes = sizes.reduce((total, size) => total + size, 0);
@@ -189,7 +190,7 @@ async function preloadCompilerResources(source: string, additionalFiles: Record<
       const expected = sizes[index]!;
       const resource = url.split("/").pop()!;
       const response = await fetch(url, { signal, cache: forceRefresh ? "reload" : "force-cache" });
-      if (!response.ok || !response.body) throw new Error(`Could not load compiler resource '${url}'`);
+      if (!response.ok || !response.body) throw new Error(`无法加载编译资源“${url}'`);
       const reader = response.body.getReader();
       let resourceBytes = 0;
       while (true) {
@@ -200,13 +201,13 @@ async function preloadCompilerResources(source: string, additionalFiles: Record<
         const progress = compilerResourceProgress(loadedBytes, totalBytes || loadedBytes, resource, false);
         notifyProgress({ stage: "resources", detail: progress.detail, percent: progress.percent, loadedBytes, totalBytes: totalBytes || loadedBytes, resource });
       }
-      if (expected && resourceBytes !== expected) throw new Error(`Compiler resource '${url}' failed its size check`);
+      if (expected && resourceBytes !== expected) throw new Error(`编译资源“${url}”未通过大小校验`);
     }
   };
   await Promise.all(Array.from({ length: Math.min(4, resources.length) }, () => worker()));
   localStorage.setItem(NETWORK_VERSION_KEY, COMPILER_RESOURCE_VERSION);
   localStorage.removeItem(NETWORK_FORCE_REFRESH_KEY);
-  return `${resources.length} WASM/bundle resources, ${loadedBytes} verified bytes, version ${COMPILER_RESOURCE_VERSION}.`;
+  return `${resources.length} 个 WASM/资源包资源， ${loadedBytes} 字节已验证，版本 ${COMPILER_RESOURCE_VERSION}.`;
 }
 
 async function clearIndexedDbStore(databaseName: string, storeName: string): Promise<void> {

@@ -8,16 +8,16 @@ import {
 import styles from "./GalleryPage.module.css";
 
 const PROJECTS = [
-  { value: "alpha", label: "Alpha" },
-  { value: "beta", label: "Beta" },
-  { value: "gamma", label: "Gamma" },
+  { value: "alpha", label: "甲项目" },
+  { value: "beta", label: "乙项目" },
+  { value: "gamma", label: "丙项目" },
   // Kept last so the interaction swatches above are unaffected by it.
-  { value: "archived", label: "Archived (read-only)", disabled: true }
+  { value: "archived", label: "已归档（只读）", disabled: true }
 ];
 
 const PUBLICATIONS = [
-  { label: "CCF-A conferences", options: [{ value: "ccs", label: "CCS" }, { value: "sp", label: "S&P" }] },
-  { label: "CCF-A journals", options: [{ value: "tifs", label: "TIFS" }, { value: "tdsc", label: "TDSC" }] }
+  { label: "CCF A 类会议", options: [{ value: "ccs", label: "CCS" }, { value: "sp", label: "S&P" }] },
+  { label: "CCF A 类期刊", options: [{ value: "tifs", label: "TIFS" }, { value: "tdsc", label: "TDSC" }] }
 ];
 
 /*
@@ -28,7 +28,7 @@ const PUBLICATIONS = [
 const CITY_VENUES = [
   "Aarhus", "Berlin", "Chicago", "Dresden", "Edinburgh", "Florence",
   "Geneva", "Helsinki", "Istanbul", "Jakarta", "Kyoto", "Lisbon"
-].map((city) => ({ value: city.toLowerCase(), label: city }));
+].map((city, index) => ({ value: city.toLowerCase(), label: ["奥胡斯", "柏林", "芝加哥", "德累斯顿", "爱丁堡", "佛罗伦萨", "日内瓦", "赫尔辛基", "伊斯坦布尔", "雅加达", "京都", "里斯本"][index]! }));
 
 export function GalleryPage() {
   const [project, setProject] = useState("");
@@ -37,7 +37,7 @@ export function GalleryPage() {
   const [skills, setSkills] = useState<string[]>(["draft"]);
   const [size, setSize] = useState<number | undefined>(120);
   const [agree, setAgree] = useState(false);
-  const [name, setName] = useState("A secure systems paper");
+  const [name, setName] = useState("安全系统论文");
   const [outlineMode, setOutlineMode] = useState<"current" | "project">("current");
   const [sizeMode, setSizeMode] = useState<"small" | "medium" | "wide">("medium");
 
@@ -45,100 +45,100 @@ export function GalleryPage() {
     <main className={styles.page}>
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>FastWrite UI</h1>
-          <div className={styles.subtitle}>Component catalogue · vscrui-based</div>
+          <h1 className={styles.title}>FastWrite 界面组件</h1>
+          <div className={styles.subtitle}>组件目录 · 基于 vscrui</div>
         </div>
-        <Button variant="ghost" size="small" onClick={() => { window.location.assign("/"); }}>Back to projects</Button>
+        <Button variant="ghost" size="small" onClick={() => { window.location.assign("/"); }}>返回项目列表</Button>
       </header>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Buttons</h2>
-        <p className={styles.sectionNote}>One primary action per region. Icon-only buttons always carry an accessible name.</p>
+        <h2 className={styles.sectionTitle}>按钮</h2>
+        <p className={styles.sectionNote}>每个区域只保留一个主要操作，纯图标按钮均提供无障碍名称。</p>
         <div className={styles.row}>
-          <Button variant="primary">Primary</Button>
-          <Button variant="secondary">Secondary</Button>
-          <Button variant="ghost">Ghost</Button>
-          <Button variant="danger">Destructive</Button>
-          <Button variant="primary" loading>Saving</Button>
-          <Button disabled>Disabled</Button>
+          <Button variant="primary">主要按钮</Button>
+          <Button variant="secondary">次要按钮</Button>
+          <Button variant="ghost">简洁按钮</Button>
+          <Button variant="danger">危险操作</Button>
+          <Button variant="primary" loading>正在保存</Button>
+          <Button disabled>已禁用</Button>
         </div>
         <div className={styles.row}>
-          <Button variant="secondary" size="small">Small</Button>
-          <IconButton label="Search the project" icon={<Icon name={icons.search} />} />
-          <IconButton label="Delete draft" variant="danger" icon={<Icon name={icons.trash} />} />
-          <IconButton label="Refresh" variant="secondary" icon={<Icon name={icons.refresh} />} />
+          <Button variant="secondary" size="small">小尺寸</Button>
+          <IconButton label="搜索项目" icon={<Icon name={icons.search} />} />
+          <IconButton label="删除草稿" variant="danger" icon={<Icon name={icons.trash} />} />
+          <IconButton label="刷新" variant="secondary" icon={<Icon name={icons.refresh} />} />
         </div>
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Text inputs</h2>
-        <p className={styles.sectionNote}>Field owns the label, hint and error relationship, including aria-describedby.</p>
+        <h2 className={styles.sectionTitle}>文本输入</h2>
+        <p className={styles.sectionNote}>字段统一管理标签、提示和错误之间的关联，包括 aria-describedby。</p>
         <div className={styles.column}>
-          <Field label="Project name" hint="Shown in the projects list.">
+          <Field label="项目名称" hint="显示在项目列表中。">
             {({ id, describedBy, invalid }) => (
               <TextField id={id} aria-describedby={describedBy} invalid={invalid} value={name} onChange={setName} />
             )}
           </Field>
-          <Field label="Workspace path" error="Use a path inside the managed workspace.">
+          <Field label="工作区路径" error="请使用此工作区内的路径。">
             {({ id, describedBy, invalid }) => (
               <TextField id={id} aria-describedby={describedBy} invalid={invalid} defaultValue="../escape.tex" />
             )}
           </Field>
-          <Field label="Abstract" hint="Markdown and LaTeX both accepted.">
+          <Field label="摘要" hint="支持 Markdown 和 LaTeX。">
             {({ id, describedBy }) => (
-              <TextArea id={id} aria-describedby={describedBy} rows={3} defaultValue="We present…" />
+              <TextArea id={id} aria-describedby={describedBy} rows={3} defaultValue="我们提出…" />
             )}
           </Field>
-          <Field label="Main-body pages" error="This venue caps the main body at 12 pages.">
+          <Field label="正文页数" error="此会议或期刊要求正文不超过 12 页。">
             {({ id, describedBy, invalid }) => (
               <NumberField id={id} aria-describedby={describedBy} invalid={invalid} value={size} onChange={setSize} min={1} step={1} />
             )}
           </Field>
-          <Field label="Template file" error="Only .tex templates are accepted.">
+          <Field label="模板文件" error="仅支持 .tex 模板。">
             {({ id, describedBy, invalid }) => (
-              <FileField id={id} label="Template file" aria-describedby={describedBy} invalid={invalid} accept=".tex" onSelect={() => undefined} />
+              <FileField id={id} label="模板文件" aria-describedby={describedBy} invalid={invalid} accept=".tex" onSelect={() => undefined} />
             )}
           </Field>
           <div className={styles.row}>
-            <Label htmlFor="gallery-inline">Inline label</Label>
-            <NumberField aria-label="Priority" compact defaultValue={3} min={0} />
+            <Label htmlFor="gallery-inline">行内标签</Label>
+            <NumberField aria-label="优先级" compact defaultValue={3} min={0} />
           </div>
         </div>
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Select</h2>
+        <h2 className={styles.sectionTitle}>选择</h2>
         <p className={styles.sectionNote}>
-          Custom combobox: arrow keys, Home/End, typeahead, Escape. Over 10 options it gains a filter field.
+          自定义组合框支持方向键、Home、End、输入匹配和 Esc。选项超过 10 个时显示筛选框。
         </p>
         <div className={styles.column}>
-          <Field label="Project">
+          <Field label="项目">
             {({ id, describedBy }) => (
-              <Select id={id} aria-describedby={describedBy} aria-label="Project" options={PROJECTS} value={project} onChange={setProject} placeholder="Choose a project" />
+              <Select id={id} aria-describedby={describedBy} aria-label="项目" options={PROJECTS} value={project} onChange={setProject} placeholder="选择项目" />
             )}
           </Field>
-          <Field label="Publication target" hint="Rendered as labelled groups.">
+          <Field label="投稿目标" hint="以带标签的分组显示。">
             {({ id }) => (
-              <Select id={id} aria-label="Publication target" options={PUBLICATIONS} value={publication} onChange={setPublication} placeholder="Choose a venue" />
+              <Select id={id} aria-label="投稿目标" options={PUBLICATIONS} value={publication} onChange={setPublication} placeholder="选择会议或期刊" />
             )}
           </Field>
-          <Field label="Long list" hint="More than 10 options, so the filter field engages.">
+          <Field label="长列表" hint="选项超过 10 个，已启用筛选框。">
             {({ id, describedBy }) => (
-              <Select id={id} aria-describedby={describedBy} aria-label="Long list" options={CITY_VENUES} value={city} onChange={setCity} placeholder="Choose a city" />
+              <Select id={id} aria-describedby={describedBy} aria-label="长列表" options={CITY_VENUES} value={city} onChange={setCity} placeholder="选择城市" />
             )}
           </Field>
-          <Field label="Task Skills" hint="Applies to the next skill run.">
+          <Field label="任务技能" hint="应用于下一次技能运行。">
             {({ describedBy, invalid }) => (
               <MultiSelect
-                label="Task Skills"
+                label="任务技能"
                 aria-describedby={describedBy}
                 invalid={invalid}
                 value={skills}
                 onChange={setSkills}
                 options={[
-                  { value: "draft", label: "draft · produce an initial draft" },
-                  { value: "continue", label: "continue · extend TODO sections" },
-                  { value: "revise", label: "revise · apply reviewer feedback" }
+                  { value: "draft", label: "起草 · 生成初稿" },
+                  { value: "continue", label: "续写 · 补充待完成章节" },
+                  { value: "revise", label: "修改 · 处理审稿意见" }
                 ]}
               />
             )}
@@ -147,30 +147,30 @@ export function GalleryPage() {
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Selection and status</h2>
+        <h2 className={styles.sectionTitle}>选择与状态</h2>
         <div className={styles.row}>
           {/*
            * A checkbox with no text of its own is exactly what Field's render
            * prop is for: the label names it through `id`, the error describes it
            * through `describedBy`, and both invalid flags come along.
            */}
-          <Field label="Venue rules" error={agree ? undefined : "Accept the venue rules before compiling."}>
+          <Field label="投稿规则" error={agree ? undefined : "请先确认投稿规则，再编译。"}>
             {({ id, describedBy, invalid }) => (
               <Checkbox id={id} checked={agree} onChange={setAgree} aria-describedby={describedBy} invalid={invalid} />
             )}
           </Field>
-          <Checkbox variant="pill" icon={<Icon name={icons.sparkle} />} checked={agree} onChange={setAgree}>Complete</Checkbox>
+          <Checkbox variant="pill" icon={<Icon name={icons.sparkle} />} checked={agree} onChange={setAgree}>补全</Checkbox>
         </div>
         <div className={styles.row}>
-          <Tag tone="success">Compiled</Tag>
-          <Tag tone="danger">Version changed</Tag>
-          <Tag tone="warning">Stale</Tag>
-          <Tag tone="info">In review</Tag>
-          <Badge label="3 unresolved issues">3</Badge>
+          <Tag tone="success">已编译</Tag>
+          <Tag tone="danger">版本已更改</Tag>
+          <Tag tone="warning">已过期</Tag>
+          <Tag tone="info">审核中</Tag>
+          <Badge label="3 个未解决问题">3</Badge>
         </div>
         <div className={styles.row}>
-          <Spinner label="Loading template" />
-          <Loader overlay={false} message="Preparing" />
+          <Spinner label="正在加载模板" />
+          <Loader overlay={false} message="正在准备" />
           <Divider orientation="vertical" />
           <Icon name={icons.gitCompare} />
           <Icon name={icons.loading} spin />
@@ -178,106 +178,104 @@ export function GalleryPage() {
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Feedback</h2>
+        <h2 className={styles.sectionTitle}>反馈</h2>
         <div className={styles.column}>
-          <Alert tone="success">Compiled successfully.</Alert>
-          <Alert tone="error" title="File version changed">Reload before saving.</Alert>
-          <Alert tone="warning">Some venue rules could not be checked.</Alert>
-          <Alert tone="info" actions={<Button size="small">Retry</Button>}>Applying venue rules…</Alert>
+          <Alert tone="success">编译成功。</Alert>
+          <Alert tone="error" title="文件版本已更改">请重新加载后再保存。</Alert>
+          <Alert tone="warning">部分投稿规则无法检查。</Alert>
+          <Alert tone="info" actions={<Button size="small">重试</Button>}>正在应用投稿规则…</Alert>
         </div>
         <div className={styles.column} style={{ marginTop: 14 }}>
-          <ProgressBar label="Loading TeX bundles" value={68} detail="34.4 MB / 50.6 MB · core.data.gz" />
-          <ProgressBar label="Compiling" />
+          <ProgressBar label="正在加载 TeX 资源包" value={68} detail="34.4 MB / 50.6 MB · core.data.gz" />
+          <ProgressBar label="正在编译" />
         </div>
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Table</h2>
-        <p className={styles.sectionNote}>A real table, so row and columnheader roles reach assistive technology.</p>
-        <Table label="Recent audit events" columns={["Time", "Action", "Resource", "Actor"]} stripped>
+        <h2 className={styles.sectionTitle}>表格</h2>
+        <p className={styles.sectionNote}>使用标准表格，使辅助技术能识别行和列标题。</p>
+        <Table label="最近审计事件" columns={["时间", "操作", "资源", "操作人"]} stripped>
           <TableRow>
             <TableCell>2026-09-18 09:14</TableCell>
-            <TableCell>project.create</TableCell>
-            <TableCell>project</TableCell>
-            <TableCell>system</TableCell>
+            <TableCell>创建项目</TableCell>
+            <TableCell>项目</TableCell>
+            <TableCell>系统</TableCell>
           </TableRow>
           <TableRow>
             <TableCell>2026-09-18 09:31</TableCell>
-            <TableCell>member.invite</TableCell>
-            <TableCell>user</TableCell>
+            <TableCell>邀请成员</TableCell>
+            <TableCell>用户</TableCell>
             <TableCell>owner@example.edu</TableCell>
           </TableRow>
         </Table>
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Empty state and tooltip</h2>
-        <p className={styles.sectionNote}>The tooltip appears on hover and on keyboard focus, and dismisses with Escape.</p>
+        <h2 className={styles.sectionTitle}>空状态与提示</h2>
+        <p className={styles.sectionNote}>悬停或键盘聚焦时显示提示，按 Esc 可关闭。</p>
         <div className={styles.row}>
           <EmptyState
-            title="No review issues"
-            detail="Run Review when the current version is ready."
-            action={<Button size="small">Start review</Button>}
+            title="暂无审稿问题"
+            detail="当前版本准备就绪后开始审稿。"
+            action={<Button size="small">开始审稿</Button>}
           />
         </div>
         <div className={styles.row} style={{ marginTop: 14 }}>
           <Tooltip content="Explains a compact icon action">
-            <IconButton label="More information" icon={<Icon name={icons.info} />} />
+            <IconButton label="更多信息" icon={<Icon name={icons.info} />} />
           </Tooltip>
           <Tooltip content="Shown below when there is no room above" side="bottom">
-            <Button size="small" variant="secondary">Hover or focus me</Button>
+            <Button size="small" variant="secondary">悬停或聚焦以查看</Button>
           </Tooltip>
         </div>
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Icons</h2>
+        <h2 className={styles.sectionTitle}>图标</h2>
         <p className={styles.sectionNote}>
-          Icons are decorative by default and hidden from assistive technology, because the
-          surrounding control carries the name. An icon that means something on its own takes
-          an aria-label, which also keeps it exposed.
+          图标默认仅作装饰，由周围控件提供名称。具有独立含义的图标提供 aria-label，以便辅助技术识别。
         </p>
         <div className={styles.row}>
           {/* Decorative: hidden, because the button's own label names it. */}
-          <IconButton label="Search the project" icon={<Icon name={icons.search} />} />
+          <IconButton label="搜索项目" icon={<Icon name={icons.search} />} />
           {/* Labelled: exposed as an image with a name, since nothing else names it. */}
-          <Icon name={icons.error} aria-label="Compilation error" />
-          <Icon name={icons.verified} aria-label="Verified evidence" />
+          <Icon name={icons.error} aria-label="编译错误" />
+          <Icon name={icons.verified} aria-label="已核实的证据" />
           <Icon name={icons.fileText} />
           <Icon name={icons.loading} spin />
         </div>
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>View</h2>
+        <h2 className={styles.sectionTitle}>视图</h2>
         <div className={styles.row}>
-          <View aria-label="Always visible" className={styles.grid ?? ""}>Visible by default</View>
+          <View aria-label="始终显示" className={styles.grid ?? ""}>默认显示</View>
         </div>
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Chrome</h2>
-        <p className={styles.sectionNote}>Structural surfaces: navigation, grouping, disclosure and the status strip.</p>
+        <h2 className={styles.sectionTitle}>界面框架</h2>
+        <p className={styles.sectionNote}>包括导航、分组、展开区域和状态栏。</p>
 
         <div className={styles.row}>
-          <Link href="/projects">Internal link</Link>
-          <Link href="#gallery-anchor">Hash anchor</Link>
-          <Link href="https://example.com" rel="noreferrer noopener" target="_blank">External link</Link>
-          <Link href="/api/health" variant="button" download="health.json">Download as button</Link>
+          <Link href="/projects">内部链接</Link>
+          <Link href="#gallery-anchor">页面锚点</Link>
+          <Link href="https://example.com" rel="noreferrer noopener" target="_blank">外部链接</Link>
+          <Link href="/api/health" variant="button" download="health.json">下载按钮</Link>
         </div>
 
         <div className={styles.row}>
           <SegmentedControl
-            label="Outline source"
+            label="大纲来源"
             value={outlineMode}
             onChange={setOutlineMode}
             options={[
-              { value: "current", label: "Current document" },
-              { value: "project", label: "Project structure" }
+              { value: "current", label: "当前文档" },
+              { value: "project", label: "项目结构" }
             ]}
           />
           <SegmentedControl
-            label="Dialog size"
+            label="对话框尺寸"
             bordered
             value={sizeMode}
             onChange={setSizeMode}
@@ -290,23 +288,23 @@ export function GalleryPage() {
         </div>
 
         <div className={styles.column} style={{ marginTop: 14 }}>
-          <Disclosure summary="Pass coverage · 3 providers">
-            <p>Provider, input boundary and per-pass issue counts would render here.</p>
+          <Disclosure summary="审查覆盖情况 · 3 个服务">
+            <p>在此显示服务、输入范围及各审查阶段的问题数量。</p>
           </Disclosure>
-          <List label="Current changed files" compact>
-            <ListRow onClick={() => undefined} selected><ListRowText primary="main.tex" secondary="modified" /></ListRow>
-            <ListRow onClick={() => undefined}><ListRowText primary="sections/method.tex" secondary="added" /></ListRow>
-            <ListRow><ListRowText primary="refs.bib" secondary="binary" /></ListRow>
-            <ListEmpty>No further changes</ListEmpty>
+          <List label="当前更改文件" compact>
+            <ListRow onClick={() => undefined} selected><ListRowText primary="main.tex" secondary="已修改" /></ListRow>
+            <ListRow onClick={() => undefined}><ListRowText primary="sections/method.tex" secondary="已添加" /></ListRow>
+            <ListRow><ListRowText primary="refs.bib" secondary="二进制文件" /></ListRow>
+            <ListEmpty>没有其他更改</ListEmpty>
           </List>
         </div>
 
         <div style={{ marginTop: 18 }}>
-          <StatusBar label="Workspace status" className="workbench-status">
-            <StatusItem>Managed history</StatusItem>
-            <StatusItem>Local project</StatusItem>
-            <StatusItem>Buffers acknowledged</StatusItem>
-            <StatusItem trailing>Ln 1, Col 1</StatusItem>
+          <StatusBar label="工作区状态" className="workbench-status">
+            <StatusItem>托管历史</StatusItem>
+            <StatusItem>本地项目</StatusItem>
+            <StatusItem>编辑内容已确认</StatusItem>
+            <StatusItem trailing>第 1 行，第 1 列</StatusItem>
           </StatusBar>
         </div>
       </section>

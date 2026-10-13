@@ -44,19 +44,19 @@ export function AddFileDialog({ open, projectId, onClose, onAdded, initialFiles,
       const added = await api.projects.addFile(projectId, path.trim(), file);
       await onAdded(added.path);
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : "Could not add file");
+      setError(uploadError instanceof Error ? uploadError.message : "无法添加文件");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Dialog open={open} title="Add a file" description="The selected file is copied into this managed Workspace." onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon={<Icon name={icons.cloudUpload} />} loading={loading} disabled={!file || !path.trim()} onClick={() => void upload()}>Add file</Button></>}>
+    <Dialog open={open} title="添加文件" description="所选文件将复制到此工作区。" onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" icon={<Icon name={icons.cloudUpload} />} loading={loading} disabled={!file || !path.trim()} onClick={() => void upload()}>添加文件</Button></>}>
       <div className="form-stack">
-        <Field label="Source file">
-          <FileField label="Source file" onSelect={(files) => { const selected = files[0] ?? null; setFile(selected); if (selected) setPath(selected.name); }} />
+        <Field label="源文件">
+          <FileField label="源文件" onSelect={(files) => { const selected = files[0] ?? null; setFile(selected); if (selected) setPath(selected.name); }} />
         </Field>
-        <Field label="Workspace path">
+        <Field label="工作区路径">
           <TextField value={path} onChange={setPath} placeholder="figures/architecture.png" />
         </Field>
       </div>

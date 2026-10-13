@@ -85,7 +85,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
         return;
       } catch (error) {
         if ((error as DOMException).name === "AbortError") return;
-        setMessage(error instanceof Error ? error.message : "Could not read the selected directory");
+        setMessage(error instanceof Error ? error.message : "无法读取所选目录");
         return;
       }
     }
@@ -94,7 +94,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
 
   const readFallbackFiles = async (selectedFiles: File[]) => {
     if (!selectedFiles.length) return;
-    const rootName = selectedFiles[0]?.webkitRelativePath.split("/")[0] || "Imported paper";
+    const rootName = selectedFiles[0]?.webkitRelativePath.split("/")[0] || "导入的论文";
     const entries: SelectedEntry[] = selectedFiles.map((file) => ({
       path: file.webkitRelativePath.split("/").slice(1).join("/") || file.name,
       kind: "file",
@@ -110,7 +110,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     abortRef.current = controller;
     setStage("importing");
     setProgress(0);
-    setMessage(source === "local" ? "Creating upload session…" : "Cloning repository…");
+    setMessage(source === "local" ? "正在创建上传会话…" : "正在克隆仓库…");
     try {
       if (source === "github") {
         const project = await api.github.import({
@@ -127,7 +127,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
         return;
       }
 
-      if (!selection || !mainDocument) throw new Error("Select a paper directory and main document first");
+      if (!selection || !mainDocument) throw new Error("请先选择论文目录和主文档");
       let sessionId = uploadSessionRef.current;
       if (!sessionId) {
         const session = await api.uploads.create({
@@ -146,22 +146,22 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
       for (const entry of files) {
         if (receivedPathsRef.current.has(entry.path)) continue;
         if (!entry.file) continue;
-        setMessage(`Uploading ${entry.path}`);
+        setMessage(`正在上传 ${entry.path}`);
         await api.uploads.file(sessionId, entry.path, entry.file, controller.signal);
         receivedPathsRef.current.add(entry.path);
         uploadedBytes += entry.size;
         setProgress(totalBytes === 0 ? 90 : Math.min(90, Math.round((uploadedBytes / totalBytes) * 90)));
       }
-      setMessage("Creating paper workspace…");
+      setMessage("正在创建论文工作区…");
       const project = await api.uploads.complete(sessionId, controller.signal);
       setProgress(100);
       onImported(project);
       reset();
     } catch (error) {
       if ((error as DOMException).name === "AbortError") {
-        setMessage("Import cancelled");
+        setMessage("已取消导入");
       } else {
-        setMessage(error instanceof ApiClientError || error instanceof Error ? error.message : "Import failed");
+        setMessage(error instanceof ApiClientError || error instanceof Error ? error.message : "导入失败");
       }
       if (error instanceof ApiClientError && error.code === "upload_not_writable") {
         uploadSessionRef.current = null;
@@ -179,7 +179,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     uploadSessionRef.current = null;
     receivedPathsRef.current = new Set();
     if (sessionId) await api.uploads.cancel(sessionId).catch(() => undefined);
-    setMessage("Import cancelled");
+    setMessage("已取消导入");
     setStage("error");
   };
 
@@ -190,19 +190,19 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
   return (
     <Dialog
       open={open}
-      title="Import a paper"
-      description="Bring a local LaTeX directory or GitHub repository into your FastWrite workspace."
+      title="导入论文"
+      description="将本地 LaTeX 目录或 GitHub 仓库导入 FastWrite 工作区。"
       width="large"
       onClose={close}
       footer={
         stage === "importing" ? (
-          <Button variant="secondary" onClick={() => void cancelImport()}>Cancel import</Button>
+          <Button variant="secondary" onClick={() => void cancelImport()}>取消导入</Button>
         ) : (
           <>
-            <Button variant="ghost" onClick={close}>Cancel</Button>
+            <Button variant="ghost" onClick={close}>取消</Button>
             {(stage === "preview" || source === "github" || stage === "error") && (
               <Button variant="primary" icon={<Icon name={icons.cloudUpload} />} disabled={!canSubmit} onClick={runImport}>
-                Import paper
+                导入论文
               </Button>
             )}
           </>
@@ -211,7 +211,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     >
       <TabBar
         className="source-tabs"
-        label="Import source"
+        label="导入来源"
         activeId={source}
         onSelect={(id) => {
           const next = id as Source;
@@ -220,15 +220,15 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
           setMessage("");
         }}
         tabs={[
-          { id: "local", label: "Local directory", icon: <Icon name={icons.folderOpened} aria-hidden /> },
-          { id: "github", label: "GitHub repository", icon: <Icon name={icons.github} aria-hidden /> }
+          { id: "local", label: "本地目录", icon: <Icon name={icons.folderOpened} aria-hidden /> },
+          { id: "github", label: "GitHub 仓库", icon: <Icon name={icons.github} aria-hidden /> }
         ]}
       />
 
       {stage === "importing" ? (
         <div className="import-progress" aria-live="polite">
           <div className="import-progress__icon"><Icon name={icons.cloudUpload} /></div>
-          <h3>Importing your paper</h3>
+          <h3>正在导入论文</h3>
           <p>{message}</p>
           <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
           <span className="progress-label">{progress}%</span>
@@ -239,10 +239,10 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
             <div className="directory-picker">
               <Button variant="ghost" className="directory-dropzone" onClick={pickDirectory}>
                 <span className="directory-dropzone__icon"><Icon name={icons.folderOpened} /></span>
-                <strong>Choose paper directory</strong>
-                <span>LaTeX sources, bibliography, figures and style files are copied into FastWrite.</span>
+                <strong>选择论文目录</strong>
+                <span>LaTeX 源文件、参考文献、图片和样式文件将复制到 FastWrite。</span>
               </Button>
-              <Button variant="ghost" className="directory-picker__fallback" onClick={() => inputRef.current?.click()}>Use browser folder upload</Button>
+              <Button variant="ghost" className="directory-picker__fallback" onClick={() => inputRef.current?.click()}>通过浏览器上传文件夹</Button>
             </div>
           ) : (
             <ImportPreview
@@ -261,29 +261,29 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
               onChooseAgain={pickDirectory}
             />
           )}
-          <FileField inputRef={inputRef} hidden directory multiple label="Paper directory" onSelect={(selected) => void readFallbackFiles(selected)} />
+          <FileField inputRef={inputRef} hidden directory multiple label="论文目录" onSelect={(selected) => void readFallbackFiles(selected)} />
         </>
       ) : (
         <div className="github-form">
-          <Field label="Repository URL">
+          <Field label="仓库地址">
             <TextField value={repository} onChange={setRepository} placeholder="https://github.com/owner/paper" autoFocus />
           </Field>
           <div className="form-grid">
-            <Field label={<>Branch, tag or commit <small>optional</small></>}>
-              <TextField value={reference} onChange={setReference} placeholder="Default branch" />
+            <Field label={<>分支、标签或提交 <small>可选</small></>}>
+              <TextField value={reference} onChange={setReference} placeholder="默认分支" />
             </Field>
-            <Field label={<>Project name <small>optional</small></>}>
-              <TextField value={projectName} onChange={setProjectName} placeholder="Repository name" />
+            <Field label={<>项目名称 <small>可选</small></>}>
+              <TextField value={projectName} onChange={setProjectName} placeholder="仓库名称" />
             </Field>
           </div>
           <div className="form-grid">
-            <Field label={<>Main document <small>auto-detect if empty</small></>}>
+            <Field label={<>主文档 <small>留空时自动识别</small></>}>
               <TextField value={mainDocument} onChange={setMainDocument} placeholder="main.tex" />
             </Field>
             <VenueField value={venue} onChange={(value) => { setVenue(value); setPublicationTarget(undefined); }} />
           </div>
           <PublicationTargetFields profile={venue} value={publicationTarget} onChange={setPublicationTarget} />
-          <div className="import-note"><Icon name={icons.fileZip} /> The resolved commit is recorded with the imported project.</div>
+          <div className="import-note"><Icon name={icons.fileZip} /> 导入的项目将记录对应的提交版本。</div>
         </div>
       )}
       {message && stage !== "importing" ? <div className="form-error" role="alert">{message}</div> : null}
@@ -309,28 +309,28 @@ function ImportPreview(props: {
   return (
     <div className="import-preview">
       <div className="import-summary">
-        <div><Icon name={icons.folderOpened} /><span><strong>{props.selection.name}</strong><small>{props.fileCount} files · {formatBytes(props.totalBytes)}</small></span></div>
-        <Button variant="ghost" size="small" onClick={props.onChooseAgain}>Choose again</Button>
+        <div><Icon name={icons.folderOpened} /><span><strong>{props.selection.name}</strong><small>{props.fileCount} 个文件 · {formatBytes(props.totalBytes)}</small></span></div>
+        <Button variant="ghost" size="small" onClick={props.onChooseAgain}>重新选择</Button>
       </div>
       <div className="form-grid">
-        <Field label="Project name">
+        <Field label="项目名称">
           <TextField value={props.projectName} onChange={props.onName} />
         </Field>
-        <Field label="Main document">
-          <Select aria-label="Main document" value={props.mainDocument} onChange={props.onMain} options={props.mainCandidates.map((path) => ({ value: path, label: path }))} />
+        <Field label="主文档">
+          <Select aria-label="主文档" value={props.mainDocument} onChange={props.onMain} options={props.mainCandidates.map((path) => ({ value: path, label: path }))} />
         </Field>
       </div>
       <VenueField value={props.venue} onChange={props.onVenue} />
       <PublicationTargetFields profile={props.venue} value={props.publicationTarget} onChange={props.onPublicationTarget} />
-      <div className="file-preview" aria-label="Files to import">
+      <div className="file-preview" aria-label="待导入文件">
         {props.selection.entries.slice(0, 100).map((entry) => (
           <div key={`${entry.kind}:${entry.path}`} className="file-preview__row">
-            <span>{entry.kind === "directory" ? "Folder" : "File"}</span>
+            <span>{entry.kind === "directory" ? "文件夹" : "文件"}</span>
             <code>{entry.path}</code>
             <small>{entry.kind === "file" ? formatBytes(entry.size) : ""}</small>
           </div>
         ))}
-        {props.selection.entries.length > 100 ? <div className="file-preview__more">+ {props.selection.entries.length - 100} more entries</div> : null}
+        {props.selection.entries.length > 100 ? <div className="file-preview__more">+ {props.selection.entries.length - 100} 项其他内容</div> : null}
       </div>
     </div>
   );
@@ -338,8 +338,8 @@ function ImportPreview(props: {
 
 function VenueField({ value, onChange }: { value: TargetVenue; onChange: (value: TargetVenue) => void }) {
   return (
-    <Field label="Research domain" hint="The selected domain and publication target guide structure, language, revision, and review.">
-      <Select aria-label="Research domain" value={value} onChange={(next) => onChange(next as TargetVenue)} options={WRITING_PROFILES.map((profile) => ({ value: profile.value, label: profile.label }))} />
+    <Field label="研究领域" hint="所选领域和投稿目标将指导论文结构、语言、修改和审稿。">
+      <Select aria-label="研究领域" value={value} onChange={(next) => onChange(next as TargetVenue)} options={WRITING_PROFILES.map((profile) => ({ value: profile.value, label: profile.label }))} />
     </Field>
   );
 }

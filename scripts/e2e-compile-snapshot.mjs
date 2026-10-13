@@ -15,11 +15,11 @@ try {
   const project = await response.json();
   const root = `${base}/api/projects/${project.id}`;
   await page.goto(`${base}/projects/${project.id}`);
-  const editor = page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true });
+  const editor = page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true });
   await editor.waitFor();
-  await page.getByText('Compiled successfully', { exact: true }).waitFor({ timeout: 90000 });
+  await page.getByText("编译成功", { exact: true }).waitFor({ timeout: 90000 });
   await page.locator('.react-pdf__Page__canvas').first().waitFor({ timeout: 90000 });
-  const locate = page.getByRole('button', { name: 'Locate editor selection in PDF', exact: true });
+  const locate = page.getByRole('button', { name: "在 PDF 中定位编辑器选区", exact: true });
   await editor.focus();
   await page.keyboard.press('Control+Home');
   assert.equal(await locate.isEnabled(), true, 'clean matching snapshot permits SyncTeX');
@@ -37,7 +37,7 @@ try {
   });
   await page.keyboard.insertText('% Snapshot barrier test\n');
   assert.equal(await locate.isDisabled(), true, 'dirty buffers block old mappings before server version changes');
-  await page.getByRole('button', { name: 'Save and compile', exact: true }).click();
+  await page.getByRole('button', { name: "保存并编译", exact: true }).click();
   const deadline = Date.now() + 10000;
   while (!saveStarted) {
     assert.ok(Date.now() < deadline, 'flush starts a save');
@@ -54,7 +54,7 @@ try {
   assert.equal(compiled.projectVersion, current.version);
   assert.equal(typeof compiled.snapshotId, 'string');
   assert.ok(file.content.startsWith('% Snapshot barrier test\n'));
-  await page.getByText('Compiled successfully', { exact: true }).waitFor();
+  await page.getByText("编译成功", { exact: true }).waitFor();
   await page.locator('.react-pdf__Page__canvas').first().waitFor({ timeout: 90000 });
   await page.waitForFunction(() => !document.querySelector('button[aria-label="Locate editor selection in PDF"]')?.disabled);
   console.log(JSON.stringify({ result: 'pass', projectId: project.id, projectVersion: compiled.projectVersion, snapshotId: compiled.snapshotId, cases: ['dirty SyncTeX gate', 'flush before compile', 'server snapshot identity', 'new mapping enabled'] }));

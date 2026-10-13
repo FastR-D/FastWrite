@@ -171,7 +171,7 @@ test("search persists provider metadata without creating Evidence or authorizati
 test("research tool access revocation after provider response prevents candidate persistence",async()=>{
  const {ApiError}=await import("../http");let allowed=true,calls=0;
  const f=await serviceWith(async()=>{calls++;allowed=false;return Response.json({message:{items:[{title:["Must not persist"],DOI:"10.5555/revoked"}]},results:[],data:[]});});
- await expect(f.service.search(f.project.id,"test query")).rejects.toMatchObject({status:403});
+ await expect(f.service.search(f.project.id,"test query",undefined,()=>{if(!allowed)throw new ApiError(403,"revoked","Permission revoked");})).rejects.toMatchObject({status:403});
  expect(calls).toBe(4);expect(f.database.snapshot().researchWorks).toEqual([]);expect(f.database.snapshot().projectResearchWorks).toEqual([]);
  expect(f.database.snapshot().researchRuns[0]?.status).toBe("failed");
 });
@@ -182,8 +182,16 @@ test("queued access revocation is checked when research metadata actually enters
     requests++;
     return Response.json({ message: { items: [{ title: ["Queued candidate"], DOI: "10.5555/queued" }] }, results: [], data: [] });
   });
+  let allowed = true;
   let revocation: Promise<unknown> | undefined;
-  await expect(f.service.search(f.project.id, "original query")).rejects.toThrow("Queued permission revoked");
+  const authorize = () => {
+    if (requests !== 4) return;
+    responseChecks++;
+    if (!allowed) throw new Error("Queued permission revoked");
+    // Enqueue revocation after the pre-write check; it runs before candidate commit.
+    if (responseChecks === 2) revocation = f.database.mutate(() => { allowed = false; });
+  };
+  await expect(f.service.search(f.project.id, "original query", undefined, authorize)).rejects.toThrow("Queued permission revoked");
   await revocation;
   expect(f.database.snapshot().researchWorks).toEqual([]);
   expect(f.database.snapshot().projectResearchWorks).toEqual([]);
@@ -208,7 +216,11 @@ test("cancellation during asynchronous write authorization prevents research can
     requests++;
     return Response.json({ message: { items: [{ title: ["Cancelled candidate"], DOI: "10.5555/cancelled" }] }, results: [], data: [] });
   });
-  await expect(f.service.search(f.project.id, "cancel at write authorization", controller.signal)).rejects.toMatchObject({ code: "research_cancelled" });
+  await expect(f.service.search(f.project.id, "cancel at write authorization", controller.signal, async () => {
+    if (requests !== 4) return;
+    responseChecks++;
+    if (responseChecks === 3) { await Promise.resolve(); controller.abort(); }
+  })).rejects.toMatchObject({ code: "research_cancelled" });
   expect(responseChecks).toBe(3);
   expect(f.database.snapshot().researchWorks).toEqual([]);
   expect(f.database.snapshot().projectResearchWorks).toEqual([]);

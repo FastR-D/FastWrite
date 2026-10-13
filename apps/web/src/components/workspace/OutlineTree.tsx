@@ -2,7 +2,7 @@ import type { OutlineItem } from "@fastwrite/shared";
 import { Button, Icon, icons } from "../ui";
 
 export function OutlineTree({ items, onSelect, activeId }: { items: OutlineItem[]; onSelect: (item: OutlineItem) => void; activeId?: string | null | undefined }) {
-  if (items.length === 0) return <div className="panel-empty"><Icon name={icons.symbolNumeric} size={18} /><span>No sections detected</span></div>;
+  if (items.length === 0) return <div className="panel-empty"><Icon name={icons.symbolNumeric} size={18} /><span>未检测到章节</span></div>;
   return <div className="outline-tree">{items.map((item) => <OutlineNode key={item.id} item={item} onSelect={onSelect} activeId={activeId} />)}</div>;
 }
 

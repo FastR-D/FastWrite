@@ -65,7 +65,7 @@ export class LatexCompileService {
       const syncPath = await findOutputFile(output, `${stem}.synctex.gz`);
       if (exitCode !== 0) return { ...identity, success: false, engine: "server", log, error: describeLatexFailure(exitCode, log), workspacePaths: await listWorkspacePaths(source) };
       const pdf = pdfPath ? await readFile(pdfPath).catch(() => null) : null;
-      if (!pdf) return { ...identity, success: false, engine: "server", log, error: "LaTeX completed without producing a PDF.", workspacePaths: await listWorkspacePaths(source) };
+      if (!pdf) return { ...identity, success: false, engine: "server", log, error: "LaTeX 编译结束，但未生成 PDF。", workspacePaths: await listWorkspacePaths(source) };
       const syncTexData = syncPath ? await readFile(syncPath).then((data) => promisify(gunzip)(data).then((value) => value.toString("utf8"))).catch(() => undefined) : undefined;
       if (signal?.aborted) throw new ApiError(409, "compile_cancelled", "Compilation cancelled");
       return { ...identity, success: true, engine: "server", log, pdfBase64: pdf.toString("base64"), ...(syncTexData ? { syncTexData } : {}), workspacePaths: await listWorkspacePaths(source) };
@@ -102,8 +102,8 @@ async function findOutputFile(root: string, filename: string): Promise<string | 
 
 function describeLatexFailure(exitCode: number, log: string): string {
   const missingPackage = /File [`']([^`']+\.sty)[`'] not found\./.exec(log)?.[1];
-  if (missingPackage) return `Local LaTeX is missing ${missingPackage}. Install that TeX package on this machine, then recompile.`;
-  return `Local LaTeX exited with status ${exitCode}. See the compiler log for details.`;
+  if (missingPackage) return `本地 LaTeX 缺少 ${missingPackage}，请在此设备上安装对应的 TeX 包后重新编译。`;
+  return `本地 LaTeX 编译失败（退出码 ${exitCode}），请查看编译日志。`;
 }
 
 async function listWorkspacePaths(root: string, relative = ""): Promise<string[]> {

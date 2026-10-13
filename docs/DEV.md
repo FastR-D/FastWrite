@@ -67,7 +67,11 @@ AiWorkspace/Revise -> POST /api/projects/:id/revisions
 
 服务端校验选区文本、偏移和 `fileVersion`，输入上限为 12000 字符；对话保留最近 8 轮，较早内容压缩为摘要。上下文只包含同文件前后文、精确 Section、Skill、已审核论文概览和当前 Section 摘要。输出是单文件完整替换与 rationale，并转换为词级 Diff/文本 hunk。
 
-### 2.4 自动审稿与问题解决
+### 2.4 参考论文写作
+
+参考论文写作链路：`ReferenceStylePanel -> reference-papers / reference-selections / reference-profiles -> ReferencePaperService -> styleReferenceContext -> Revise / Agent / Draft / Completion`。`apps/server/src/references/parser.ts` 使用有界 ZIP 解压、静态 TeX 多文件展开和 PDF.js 提取，保留章节区间与来源定位；全文不进入有截断限制的 SourceEvidence。原文与派生内容放在项目目录的 `reference-papers/`，数据库 schema 16 保存论文元信息、解析版本和参考选择。`reference.parse` / `reference.profile` 任务支持进度、恢复、重试和删除时取消，发布前检查来源校验和、解析版本与权限。完整所选范围逐块分析，超过上下文预算的写法特征经过汇总，缓存键包含范围、解析器、提示版本与模型配置。写作请求可显式携带 `references`，省略时读取项目默认选择，空数组关闭参考；Agent/Draft 在规划时冻结实际参考上下文。浏览器回归入口为 `bun run e2e:references`，模型链路评测为 `bun run references:eval`（`-- --live` 使用已配置的真实模型）。
+
+### 2.5 自动审稿与问题解决
 
 调用链：
 

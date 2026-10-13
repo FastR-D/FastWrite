@@ -55,7 +55,7 @@ export function Select({
   options,
   value,
   onChange,
-  placeholder = "Select…",
+  placeholder = "请选择…",
   disabled = false,
   searchable,
   position = "below",
@@ -305,13 +305,13 @@ export function Select({
                 className={styles.filter}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Filter…"
+                placeholder="筛选…"
                 role="combobox"
                 aria-expanded
                 aria-haspopup="listbox"
                 aria-controls={listboxId}
                 aria-activedescendant={activeOption ? optionId(activeIndex) : undefined}
-                aria-label={rest["aria-label"] ?? "Filter options"}
+                aria-label={rest["aria-label"] ?? "筛选选项"}
                 aria-invalid={resolvedInvalid || undefined}
                 aria-describedby={resolvedDescribedBy}
                 autoFocus
@@ -337,7 +337,7 @@ export function Select({
               )
             )}
 
-            {!visibleFlat.length ? <div className={styles.empty}>No matches</div> : null}
+            {!visibleFlat.length ? <div className={styles.empty}>没有匹配项</div> : null}
           </div>
         </div>
       ) : null}

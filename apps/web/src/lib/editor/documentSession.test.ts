@@ -92,18 +92,18 @@ test("reviewed conflict resolution rebases conditionally and remains dirty until
   const calls: unknown[] = [];
   const session = new DocumentSession("p", "conflict", "base", 1, snapshot => { calls.push(snapshot); return pending.promise; }, 10000);
   session.edit("ours");
-  expect(() => session.resolveConflict("merged", "theirs", 3, 0)).toThrow("Local text changed");
+  expect(() => session.resolveConflict("merged", "theirs", 3, 0)).toThrow("本地文本发生了更改");
   expect(session.content).toBe("ours");
   session.resolveConflict("merged", "theirs", 3, 1);
   expect(session.baseContent).toBe("theirs");
   expect(session.dirty).toBe(true);
   const saved = session.flush();
   expect(calls).toEqual([{ content: "merged", baseVersion: 3, revision: 2 }]);
-  expect(() => session.resolveConflict("stale", "theirs", 3, 2)).toThrow("in progress");
+  expect(() => session.resolveConflict("stale", "theirs", 3, 2)).toThrow("仍有保存操作正在进行");
   pending.resolve({ version: 4 }); await saved;
   expect(session.content).toBe("merged");
   expect(session.dirty).toBe(false);
-  expect(() => session.resolveConflict("old", "old", 2, 2)).toThrow("older");
+  expect(() => session.resolveConflict("old", "old", 2, 2)).toThrow("早于最近一次确认的版本");
 });
 
 test("a rejected reviewed merge preserves the result and its reviewed baseline", async () => {

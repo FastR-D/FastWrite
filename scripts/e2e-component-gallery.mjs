@@ -23,7 +23,7 @@ page.on('pageerror', error => errors.push(error.stack));
 const cases = [];
 try {
   await page.goto(`${base}/components`);
-  await page.getByRole('heading', { name: 'FastWrite UI' }).waitFor();
+  await page.getByRole('heading', { name: "FastWrite 界面组件" }).waitFor();
 
   /*
    * All four Button variants must render the same metrics. vscrui styles
@@ -43,10 +43,10 @@ try {
       return { radius: style.borderRadius, padding: style.padding, fontSize: style.fontSize, disabledOpacity };
     };
     const seed = {
-      primary: pick('Primary'),
-      secondary: pick('Secondary'),
-      ghost: pick('Ghost'),
-      danger: pick('Destructive')
+      primary: pick('主要按钮'),
+      secondary: pick('次要按钮'),
+      ghost: pick('简洁按钮'),
+      danger: pick('危险操作')
     };
     return Object.fromEntries(Object.entries(seed).map(([name, element]) => [name, read(element)]));
   });
@@ -56,7 +56,7 @@ try {
   cases.push('all Button variants render the same metrics');
 
   // The combobox exposes its expanded state and its active option.
-  const project = page.getByRole('combobox', { name: 'Project', exact: true });
+  const project = page.getByRole('combobox', { name: "项目", exact: true });
   await project.waitFor();
   assert.equal(await project.getAttribute('aria-expanded'), 'false', 'starts collapsed');
   await project.click();
@@ -67,22 +67,23 @@ try {
   // Arrow keys move the active option; Enter commits it.
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
-  assert.equal(await project.textContent().then(text => text.trim()), 'Beta', 'arrow+enter selects Beta');
+  assert.equal(await project.textContent().then(text => text.trim()), '乙项目', 'arrow+enter selects Beta');
   cases.push('arrow keys and Enter select');
 
   // Escape closes without changing the value.
   await project.click();
   await page.keyboard.press('Escape');
   assert.equal(await project.getAttribute('aria-expanded'), 'false', 'escape closes');
-  assert.equal(await project.textContent().then(text => text.trim()), 'Beta', 'escape keeps value');
+  assert.equal(await project.textContent().then(text => text.trim()), '乙项目', 'escape keeps value');
   cases.push('escape closes without committing');
 
   // Typeahead jumps to a matching option.
   await project.click();
-  await page.keyboard.press('g');
+  // Playwright's keyboard layout has no CJK key entry; send the key event to the trigger.
+  await project.dispatchEvent('keydown', { key: '丙' });
   const active = await page.evaluate(() => document.activeElement?.getAttribute('aria-activedescendant'));
   const activeText = await page.locator(`#${active}`).textContent();
-  assert.equal(activeText?.trim(), 'Gamma', 'typeahead jumps to Gamma');
+  assert.equal(activeText?.trim(), '丙项目', 'typeahead jumps to Gamma');
   await page.keyboard.press('Escape');
   cases.push('typeahead jumps by first letter');
 
@@ -92,20 +93,20 @@ try {
    * rule never matched: full opacity, clickable-looking, click silently ignored.
    */
   await project.click();
-  const disabledOption = page.getByRole('option', { name: 'Archived (read-only)' });
+  const disabledOption = page.getByRole('option', { name: "已归档（只读）" });
   await disabledOption.waitFor();
   assert.equal(await disabledOption.getAttribute('aria-disabled'), 'true', 'disabled option exposes aria-disabled');
   assert.equal(await disabledOption.evaluate((el) => getComputedStyle(el).opacity), '0.4', 'disabled option is visibly dimmed');
   await disabledOption.click({ force: true });
   assert.equal(await project.getAttribute('aria-expanded'), 'true', 'clicking a disabled option leaves the list open');
-  assert.equal(await project.textContent().then((text) => text.trim()), 'Beta', 'clicking a disabled option commits nothing');
+  assert.equal(await project.textContent().then((text) => text.trim()), '乙项目', 'clicking a disabled option commits nothing');
   // Clicking a <div> option moves focus off the trigger, so close by pointer.
   await project.click();
   assert.equal(await project.getAttribute('aria-expanded'), 'false', 'the list can still be dismissed');
   cases.push('disabled options are dimmed and cannot be committed');
 
   // Grouped options render as labelled groups.
-  const venue = page.getByRole('combobox', { name: 'Publication target', exact: true });
+  const venue = page.getByRole('combobox', { name: "投稿目标", exact: true });
   await venue.click();
   const groups = page.getByRole('group');
   assert.ok(await groups.count() >= 2, 'optgroup equivalents render as role=group');
@@ -119,7 +120,7 @@ try {
    * active option. Asserting on the focused element, not on a stored locator,
    * is what makes this test able to fail if the role moves back.
    */
-  const longList = page.getByRole('combobox', { name: 'Long list', exact: true });
+  const longList = page.getByRole('combobox', { name: "长列表", exact: true });
   await longList.waitFor();
   assert.equal(await longList.getAttribute('aria-expanded'), 'false', 'long list starts collapsed');
   await longList.click();
@@ -154,7 +155,7 @@ try {
     return { id, text: id ? document.getElementById(id)?.textContent?.trim() : null };
   });
   assert.notEqual(movedTo.id, firstActive, 'arrow keys move the active option');
-  assert.equal(movedTo.text, 'Chicago', 'two ArrowDowns land on the third option');
+  assert.equal(movedTo.text, '芝加哥', 'two ArrowDowns land on the third option');
   cases.push('arrow keys move the active option on the focused combobox');
 
   /*
@@ -162,20 +163,20 @@ try {
    * editable-combobox pattern leaves caret movement to the textbox, so Home must
    * not be consumed as "jump to the first option".
    */
-  await page.keyboard.type('berlin');
+  await page.keyboard.type('柏林');
   await page.keyboard.press('Home');
   const afterHome = await page.evaluate(() => {
     const active = document.activeElement;
     return { value: active?.value, selectionStart: active?.selectionStart };
   });
-  assert.equal(afterHome.value, 'berlin', 'typing filters the list');
+  assert.equal(afterHome.value, '柏林', 'typing filters the list');
   assert.equal(afterHome.selectionStart, 0, 'Home moves the caret rather than jumping the list');
   cases.push('typing filters and Home moves the caret, not the highlight');
 
   // Enter commits the filtered option and hands focus back to the trigger.
   await page.keyboard.press('End');
   await page.keyboard.press('Enter');
-  assert.equal(await longList.textContent().then((text) => text.trim()), 'Berlin', 'Enter commits the filtered option');
+  assert.equal(await longList.textContent().then((text) => text.trim()), '柏林', 'Enter commits the filtered option');
   assert.equal(await longList.getAttribute('aria-expanded'), 'false', 'committing closes the list');
   const focusAfterCommit = await page.evaluate(() => ({
     tag: document.activeElement?.tagName,
@@ -216,9 +217,9 @@ try {
   cases.push('invalid fields share one border treatment');
 
   // The multi-select is a checkbox group, not a dropdown.
-  const skills = page.getByRole('group', { name: 'Task Skills' });
-  await skills.getByRole('checkbox', { name: /continue/ }).check();
-  assert.ok(await skills.getByRole('checkbox', { name: /continue/ }).isChecked(), 'checkbox list toggles');
+  const skills = page.getByRole('group', { name: "任务技能" });
+  await skills.getByRole('checkbox', { name: /续写/ }).check();
+  assert.ok(await skills.getByRole('checkbox', { name: /续写/ }).isChecked(), 'checkbox list toggles');
   cases.push('multi-select toggles by checkbox');
 
   /*
@@ -227,7 +228,7 @@ try {
    * here fails if the hint leaks back into the label.
    */
   assert.equal(
-    await page.getByRole('textbox', { name: 'Project name', exact: true }).count(),
+    await page.getByRole('textbox', { name: "项目名称", exact: true }).count(),
     1,
     'the hint does not join the accessible name'
   );
@@ -253,9 +254,9 @@ try {
   });
   assert.ok(described.checkboxDescribedBy, 'a checkbox carries aria-describedby from Field');
   assert.equal(described.checkboxInvalid, 'true', 'and aria-invalid while its Field has an error');
-  assert.equal(described.checkboxDescription, 'Accept the venue rules before compiling.', 'pointing at the Field error');
+  assert.equal(described.checkboxDescription, '请先确认投稿规则，再编译。', 'pointing at the Field error');
   assert.ok(described.groupDescribedBy, 'the MultiSelect group carries aria-describedby from Field');
-  assert.equal(described.groupDescription, 'Applies to the next skill run.', 'pointing at the Field hint');
+  assert.equal(described.groupDescription, '应用于下一次技能运行。', 'pointing at the Field hint');
   assert.equal(described.groupCheckboxDescribedBy, null, 'the description stays on the group, not on each checkbox');
   cases.push('Field error and description reach a checkbox and a group');
 
@@ -269,11 +270,11 @@ try {
    * tooltip anywhere below y=100 was shifted up by its own height and landed on
    * its trigger.
    */
-  await page.getByRole('button', { name: 'Hover or focus me' }).hover();
+  await page.getByRole('button', { name: "悬停或聚焦以查看" }).hover();
   await page.getByRole('tooltip').waitFor();
   const bottomTooltip = await page.evaluate(() => {
     const tooltip = document.querySelector('[role="tooltip"]').getBoundingClientRect();
-    const anchor = [...document.querySelectorAll('button')].find((button) => button.textContent.includes('Hover or focus me')).getBoundingClientRect();
+    const anchor = [...document.querySelectorAll('button')].find((button) => button.textContent.includes('悬停或聚焦以查看')).getBoundingClientRect();
     return { tooltipTop: tooltip.top, tooltipBottom: tooltip.bottom, tooltipLeft: tooltip.left, tooltipRight: tooltip.right, anchorTop: anchor.top, anchorBottom: anchor.bottom };
   });
   assert.ok(bottomTooltip.tooltipTop >= bottomTooltip.anchorBottom, `a bottom tooltip must clear its trigger: ${JSON.stringify(bottomTooltip)}`);
@@ -283,25 +284,25 @@ try {
   cases.push('tooltips never cover their trigger');
 
   // Progress bars are named and valued.
-  const bar = page.getByRole('progressbar', { name: 'Loading TeX bundles' });
+  const bar = page.getByRole('progressbar', { name: "正在加载 TeX 资源包" });
   assert.equal(await bar.getAttribute('aria-valuenow'), '68', 'determinate bar reports value');
   cases.push('progress bar exposes aria-valuenow');
 
   // Disclosure is a native details element: open state is the platform's.
   // Located by its summary text rather than a role — the enclosing <section>
   // has no group role, so there is no accessible name to query by.
-  await page.getByText('Pass coverage · 3 providers').click();
+  await page.getByText('审查覆盖情况 · 3 个服务').click();
   assert.ok(await page.locator('details[open]').count() >= 1, 'disclosure opens');
   cases.push('disclosure toggles');
 
   // Segmented controls keep button semantics with aria-pressed.
-  const outline = page.getByRole('group', { name: 'Outline source' });
-  await outline.getByRole('button', { name: 'Project structure' }).click();
-  assert.equal(await outline.getByRole('button', { name: 'Project structure' }).getAttribute('aria-pressed'), 'true', 'pressed state follows the click');
+  const outline = page.getByRole('group', { name: "大纲来源" });
+  await outline.getByRole('button', { name: "项目结构" }).click();
+  assert.equal(await outline.getByRole('button', { name: "项目结构" }).getAttribute('aria-pressed'), 'true', 'pressed state follows the click');
   cases.push('segmented control toggles aria-pressed');
 
   // The list renders real list semantics.
-  assert.ok(await page.getByRole('list', { name: 'Current changed files' }).count() === 1, 'list is labelled');
+  assert.ok(await page.getByRole('list', { name: "当前更改文件" }).count() === 1, 'list is labelled');
   cases.push('list exposes an accessible name');
 
   // The status bar keeps the stable hook the workbench assertions depend on.

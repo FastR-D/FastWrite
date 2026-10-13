@@ -12,7 +12,7 @@ export function Loader({ overlay = true, message }: LoaderProps) {
   return (
     <div className={styles.overlay} role="status" aria-live="polite">
       <div className={styles.message}>
-        <Spinner size={16} /> {message ?? "Loading…"}
+        <Spinner size={16} /> {message ?? "正在加载…"}
       </div>
     </div>
   );

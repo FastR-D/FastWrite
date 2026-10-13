@@ -7,7 +7,7 @@ app-bin/
 .DS_Store
 .playwright-cli/
 .env
-references/
+/references/
 
 # Tool and test caches
 **/.vite/

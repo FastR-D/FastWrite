@@ -29,7 +29,7 @@ try {
     });
   });
   await page.goto(`${base}/projects/${project.id}`);
-  const source = page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true });
+  const source = page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true });
   await source.waitFor(); await until(() => synced, 'WS initial synchronization');
   hold = true;
   await source.focus(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('% BARRIER_A\n');

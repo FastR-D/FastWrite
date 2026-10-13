@@ -8,7 +8,7 @@ const contextB = await browser.newContext({ viewport: { width: 1440, height: 100
 const a = await contextA.newPage(), b = await contextB.newPage();
 for (const page of [a, b]) page.on('pageerror', error => errors.push(error.stack));
 const until = async (predicate, label) => { const end = Date.now() + 20000; while (!(await predicate())) { assert.ok(Date.now() < end, label); await a.waitForTimeout(40); } };
-const source = page => page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true });
+const source = page => page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true });
 const visible = page => page.locator('.source-editor .view-lines').allTextContents().then(lines => lines.join('\n'));
 try {
   const registered = await contextA.request.post(`${base}/api/auth/register`, { data: { email: `provider-${crypto.randomUUID()}@example.test`, password: 'collaborative-provider-regression' } });
@@ -65,10 +65,10 @@ try {
   await a.locator('span[title="main.tex"]').click(); await source(a).waitFor();
   assert.equal(await a.locator('.monaco-editor-host').getAttribute('data-model-id'), originalModel);
   await until(async () => (await visible(a)).includes('WHILE_HIDDEN'), 'same model receives updates while hidden');
-  await a.getByRole('navigation', { name: 'Workspace views' }).getByRole('button', { name: 'Git', exact: true }).click();
+  await a.getByRole('navigation', { name: "工作区视图" }).getByRole('button', { name: 'Git', exact: true }).click();
   await a.getByRole('button', { name: 'Compare open buffer with latest checkpoint', exact: true }).click();
   const diff = a.getByRole('textbox', { name: /Working buffer for main.tex/ }); await diff.waitFor();
-  await a.getByRole('button', { name: 'Close main.tex', exact: true }).click(); await a.locator('.source-editor').waitFor({ state: 'detached' });
+  await a.getByRole('button', { name: "关闭 main.tex", exact: true }).click(); await a.locator('.source-editor').waitFor({ state: 'detached' });
   await diff.focus(); await a.keyboard.press('Control+Home'); await a.keyboard.insertText('% COLLAB_DIFF\n');
   await until(async () => (await visible(b)).includes('COLLAB_DIFF') && (await read()).includes('COLLAB_DIFF'), 'standalone editable diff broadcasts and persists');
   await a.keyboard.press('Control+z'); await until(async () => !(await read()).includes('COLLAB_DIFF'), 'diff uses local Yjs undo');

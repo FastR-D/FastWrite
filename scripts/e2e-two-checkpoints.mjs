@@ -23,8 +23,8 @@ try {
   assert.ok((await context.request.delete(`${root}/files?path=deleted.tex`)).ok());
   const modified = await checkpoint();
   await page.goto(`${base}/projects/${project.id}`);
-  await page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true }).waitFor();
-  await page.getByRole('navigation', { name: 'Workspace views' }).getByRole('button', { name: 'Git', exact: true }).click();
+  await page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true }).waitFor();
+  await page.getByRole('navigation', { name: "工作区视图" }).getByRole('button', { name: 'Git', exact: true }).click();
   await page.getByLabel('Original checkpoint', { exact: true }).selectOption(original);
   await page.getByLabel('Modified checkpoint', { exact: true }).selectOption(modified);
   await page.getByRole('button', { name: 'Compare checkpoints', exact: true }).click();
@@ -50,7 +50,7 @@ try {
   assert.equal(await tablist.getByRole('tab').count(), 3, 'opening the same comparison reuses its tab');
   await firstTab.click({ button: 'middle' });
   await until(async () => await tablist.getByRole('tab').count() === 2, 'middle click closes only one comparison');
-  await page.getByRole('button', { name: 'Close comparison', exact: true }).click();
+  await page.getByRole('button', { name: "关闭对比", exact: true }).click();
   await page.getByLabel('Original checkpoint', { exact: true }).selectOption(modified);
   await page.getByLabel('Modified checkpoint', { exact: true }).selectOption(original);
   await page.getByRole('button', { name: 'Compare checkpoints', exact: true }).click();

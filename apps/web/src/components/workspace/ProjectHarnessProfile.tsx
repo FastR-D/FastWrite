@@ -38,7 +38,7 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
       //   : await api.projects.harnessProfile(scopeId);
       // setProfile(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load harness profile");
+      setError(err instanceof Error ? err.message : "无法加载模型配置");
     }
   }, [scope, scopeId]);
 
@@ -54,7 +54,7 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
     const model = profile.model?.trim();
 
     if (!apiKey) {
-      setError("API key is required");
+      setError("请填写 API 密钥");
       return;
     }
 
@@ -62,10 +62,10 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
       try {
         const url = new URL(baseURL);
         if (!["http:", "https:"].includes(url.protocol)) {
-          throw new Error("Invalid protocol");
+          throw new Error("协议无效");
         }
       } catch {
-        setError("Base URL must be a valid HTTP or HTTPS URL");
+        setError("服务地址必须为有效的 HTTP 或 HTTPS 地址");
         return;
       }
     }
@@ -94,7 +94,7 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save harness profile");
+      setError(err instanceof Error ? err.message : "无法保存模型配置");
     } finally {
       setBusy(false);
     }
@@ -102,9 +102,9 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
 
   return (
     <div className="field" role="group" aria-labelledby="harness-profile-title">
-      <span id="harness-profile-title">Harness Profile</span>
+      <span id="harness-profile-title">模型配置</span>
 
-      <Field label="API Key">
+      <Field label="API 密钥">
         <TextField
           type="password"
           value={profile.apiKey || ""}
@@ -114,7 +114,7 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
         />
       </Field>
 
-      <Field label="Base URL (optional)">
+      <Field label="服务地址（可选）">
         <TextField
           value={profile.baseURL || ""}
           onChange={(value) => setProfile(prev => ({ ...prev, baseURL: value }))}
@@ -123,7 +123,7 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
         />
       </Field>
 
-      <Field label="Model (optional)">
+      <Field label="模型（可选）">
         <TextField
           value={profile.model || ""}
           onChange={(value) => setProfile(prev => ({ ...prev, model: value }))}
@@ -132,21 +132,21 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
         />
       </Field>
 
-      <Field label="Wire API">
+      <Field label="接口协议">
         <Select
-          aria-label="Wire API"
+          aria-label="接口协议"
           value={profile.wireAPI || "responses"}
           onChange={(value) => setProfile(prev => ({ ...prev, wireAPI: value as AgentWireApi }))}
           options={[
-            { value: "responses", label: "Responses" },
-            { value: "streaming", label: "Streaming" }
+            { value: "responses", label: "Responses 接口" },
+            { value: "streaming", label: "流式传输" }
           ]}
           disabled={busy}
         />
       </Field>
 
       {error ? <div className="error-message" style={{ color: "var(--red-9)", fontSize: "12px", marginTop: "8px" }}>{error}</div> : null}
-      {success ? <div className="success-message" style={{ color: "var(--green-9)", fontSize: "12px", marginTop: "8px" }}>Profile saved successfully</div> : null}
+      {success ? <div className="success-message" style={{ color: "var(--green-9)", fontSize: "12px", marginTop: "8px" }}>配置已保存</div> : null}
 
       <Button
         size="small"
@@ -154,7 +154,7 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
         disabled={busy}
         onClick={() => void saveProfile()}
       >
-        Save Harness Profile
+        保存模型配置
       </Button>
     </div>
   );

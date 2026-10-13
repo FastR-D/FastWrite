@@ -13,12 +13,19 @@ export class ResearchService {
   private readonly cache = new Map<string, { expiresAt: number; observations: Observation[] }>();
   constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly fetcher: (input: string | Request | URL, init?: RequestInit) => Promise<Response> = fetch) {}
 
-  async search(projectId: string, query: string, signal?: AbortSignal): Promise<{ run: ResearchRun; works: ResearchWork[] }> {
+  async search(projectId: string, query: string, signal?: AbortSignal, authorize?: () => void | Promise<void>): Promise<{ run: ResearchRun; works: ResearchWork[] }> {
     this.workspaces.getProject(projectId);
     const normalized = query.trim().slice(0, MAX_QUERY);
     if (!normalized) throw new ApiError(400, "research_query_required", "A research query is required");
+    const check = async () => {
+      if (signal?.aborted) throw new ApiError(499, "research_cancelled", "Research cancelled");
+      await authorize?.();
+      if (signal?.aborted) throw new ApiError(499, "research_cancelled", "Research cancelled");
+      this.workspaces.getProject(projectId);
+    };
+    await check();
     const run: ResearchRun = { id: `research_run_${crypto.randomUUID()}`, projectId, query: normalized, status: "running", workIds: [], createdAt: now(), updatedAt: now() };
-    await this.database.mutate((state) => state.researchRuns.push(run));
+    await this.database.mutate((state) => state.researchRuns.push(run), check);
     try {
       const cached = this.cache.get(normalized);
       let observations: Observation[][];
@@ -41,6 +48,7 @@ export class ResearchService {
           : { provider: requests[index]!.provider, status: "failed", resultCount: 0, error: providerError(result.reason) });
         if (providers.some((item) => item.status === "completed")) this.cache.set(normalized, { expiresAt: Date.now() + 5 * 60_000, observations: observations.flat() });
       }
+      await check();
       if (!providers.some((item) => item.status === "completed")) {
         const failed = await this.database.mutate((state) => {
           const stored = state.researchRuns.find((item) => item.id === run.id)!;
@@ -49,30 +57,44 @@ export class ResearchService {
           stored.error = "All research providers failed";
           stored.updatedAt = now();
           return stored;
-        });
+        }, check);
         return { run: failed, works: [] };
       }
-      const works: ResearchWork[] = [];
-      for (const observation of observations.flat()) {
-        const existing = findWork(this.database.snapshot().researchWorks, this.database.snapshot().researchIdentifiers, observation.identifiers, observation.title, observation.authors, observation.year);
-        const work = existing ?? { id: `work_${crypto.randomUUID()}`, title: observation.title, authors: observation.authors, ...(observation.year ? { year: observation.year } : {}), ...(observation.venue ? { venue: observation.venue } : {}), metadataStatus: "candidate" as const, publicationStatus: "unknown" as const, createdAt: now(), updatedAt: now() };
-        works.push(work);
-        await this.database.mutate((state) => {
-          const storedWork = state.researchWorks.find((candidate) => candidate.id === work.id);
-          if (!storedWork) state.researchWorks.push(work);
-          else if (normalize(storedWork.title) !== normalize(observation.title) || (storedWork.year && observation.year && storedWork.year !== observation.year) || normalize(storedWork.authors[0] ?? "") !== normalize(observation.authors[0] ?? "")) { storedWork.metadataStatus = "conflicting"; storedWork.updatedAt = now(); }
-          if (!state.projectResearchWorks.some((item) => item.projectId === projectId && item.workId === work.id)) state.projectResearchWorks.push({ projectId, workId: work.id, status: "candidate", createdAt: now(), updatedAt: now() });
-          for (const identifier of observation.identifiers) if (!state.researchIdentifiers.some((item) => item.workId === work.id && item.scheme === identifier.scheme && item.value === identifier.value)) state.researchIdentifiers.push({ workId: work.id, ...identifier });
-          state.metadataObservations.push({ id: `observation_${crypto.randomUUID()}`, workId: work.id, provider: observation.provider, fields: { title: observation.title, authors: observation.authors, ...(observation.year ? { year: observation.year } : {}), ...(observation.venue ? { venue: observation.venue } : {}) }, fetchedAt: now() });
-          const stored = state.researchRuns.find((item) => item.id === run.id); if (stored && !stored.workIds.includes(work.id)) stored.workIds.push(work.id);
-        });
-      }
-      const updated = await this.database.mutate((state) => { const stored = state.researchRuns.find((item) => item.id === run.id)!; stored.status = "completed"; stored.providers = providers; const failedCount = providers.filter((item) => item.status === "failed").length; if (failedCount) stored.error = `${failedCount} research provider${failedCount === 1 ? "" : "s"} unavailable`; else delete stored.error; stored.updatedAt = now(); return stored; });
-      return { run: updated, works: dedupeWorks(works) };
+      await check();
+      // Deduplicate and commit all candidates together, after authorization at
+      // queue entry. No partial candidate batch survives a cancelled guard.
+      const result = await this.database.mutate((state) => {
+        const works: ResearchWork[] = [];
+        const stored = state.researchRuns.find(item => item.id === run.id)!;
+        if (stored.status === "cancelled") throw new ApiError(499, "research_cancelled", "Research cancelled");
+        for (const observation of observations.flat()) {
+          let work = findWork(state.researchWorks, state.researchIdentifiers, observation.identifiers, observation.title, observation.authors, observation.year);
+          if (!work) {
+            work = { id: `work_${crypto.randomUUID()}`, title: observation.title, authors: observation.authors, ...(observation.year ? { year: observation.year } : {}), ...(observation.venue ? { venue: observation.venue } : {}), metadataStatus: "candidate", publicationStatus: "unknown", createdAt: now(), updatedAt: now() };
+            state.researchWorks.push(work);
+          } else if (normalize(work.title) !== normalize(observation.title) || (work.year && observation.year && work.year !== observation.year) || normalize(work.authors[0] ?? "") !== normalize(observation.authors[0] ?? "")) {
+            work.metadataStatus = "conflicting"; work.updatedAt = now();
+          }
+          works.push(work);
+          if (!state.projectResearchWorks.some(item => item.projectId === projectId && item.workId === work.id)) state.projectResearchWorks.push({ projectId, workId: work.id, status: "candidate", createdAt: now(), updatedAt: now() });
+          for (const identifier of observation.identifiers) if (!state.researchIdentifiers.some(item => item.workId === work.id && item.scheme === identifier.scheme && item.value === identifier.value)) state.researchIdentifiers.push({ workId: work.id, ...identifier });
+          state.metadataObservations.push({ id: `observation_${crypto.randomUUID()}`, workId: work.id, provider: observation.provider, fields: { title: observation.title, authors: observation.authors, ...(observation.year ? { year: observation.year } : {}), ...(observation.venue ? { venue: observation.venue } : {}), ...observation.fields }, fetchedAt: observation.fetchedAt });
+          if (!stored.workIds.includes(work.id)) stored.workIds.push(work.id);
+        }
+        stored.status = "completed";
+        stored.providers = providers;
+        const failedCount = providers.filter(item => item.status === "failed").length;
+        if (failedCount) stored.error = `${failedCount} research provider${failedCount === 1 ? "" : "s"} unavailable`;
+        else delete stored.error;
+        stored.updatedAt = now();
+        return { run: stored, works: dedupeWorks(works) };
+      }, check);
+      await check();
+      return result;
     } catch (error) {
-      await this.database.mutate((state) => { const stored = state.researchRuns.find((item) => item.id === run.id); if (stored) { stored.status = signal?.aborted ? "cancelled" : "failed"; stored.error = error instanceof Error ? error.message : "Research failed"; stored.updatedAt = now(); } });
+      await this.database.mutate((state) => { const stored = state.researchRuns.find((item) => item.id === run.id); if (stored) { stored.status = signal?.aborted || error instanceof ApiError && error.code === "research_cancelled" ? "cancelled" : "failed"; stored.error = error instanceof Error ? error.message : "Research failed"; stored.updatedAt = now(); } });
       if (signal?.aborted) throw new ApiError(499, "research_cancelled", "Research cancelled");
-      return { run: this.database.snapshot().researchRuns.find((item) => item.id === run.id)!, works: [] };
+      throw error;
     }
   }
 
@@ -361,7 +383,7 @@ export class ResearchService {
           .join(" ")
           .replace(/\s+/g, " ")
           .trim()
-          .slice(0, 12_000);
+          .slice(0, 4000);
         if (content) extracted.push({ page: pageNumber, content });
         page.cleanup();
       }
@@ -388,7 +410,8 @@ export class ResearchService {
       createdAt: timestamp,
       updatedAt: timestamp
     }));
-    await this.database.mutate((current) => {
+    return this.database.mutate((current) => {
+      const persisted: SourceEvidence[] = [];
       const marker = "Deterministically extracted from a user-authorized local PDF";
       const existingByPage = new Map<string, SourceEvidence>();
       const duplicates = new Set<string>();
@@ -400,20 +423,23 @@ export class ResearchService {
       if (duplicates.size) current.sourceEvidence = current.sourceEvidence.filter((item) => !duplicates.has(item.id));
       for (const item of evidence) {
         const existing = existingByPage.get(item.locator);
-        if (existing) Object.assign(existing, { content: item.content, sourceNote: item.sourceNote, updatedAt: timestamp });
-        else current.sourceEvidence.push(item);
+        if (existing) {
+          if (existing.sourceHash !== sourceHash) { existing.status = "candidate"; delete existing.approvedAt; }
+          Object.assign(existing, { content: item.content, sourceHash, sourceNote: item.sourceNote, updatedAt: timestamp });
+          persisted.push(existing);
+        } else { current.sourceEvidence.push(item); persisted.push(item); }
       }
+      return persisted;
     });
-    return evidence;
   }
 
-  private async crossref(query: string, signal?: AbortSignal): Promise<Observation[]> { const response = await this.fetcher(`https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=5`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(5000)]) }); requireProviderResponse(response, "Crossref"); const body = await response.json() as { message?: { items?: any[] } }; return (body.message?.items ?? []).map((item) => ({ provider: "crossref" as const, title: item.title?.[0] ?? "", authors: (item.author ?? []).map((author: any) => [author.given, author.family].filter(Boolean).join(" ")), year: item.published?.["date-parts"]?.[0]?.[0] ?? item.issued?.["date-parts"]?.[0]?.[0], venue: item["container-title"]?.[0], identifiers: item.DOI ? [{ scheme: "doi" as const, value: String(item.DOI).toLowerCase() }] : [] })).filter((item) => item.title); }
-  private async openAlex(query: string, signal?: AbortSignal): Promise<Observation[]> { const response = await this.fetcher(`https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=5`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(5000)]) }); requireProviderResponse(response, "OpenAlex"); const body = await response.json() as { results?: any[] }; return (body.results ?? []).map((item) => ({ provider: "openalex" as const, title: item.title ?? "", authors: (item.authorships ?? []).map((author: any) => author.author?.display_name).filter(Boolean), year: item.publication_year, venue: item.primary_location?.source?.display_name, identifiers: item.ids?.doi ? [{ scheme: "doi" as const, value: String(item.ids.doi).replace(/^https?:\/\/doi\.org\//i, "").toLowerCase() }] : item.id ? [{ scheme: "openalex" as const, value: String(item.id) }] : [] })).filter((item) => item.title); }
-  private async semanticScholar(query: string, signal?: AbortSignal): Promise<Observation[]> { const response = await this.fetcher(`https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=5&fields=title,authors,year,venue,externalIds`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(5000)]) }); requireProviderResponse(response, "Semantic Scholar"); const body = await response.json() as { data?: any[] }; return (body.data ?? []).map((item) => ({ provider: "semantic-scholar" as const, title: item.title ?? "", authors: (item.authors ?? []).map((author: any) => author.name).filter(Boolean), year: item.year, venue: item.venue, identifiers: item.externalIds?.DOI ? [{ scheme: "doi" as const, value: String(item.externalIds.DOI).toLowerCase() }] : item.paperId ? [{ scheme: "semantic-scholar" as const, value: String(item.paperId) }] : [] })).filter((item) => item.title); }
-  private async arxiv(query: string, signal?: AbortSignal): Promise<Observation[]> { const response = await this.fetcher(`https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&max_results=5`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(5000)]) }); requireProviderResponse(response, "arXiv"); const xml = await response.text(); return [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map((match) => { const entry = match[1] ?? ""; const title = decodeXml(/<title>([\s\S]*?)<\/title>/.exec(entry)?.[1] ?? "").replace(/\s+/g, " ").trim(); const id = /<id>([^<]+)</.exec(entry)?.[1]?.trim(); const year = Number(/<published>(\d{4})/.exec(entry)?.[1]); const authors = [...entry.matchAll(/<name>([^<]+)</g)].map((item) => decodeXml(item[1] ?? "")); return { provider: "arxiv" as const, title, authors, ...(Number.isFinite(year) && year > 0 ? { year } : {}), identifiers: id ? [{ scheme: "arxiv" as const, value: id.split("/").pop()! }] : [] }; }).filter((item) => item.title); }
+  private async crossref(query: string, signal?: AbortSignal): Promise<Observation[]> { const response = await this.fetcher(`https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=5`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(5000)]) }); requireProviderResponse(response, "Crossref"); const body = await response.json() as { message?: { items?: any[] } }; return (body.message?.items ?? []).map((item) => ({ provider: "crossref" as const, fetchedAt: now(), fields: metadataFields({ abstract: cleanMarkup(item.abstract), tags: item.subject, citationCount: item["is-referenced-by-count"], sourceUrl: item.URL }), title: item.title?.[0] ?? "", authors: (item.author ?? []).map((author: any) => [author.given, author.family].filter(Boolean).join(" ")), year: item.published?.["date-parts"]?.[0]?.[0] ?? item.issued?.["date-parts"]?.[0]?.[0], venue: item["container-title"]?.[0], identifiers: item.DOI ? [{ scheme: "doi" as const, value: String(item.DOI).toLowerCase() }] : [] })).filter((item) => item.title); }
+  private async openAlex(query: string, signal?: AbortSignal): Promise<Observation[]> { const response = await this.fetcher(`https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=5`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(5000)]) }); requireProviderResponse(response, "OpenAlex"); const body = await response.json() as { results?: any[] }; return (body.results ?? []).map((item) => ({ provider: "openalex" as const, fetchedAt: now(), fields: metadataFields({ abstract: invertedAbstract(item.abstract_inverted_index), tags: (item.topics ?? []).map((topic: any) => topic.display_name), citationCount: item.cited_by_count, sourceUrl: item.primary_location?.landing_page_url ?? item.id }), title: item.title ?? "", authors: (item.authorships ?? []).map((author: any) => author.author?.display_name).filter(Boolean), year: item.publication_year, venue: item.primary_location?.source?.display_name, identifiers: item.ids?.doi ? [{ scheme: "doi" as const, value: String(item.ids.doi).replace(/^https?:\/\/doi\.org\//i, "").toLowerCase() }] : item.id ? [{ scheme: "openalex" as const, value: String(item.id) }] : [] })).filter((item) => item.title); }
+  private async semanticScholar(query: string, signal?: AbortSignal): Promise<Observation[]> { const response = await this.fetcher(`https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=5&fields=title,authors,year,venue,externalIds,abstract,fieldsOfStudy,citationCount,url`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(5000)]) }); requireProviderResponse(response, "Semantic Scholar"); const body = await response.json() as { data?: any[] }; return (body.data ?? []).map((item) => ({ provider: "semantic-scholar" as const, fetchedAt: now(), fields: metadataFields({ abstract: item.abstract, tags: item.fieldsOfStudy, citationCount: item.citationCount, sourceUrl: item.url }), title: item.title ?? "", authors: (item.authors ?? []).map((author: any) => author.name).filter(Boolean), year: item.year, venue: item.venue, identifiers: item.externalIds?.DOI ? [{ scheme: "doi" as const, value: String(item.externalIds.DOI).toLowerCase() }] : item.paperId ? [{ scheme: "semantic-scholar" as const, value: String(item.paperId) }] : [] })).filter((item) => item.title); }
+  private async arxiv(query: string, signal?: AbortSignal): Promise<Observation[]> { const response = await this.fetcher(`https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&max_results=5`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(5000)]) }); requireProviderResponse(response, "arXiv"); const xml = await response.text(); return [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map((match) => { const entry = match[1] ?? ""; const title = decodeXml(/<title>([\s\S]*?)<\/title>/.exec(entry)?.[1] ?? "").replace(/\s+/g, " ").trim(); const id = /<id>([^<]+)</.exec(entry)?.[1]?.trim(); const year = Number(/<published>(\d{4})/.exec(entry)?.[1]); const authors = [...entry.matchAll(/<name>([^<]+)</g)].map((item) => decodeXml(item[1] ?? "")); return { provider: "arxiv" as const, fetchedAt: now(), fields: metadataFields({ abstract: cleanMarkup(/<summary>([\s\S]*?)<\/summary>/.exec(entry)?.[1]), tags: [...entry.matchAll(/<category\b[^>]*term=["']([^"']+)["']/g)].map(item => decodeXml(item[1] ?? "")), sourceUrl: id }), title, authors, ...(Number.isFinite(year) && year > 0 ? { year } : {}), identifiers: id ? [{ scheme: "arxiv" as const, value: id.split("/").pop()! }] : [] }; }).filter((item) => item.title); }
 }
 
-type Observation = { provider: "crossref" | "openalex" | "semantic-scholar" | "arxiv"; title: string; authors: string[]; year?: number; venue?: string; identifiers: Array<{ scheme: ResearchIdentifier["scheme"]; value: string }> };
+type Observation = { fetchedAt: string; fields: MetadataObservation["fields"]; provider: "crossref" | "openalex" | "semantic-scholar" | "arxiv"; title: string; authors: string[]; year?: number; venue?: string; identifiers: Array<{ scheme: ResearchIdentifier["scheme"]; value: string }> };
 function findWork(works: ResearchWork[], knownIdentifiers: ResearchIdentifier[], identifiers: Observation["identifiers"], title: string, authors: string[], year?: number): ResearchWork | undefined { const byIdentifier = works.find((work) => identifiers.some((identifier) => knownIdentifiers.some((known) => known.workId === work.id && known.scheme === identifier.scheme && known.value.toLowerCase() === identifier.value.toLowerCase()))); if (byIdentifier) return byIdentifier; const normalizedTitle = normalize(title); const first = normalize(authors[0] ?? ""); return works.find((work) => normalize(work.title) === normalizedTitle && (!year || !work.year || work.year === year) && (!first || normalize(work.authors[0] ?? "") === first)) ?? undefined; }
 function normalize(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
 function similarity(left: string, right: string): number { const a = new Set(left.split(" ").filter(Boolean)); const b = new Set(right.split(" ").filter(Boolean)); if (!a.size || !b.size) return 0; const common = [...a].filter((item) => b.has(item)).length; return common / Math.max(a.size, b.size); }
@@ -533,4 +559,22 @@ function upsertFastReadReceipt(receipts: FastReadBundleReceipt[], receipt: FastR
   if (index >= 0) receipts[index] = receipt;
   else receipts.push(receipt);
   return receipt;
+}
+
+function cleanMarkup(value: unknown): string | undefined {
+  return typeof value === "string" ? decodeXml(value.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim().slice(0, 12000) : undefined;
+}
+function metadataFields(input: { abstract?: unknown; tags?: unknown; citationCount?: unknown; sourceUrl?: unknown }): MetadataObservation["fields"] {
+  const fields: MetadataObservation["fields"] = {};
+  if (typeof input.abstract === "string" && input.abstract.trim()) fields.abstract = input.abstract.trim().slice(0, 12000);
+  if (Array.isArray(input.tags)) fields.tags = input.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 50).map(tag => tag.slice(0, 200));
+  if (typeof input.citationCount === "number" && Number.isFinite(input.citationCount) && input.citationCount >= 0) fields.citationCount = input.citationCount;
+  if (typeof input.sourceUrl === "string") { try { const url = new URL(input.sourceUrl); if (["https:", "http:"].includes(url.protocol)) fields.sourceUrl = url.href.slice(0, 2000); } catch {} }
+  return fields;
+}
+function invertedAbstract(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const words: string[] = [];
+  for (const [word, positions] of Object.entries(value)) if (Array.isArray(positions)) for (const position of positions) if (Number.isInteger(position) && position >= 0 && position < 12000) words[position] = word;
+  return words.join(" ").trim().slice(0, 12000) || undefined;
 }

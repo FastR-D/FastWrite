@@ -1,6 +1,6 @@
 ---
 version: 1.0.0
-description: Define assets, adversaries, trust boundaries, assumptions, and security properties.
+description: 定义资产、对手、信任边界、假设与安全属性。
 supportedIntents: draft,continue,revise
 allowedScope: section
 requiredEvidence: manuscript claims,system assumptions

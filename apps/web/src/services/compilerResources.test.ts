@@ -8,15 +8,15 @@ describe("compiler resources", () => {
   test("reports bounded byte progress with the current resource", () => {
     expect(compilerResourceProgress(1536, 4096, "booktabs.sty")).toEqual({
       percent: 38,
-      detail: "38% · 1.5 KB / 4.0 KB · download · booktabs.sty"
+      detail: "38% · 1.5 KB / 4.0 KB · 下载 · booktabs.sty"
     });
     expect(compilerResourceProgress(5000, 4096, "booktabs.sty", true).percent).toBe(100);
   });
 
   test("turns on-demand package logs into user-facing progress", () => {
-    expect(compilerPackageProgress("[FETCH] enumitem: starting fetch")).toBe("Checking TeX package enumitem…");
-    expect(compilerPackageProgress("Missing: enumitem.sty, fetching enumitem from CTAN...")).toBe("Downloading missing TeX package for enumitem.sty: enumitem…");
-    expect(compilerPackageProgress("Processed 12 TeX/font files from enumitem")).toBe("Downloaded TeX package enumitem · 12 files");
+    expect(compilerPackageProgress("[FETCH] enumitem: starting fetch")).toBe("正在检查 TeX 包： enumitem…");
+    expect(compilerPackageProgress("Missing: enumitem.sty, fetching enumitem from CTAN...")).toBe("正在下载缺少的 TeX 包： enumitem.sty: enumitem…");
+    expect(compilerPackageProgress("Processed 12 TeX/font files from enumitem")).toBe("已下载 TeX 包： enumitem · 12 个文件");
     expect(compilerPackageProgress("ordinary compiler log")).toBeNull();
   });
 

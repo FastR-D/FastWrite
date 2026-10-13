@@ -62,7 +62,7 @@ export function compilerFontPackages(source: string, additionalFiles: Record<str
 
 export function compilerResourceProgress(loadedBytes: number, totalBytes: number, resource: string, cached = false): { percent: number; detail: string } {
   const percent = totalBytes > 0 ? Math.min(100, Math.round((loadedBytes / totalBytes) * 100)) : 100;
-  const source = cached ? "cache" : "download";
+  const source = cached ? "缓存" : "下载";
   return {
     percent,
     detail: `${percent}% · ${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)} · ${source} · ${resource}`
@@ -84,13 +84,13 @@ export function trackedCompilerResourceName(url: string): string | null {
 
 export function compilerPackageProgress(message: string): string | null {
   const missing = message.match(/^Missing:\s+([^,]+),\s+(?:fetching|loading)\s+(.+?)(?:\s+from CTAN)?\.\.\.$/i);
-  if (missing) return `Downloading missing TeX package for ${missing[1]}: ${missing[2]}…`;
+  if (missing) return `正在下载缺少的 TeX 包： ${missing[1]}: ${missing[2]}…`;
   const prefetch = message.match(/^\[FETCH\]\s+([^:]+):\s+starting fetch$/i);
-  if (prefetch) return `Checking TeX package ${prefetch[1]}…`;
+  if (prefetch) return `正在检查 TeX 包： ${prefetch[1]}…`;
   const cached = message.match(/^\[FETCH\]\s+([^:]+):\s+loaded from cache$/i);
-  if (cached) return `Loaded TeX package ${cached[1]} from cache`;
+  if (cached) return `已加载 TeX 包： ${cached[1]} （来自缓存）`;
   const downloaded = message.match(/^Processed\s+(\d+)\s+TeX\/font files from\s+(.+)$/i);
-  if (downloaded) return `Downloaded TeX package ${downloaded[2]} · ${downloaded[1]} files`;
+  if (downloaded) return `已下载 TeX 包： ${downloaded[2]} · ${downloaded[1]} 个文件`;
   return null;
 }
 

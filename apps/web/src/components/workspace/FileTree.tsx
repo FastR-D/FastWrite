@@ -76,20 +76,20 @@ export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand
   };
 
   const rowProps = ({ node }: VisibleNode): HTMLAttributes<HTMLButtonElement> => node.type === "directory"
-    ? { ...drop.props(node.path), title: drop.activeTarget === node.path ? `Drop files into ${node.path}` : node.path, "aria-expanded": expanded.has(node.path), "aria-busy": loading.has(node.path), onClick: () => toggle(node) }
+    ? { ...drop.props(node.path), title: drop.activeTarget === node.path ? `将文件拖放到 ${node.path}` : node.path, "aria-expanded": expanded.has(node.path), "aria-busy": loading.has(node.path), onClick: () => toggle(node) }
     : { onClick: () => onSelect(node), onDoubleClick: () => onPin?.(node) };
 
   return (
     <Tree
       className="file-tree"
-      label="Project files"
+      label="项目文件"
       rows={rows}
       rowKey={({ node }) => node.path}
       rowHeight={ROW_HEIGHT}
       selectedKey={selectedPath}
       rowIndent={({ node, depth }) => (node.type === "directory" ? 8 : 26) + depth * 14}
       rowProps={rowProps}
-      renderRow={(row) => <><TreeRow row={row} expanded={expanded} loading={loading} mainDocument={mainDocument} />{drop.activeTarget === row.node.path ? <span className="upload-drop-hint">Drop here</span> : null}</>}
+      renderRow={(row) => <><TreeRow row={row} expanded={expanded} loading={loading} mainDocument={mainDocument} />{drop.activeTarget === row.node.path ? <span className="upload-drop-hint">拖放到此处</span> : null}</>}
     />
   );
 }
@@ -111,7 +111,7 @@ function TreeRow({ row, expanded, loading, mainDocument }: { row: VisibleNode; e
     <>
       <FileIcon path={node.path} kind={node.kind} />
       <span className={treeRowClasses.label} title={node.path}>{node.name}</span>
-      {node.path === mainDocument ? <Icon name={icons.book} size={14} className={treeRowClasses.main} aria-label="Main document" /> : null}
+      {node.path === mainDocument ? <Icon name={icons.book} size={14} className={treeRowClasses.main} aria-label="主文档" /> : null}
     </>
   );
 }

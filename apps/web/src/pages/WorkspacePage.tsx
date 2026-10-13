@@ -1,3 +1,6 @@
+import { statusLabel, roleLabel } from "../lib/labels";
+import type { ReferenceSettings, ReferencePaper } from "@fastwrite/shared";
+import type { ReferenceWriteAction } from "../components/workspace/ReferenceStylePanel";
 import { useFileDropTarget } from "../lib/uploads/use-file-drop-target";
 import { readDroppedFiles, type DroppedFile } from "../lib/uploads/drop-files";
 import { ReferenceStylePanel } from "../components/workspace/ReferenceStylePanel";
@@ -78,6 +81,21 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const treeRef = useRef<WorkspaceTreeNode[]>([]);
   const editorRef = useRef<SourceEditorHandle>(null);
+  const [referenceSettings, setReferenceSettings] = useState<ReferenceSettings | null>(null);
+  const [referencePapers, setReferencePapers] = useState<ReferencePaper[]>([]);
+  const [referenceAction, setReferenceAction] = useState<ReferenceWriteAction | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    setReferenceSettings(null); setReferencePapers([]); setReferenceAction(null);
+    void Promise.all([api.referencePapers.settings(projectId, controller.signal), api.referencePapers.list(projectId, controller.signal)]).then(([settings, papers]) => { if (!controller.signal.aborted) { setReferenceSettings(settings); setReferencePapers(papers); } }).catch(() => {});
+    return () => controller.abort();
+  }, [projectId]);
+  const removeWritingReference = async (id: string) => {
+    if (!referenceSettings) return;
+    try { setReferenceSettings(await api.referencePapers.saveSettings(projectId, referenceSettings.selections.filter(item => item.referenceId !== id), referenceSettings.revision)); }
+    catch { const settings = await api.referencePapers.settings(projectId); setReferenceSettings(settings); }
+  };
+
   const [sourceTabs, setSourceTabs] = useState<SourceTab[]>([]);
   const [dirtyFiles, setDirtyFiles] = useState<Record<string, boolean>>({});
   const [tabError, setTabError] = useState("");
@@ -176,7 +194,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     compiledVersion: null,
     diagnostics: [],
     log: "",
-    progress: "Ready to compile",
+    progress: "准备编译",
   });
   const [compileRepairRequest, setCompileRepairRequest] =
     useState<CompileRepairRequest | null>(null);
@@ -224,7 +242,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         settingsPanelRef.current?.querySelector<HTMLButtonElement>('button[data-save-command]:not(:disabled)')?.click();
         return;
       }
-      void prepareCompile().catch(failure => setTabError(failure instanceof Error ? failure.message : "Save failed; local text retained"));
+      void prepareCompile().catch(failure => setTabError(failure instanceof Error ? failure.message : "保存失败，已保留本地文本"));
     };
     window.addEventListener(FASTWRITE_SAVE_EVENT, save);
     return () => window.removeEventListener(FASTWRITE_SAVE_EVENT, save);
@@ -334,8 +352,8 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           if (controller.signal.aborted) return;
           if (cachedMain) setFileDocument(cachedMain);
           setError("");
-          setOfflineNotice("Offline workspace snapshot loaded. Cached files remain available; reconnect and reload to refresh the project.");
-        } else setError(loadError instanceof Error ? loadError.message : "Could not open project");
+          setOfflineNotice("已加载离线工作区快照，缓存文件仍可使用。联网后请重新加载以刷新项目。");
+        } else setError(loadError instanceof Error ? loadError.message : "无法打开项目");
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
@@ -374,7 +392,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         const cachedFile = canUseOfflineCache(readError) ? await loadWorkspaceFile<FileContentResponse>(projectId, selectedPath) : null;
         if (controller.signal.aborted) return;
         if (cachedFile) setFileDocument(cachedFile);
-        else setError(readError instanceof Error ? readError.message : "Could not open file");
+        else setError(readError instanceof Error ? readError.message : "无法打开文件");
       });
     return () => controller.abort();
   }, [projectId, selectedPath, registry]);
@@ -470,7 +488,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         setError(
           navigationError instanceof Error
             ? navigationError.message
-            : "Could not open source location",
+            : "无法打开源文件位置",
         );
       }
     },
@@ -479,7 +497,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
 
   const selectOutline = (item: OutlineItem) => { void navigateToPath(item.path, item.line); };
   const selectClaim = async (claim: PaperClaim) => {
-    if (claim.anchorStatus === "orphaned") { setError("This claim's source file no longer exists. Restore the file or reanchor the claim before navigating."); return; }
+    if (claim.anchorStatus === "orphaned") { setError("此论断的源文件已不存在，请先恢复文件或重新定位论断。"); return; }
     try {
       let opened = registry.document(claim.anchor.path) ?? await api.projects.readFile(projectId, claim.anchor.path);
       let resolved = claim;
@@ -488,12 +506,12 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         setClaims(current => current.map(item => item.id === resolved.id ? resolved : item));
         opened = registry.document(resolved.anchor.path) ?? await api.projects.readFile(projectId, resolved.anchor.path);
       }
-      if (resolved.anchorStatus === "orphaned" || resolved.anchor.fileVersion !== opened.file.version || opened.content.slice(resolved.anchor.startOffset, resolved.anchor.endOffset) !== resolved.anchor.exactText) { setError("The claim position could not be verified against this file version. It was not opened at an old offset."); return; }
+      if (resolved.anchorStatus === "orphaned" || resolved.anchor.fileVersion !== opened.file.version || opened.content.slice(resolved.anchor.startOffset, resolved.anchor.endOffset) !== resolved.anchor.exactText) { setError("无法核实此版本中的论断位置，未使用旧位置打开文件。"); return; }
       const nextTree = await hydrateTreePath(projectId, treeRef.current, resolved.anchor.path);
       commitTree(nextTree);
       const nextSelection = makeSelection(resolved.anchor.path, opened, resolved.anchor.startOffset, resolved.anchor.endOffset);
       closeHistoryDiff(); navigationRef.current.cancel(); setSelectedPath(resolved.anchor.path); setFileDocument(opened); setTargetLine(null); setSelection(nextSelection); setTargetSelection(nextSelection); setCursorLocation({ path: resolved.anchor.path, line: nextSelection.startLine, column: 1 });
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not verify the claim location"); }
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "无法核实论断位置"); }
   };
   const selectEvidenceClaim = async (claim: PaperClaim) => {
     setSidebarView("evidence");
@@ -519,7 +537,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     try {
       setSettingsTree(await api.projects.tree(projectId));
     } catch (settingsError) {
-      setTabError(settingsError instanceof Error ? settingsError.message : "Could not load all project files for settings");
+      setTabError(settingsError instanceof Error ? settingsError.message : "无法加载设置所需的全部项目文件");
     }
   };
 
@@ -637,7 +655,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         if (!returnToSource && remaining.length) openHistoryDiff(remaining.at(-1)!.request);
         else closeHistoryDiff();
       }
-    } catch (failure) { setTabError(failure instanceof Error ? failure.message : "Could not save comparison; local text retained"); }
+    } catch (failure) { setTabError(failure instanceof Error ? failure.message : "无法保存对比结果，已保留本地文本"); }
   };
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -653,7 +671,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
 
   if (loading) return <WorkspaceLoading />;
   if (error || !project)
-    return <WorkspaceError message={error || "Project not found"} />;
+    return <WorkspaceError message={error || "项目不存在"} />;
   const pdfSourceLocation = selection
     ? { path: selection.path, line: selection.startLine }
     : cursorLocation.path
@@ -670,7 +688,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       <header className="workspace-topbar">
         <div className="workspace-topbar__left">
           <IconButton
-            label="Back to projects"
+            label="返回项目列表"
             icon={<Icon name={icons.arrowLeft} />}
             onClick={() => navigate("/projects")}
           />
@@ -704,7 +722,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             icon={<Icon name={icons.search} />}
             onClick={() => setSearchOpen(true)}
           >
-            Find
+            查找
           </Button>
           <Button
             size="small"
@@ -712,16 +730,16 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             icon={<Icon name={icons.verified} />}
             onClick={() => setComplianceOpen(true)}
           >
-            Compliance
+            投稿检查
           </Button>
-          <Button size="small" variant="secondary" icon={<Icon name={icons.history} />} onClick={() => setProvenanceOpen(true)}>Provenance</Button>
+          <Button size="small" variant="secondary" icon={<Icon name={icons.history} />} onClick={() => setProvenanceOpen(true)}>溯源记录</Button>
           <Button
             size="small"
             variant="secondary"
             icon={<Icon name={icons.comment} />}
             onClick={() => setCommentsOpen(true)}
           >
-            Comments
+            评论
           </Button>
           <Button
             size="small"
@@ -729,7 +747,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             icon={<Icon name={icons.personAdd} />}
             onClick={() => setInviteOpen(true)}
           >
-            Invite
+            邀请
           </Button>
           <Button
             size="small"
@@ -737,7 +755,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             icon={<Icon name={icons.share} />}
             onClick={() => setShareOpen(true)}
           >
-            Share
+            分享
           </Button>
           {project.source.type === "github" ? (
             <Button
@@ -747,12 +765,12 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               icon={<Icon name={icons.refresh} />}
               onClick={() => setSyncOpen(true)}
             >
-              Sync
+              同步
             </Button>
           ) : null}
           <ThemeToggle />
           <IconButton
-            label="Project settings"
+            label="项目设置"
             icon={<Icon name={icons.ellipsis} />}
             onClick={() => void openSettings()}
           />
@@ -764,22 +782,22 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         {(
           <aside className="workspace-sidebar" hidden={sidebarForcedCollapsed || sidebarWidth === 0} style={{ width: sidebarWidth }}>
             <section {...rootDrop.props("")} id="sidebar-files" hidden={sidebarView !== "files"} className="sidebar-section sidebar-section--files">
-              {rootDrop.activeTarget !== null ? <div className="upload-drop-hint" role="status">Drop files into project root</div> : null}
+              {rootDrop.activeTarget !== null ? <div className="upload-drop-hint" role="status">将文件拖放到项目根目录</div> : null}
               <header className="panel-heading">
                 <div>
                   <Icon name={icons.listTree} />
-                  <span>Files</span>
+                  <span>文件</span>
                 </div>
                 <div>
                   <IconButton
                     label={
                       checkpointState === "saving"
-                        ? "Saving local history checkpoint"
+                        ? "正在保存本地历史检查点"
                         : checkpointState === "saved"
-                          ? "Local history checkpoint saved"
+                          ? "本地历史检查点已保存"
                           : checkpointState === "error"
-                            ? "Retry local history checkpoint"
-                            : "Save local history checkpoint"
+                            ? "重试保存本地历史检查点"
+                            : "保存本地历史检查点"
                     }
                     icon={<Icon name={icons.gitCommit} />}
                     disabled={checkpointState === "saving"}
@@ -799,23 +817,23 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                     }}
                   />
                   <IconButton
-                    label="New file"
+                    label="新建文件"
                     icon={<Icon name={icons.newFile} />}
                     onClick={() => setNewFileOpen(true)}
                   />
                   <IconButton
-                    label="Add external file"
+                    label="添加外部文件"
                     icon={<Icon name={icons.cloudUpload} />}
                     onClick={() => { setDroppedFiles([]); setDropDirectory(""); setAddFileOpen(true); }}
                   />
                   <IconButton
-                    label="Rename selected file"
+                    label="重命名所选文件"
                     icon={<Icon name={icons.edit} />}
                     disabled={selectedNode?.type !== "file"}
                     onClick={() => setRenameOpen(true)}
                   />
                   <IconButton
-                    label="Move selected file to trash"
+                    label="将所选文件移入回收站"
                     icon={<Icon name={icons.trash} />}
                     variant="danger"
                     disabled={
@@ -828,7 +846,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                     }}
                   />
                   <IconButton
-                    label="Collapse files panel"
+                    label="收起文件面板"
                     icon={<Icon name={icons.chevronLeft} />}
                     onClick={collapseSidebar}
                   />
@@ -848,21 +866,21 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               <header className="panel-heading">
                 <div>
                   <Icon name={icons.book} />
-                  <span>Reference Style</span>
+                  <span>参考论文</span>
                 </div>
               </header>
               <div className="reference-style-content">
-                {sidebarView === "reference-style" ? <ReferenceStylePanel projectId={projectId} {...(selectedPath ? {path:selectedPath} : {})} onApplied={() => refreshWorkspace()} /> : null}
+                {sidebarView === "reference-style" ? <ReferenceStylePanel projectId={projectId} {...(selectedPath ? { path: selectedPath } : {})} hasSelection={!!selection} hasSection={!!sectionSelection} refreshVersion={referenceSettings?.revision ?? 0} onSettingsChanged={(settings, papers) => { setReferenceSettings(settings); setReferencePapers(papers); }} onWrite={(target, instruction) => { setReferenceAction({ id: crypto.randomUUID(), target, instruction, ...(selectedPath ? { path: selectedPath } : {}) }); setBottomPanelTab("ai"); setPanelCollapsed(false); }} /> : null}
               </div>
             </section>
             <section id="sidebar-outline" hidden={sidebarView !== "outline"} className="sidebar-section workbench-outline">
               <header className="panel-heading panel-heading--plain">
-                <span>Document outline</span>
+                <span>文档大纲</span>
                 <IconButton
                   label={
                     outlineCollapsed
-                      ? "Expand document outline"
-                      : "Collapse document outline"
+                      ? "展开文档大纲"
+                      : "收起文档大纲"
                   }
                   icon={outlineCollapsed ? <Icon name={icons.chevronUp} /> : <Icon name={icons.chevronDown} />}
                   onClick={() => setOutlineCollapsed(!outlineCollapsed)}
@@ -871,23 +889,23 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               {!outlineCollapsed ? <>
                 <SegmentedControl
                   className="outline-mode"
-                  label="Outline source"
+                  label="大纲来源"
                   value={outlineMode}
                   onChange={setOutlineMode}
                   options={[
-                    { value: "current", label: "Current document" },
-                    { value: "project", label: "Project structure" }
+                    { value: "current", label: "当前文档" },
+                    { value: "project", label: "项目结构" }
                   ]}
                 />
-                <p className="outline-version-note">{outlineMode === "current" ? "Current buffer · local parse" : "Saved workspace version"}</p>
+                <p className="outline-version-note">{outlineMode === "current" ? "当前编辑内容 · 本地解析" : "已保存的工作区版本"}</p>
                 <OutlineTree items={visibleOutline} activeId={activeOutlineId} onSelect={selectOutline} />
               </> : null}
             </section>
             <section id="sidebar-evidence" hidden={sidebarView !== "evidence"} className="sidebar-section sidebar-section--claims">
               <header className="panel-heading panel-heading--plain">
-                <div><span>Claims & evidence</span>{evidenceCockpit ? <small>{evidenceCockpit.counts.supported}/{evidenceCockpit.counts.total} supported · {evidenceCockpit.counts.unresolved} unresolved</small> : null}</div>
+                <div><span>论断与证据</span>{evidenceCockpit ? <small>{evidenceCockpit.counts.supported}/{evidenceCockpit.counts.total} 项已支持 · {evidenceCockpit.counts.unresolved} 未解决</small> : null}</div>
                 <IconButton
-                  label="Rescan claims"
+                  label="重新扫描论断"
                   icon={<Icon name={icons.refresh} />}
                   onClick={async () => {
                     try {
@@ -900,12 +918,12 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                   }}
                 />
               </header>
-              <div className="claim-filters" role="group" aria-label="Evidence filters">
-                <Field label="Status">
-                  <Select aria-label="Evidence status" value={claimStatusFilter} onChange={(next) => setClaimStatusFilter(next as typeof claimStatusFilter)} options={[{ value: "all", label: "All" }, { value: "needs-review", label: "Needs review" }, { value: "supported", label: "Supported" }, { value: "partial", label: "Partial" }, { value: "unsupported", label: "Unsupported" }, { value: "stale", label: "Stale anchors" }, { value: "orphaned", label: "Missing source" }]} />
+              <div className="claim-filters" role="group" aria-label="证据筛选">
+                <Field label="状态">
+                  <Select aria-label="证据状态" value={claimStatusFilter} onChange={(next) => setClaimStatusFilter(next as typeof claimStatusFilter)} options={[{ value: "all", label: "全部" }, { value: "needs-review", label: "待审核" }, { value: "supported", label: "已获支持" }, { value: "partial", label: "部分支持" }, { value: "unsupported", label: "缺少支持" }, { value: "stale", label: "锚点已过期" }, { value: "orphaned", label: "源文件缺失" }]} />
                 </Field>
-                <Field label="Source">
-                  <Select aria-label="Evidence source" value={claimPathFilter} onChange={setClaimPathFilter} options={[{ value: "all", label: "All files" }, ...claimPaths.map(path => ({ value: path, label: path }))]} />
+                <Field label="来源">
+                  <Select aria-label="证据来源" value={claimPathFilter} onChange={setClaimPathFilter} options={[{ value: "all", label: "全部文件" }, ...claimPaths.map(path => ({ value: path, label: path }))]} />
                 </Field>
               </div>
               {claims.length ? (
@@ -933,7 +951,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                     return items.length ? (
                       <div className="claim-ledger-group" key={status}>
                         <small>
-                          {status} · {items.length}
+                          {statusLabel(status)} · {items.length}
                         </small>
                         {items.map((claim) => (
                           <Button
@@ -942,24 +960,24 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                             key={claim.id}
                             onClick={() => { void selectEvidenceClaim(claim); }}
                             title={
-                              `${claim.anchor.path} · saved v${claim.anchor.fileVersion} · ${claim.anchorStatus === "current" ? "verified anchor" : "verify and reanchor before opening"}`
+                              `${claim.anchor.path} · 已保存版本${claim.anchor.fileVersion} · ${claim.anchorStatus === "current" ? "锚点已核实" : "打开前请核实并重新定位"}`
                             }
                           >
                             <span>{claim.semanticType ?? "claim"}</span>
                             <em>
                               {claim.anchor.exactText.slice(0, 72)}
-                              {claim.anchorStatus === "current" ? ` · ${claim.anchor.path} · saved v${claim.anchor.fileVersion}` : claim.anchorStatus === "orphaned" ? " · source missing" : " · verify location"}
+                              {claim.anchorStatus === "current" ? ` · ${claim.anchor.path} · 已保存版本${claim.anchor.fileVersion}` : claim.anchorStatus === "orphaned" ? " · 源文件缺失" : " · 请核实位置"}
                             </em>
                           </Button>
                         ))}
                       </div>
                     ) : null;
                   })}
-                  {!visibleClaims.length ? <p className="sidebar-empty">No claims match these filters.</p> : null}
+                  {!visibleClaims.length ? <p className="sidebar-empty">没有符合筛选条件的论断。</p> : null}
                 </div>
               ) : (
                 <p className="sidebar-empty">
-                  Scan the workspace to build the claim ledger.
+                  扫描工作区以建立论断列表。
                 </p>
               )}
             </section>
@@ -1010,7 +1028,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           </aside>
         )}
         {!sidebarForcedCollapsed ? <PanelDivider
-          label="Resize files panel"
+          label="调整文件面板大小"
           active={resizing === "sidebar"}
           value={sidebarWidth}
           min={0}
@@ -1028,28 +1046,29 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               const remaining = tabsStateRef.current.sourceTabs.filter(tab => tab.path !== path);
               setSourceTabs(remaining);
               if (path === tabsStateRef.current.selectedPath) setSelectedPath(remaining.at(-1)?.path ?? null);
-            } catch (failure) { setTabError(failure instanceof Error ? failure.message : "Could not save this tab; local text retained"); }
+            } catch (failure) { setTabError(failure instanceof Error ? failure.message : "无法保存此标签页，已保留本地文本"); }
           }} />
           {tabError ? <p role="alert">{tabError}</p> : null}
           <section className="editor-region" id="source-editor-area">
-            {settingsOpen ? <div ref={settingsPanelRef} id="settings-editor-panel" className="settings-tab-panel" role="tabpanel" aria-label="Settings" hidden={!settingsActive}>
+            {settingsOpen ? <div ref={settingsPanelRef} id="settings-editor-panel" className="settings-tab-panel" role="tabpanel" aria-label="设置" hidden={!settingsActive}>
               <ProjectSettingsEditor key={projectId} project={project} tree={settingsTree} onSaved={async (updated) => {
                 setProject(updated);
                 await refreshWorkspace(undefined, selectedPath ?? updated.mainDocument);
               }} />
             </div> : null}
-            {comparisonTabs.map(tab => <div className="diff-tab-panel" id={`comparison-${tab.key}`} key={tab.key} hidden={settingsActive || !historyDiff || diffRequestKey(historyDiff) !== tab.key}><Suspense fallback={<p>Loading comparison…</p>}><WorkspaceDiffEditor registry={registry} projectId={projectId} projectVersion={project.version} dirty={buffersDirty} request={tab.request} onClose={() => { void closeComparisonTab(tab.key); }} onSaveCheckpoint={async () => { await editorRef.current?.flush(); await registry.flush(); await api.projects.checkpoint(projectId); return (await api.projects.get(projectId)).version; }} onRestored={async path => { await refreshWorkspace(undefined, path); setSelectedPath(path); setFileDocument(await api.projects.readFile(projectId, path)); await closeComparisonTab(tab.key, true); }} /></Suspense></div>)}
+            {comparisonTabs.map(tab => <div className="diff-tab-panel" id={`comparison-${tab.key}`} key={tab.key} hidden={settingsActive || !historyDiff || diffRequestKey(historyDiff) !== tab.key}><Suspense fallback={<p>正在加载对比…</p>}><WorkspaceDiffEditor registry={registry} projectId={projectId} projectVersion={project.version} dirty={buffersDirty} request={tab.request} onClose={() => { void closeComparisonTab(tab.key); }} onSaveCheckpoint={async () => { await editorRef.current?.flush(); await registry.flush(); await api.projects.checkpoint(projectId); return (await api.projects.get(projectId)).version; }} onRestored={async path => { await refreshWorkspace(undefined, path); setSelectedPath(path); setFileDocument(await api.projects.readFile(projectId, path)); await closeComparisonTab(tab.key, true); }} /></Suspense></div>)}
             <div className="source-editor-container" hidden={settingsActive || historyDiff !== null}>
             {fileDocument ? (
               <Suspense
                 fallback={
-                  <div className="workspace-panel-loading">Loading editor…</div>
+                  <div className="workspace-panel-loading">正在加载编辑器…</div>
                 }
               >
                 <SourceEditor
                   ref={editorRef}
                   registry={registry}
                   projectId={projectId}
+                  references={referenceSettings?.selections ?? []}
                   document={fileDocument}
                   targetLine={targetLine}
                   targetSelection={targetSelection}
@@ -1076,9 +1095,9 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             ) : (
               <div className="editor-empty">
                 <Icon name={icons.listTree} />
-                <h3>Select a source file</h3>
+                <h3>选择源文件</h3>
                 <p>
-                  Choose a LaTeX, Markdown or BibTeX file from the project tree.
+                  从项目文件树中选择 LaTeX、Markdown 或 BibTeX 文件。
                 </p>
               </div>
             )}
@@ -1087,20 +1106,20 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <div className="bottom-panel-heading">
             <TabBar
               className="bottom-panel-tabs"
-              label="Bottom panel"
+              label="底部面板"
               activeId={bottomPanelTab}
               onSelect={(id) => { setBottomPanelTab(id as typeof bottomPanelTab); setPanelCollapsed(false); }}
               tabs={[
                 { id: "ai", label: "AI" },
-                { id: "problems", label: `Problems${compileState.diagnostics.length ? ` (${compileState.diagnostics.length})` : ""}` },
-                { id: "output", label: "Output" }
+                { id: "problems", label: `问题${compileState.diagnostics.length ? ` (${compileState.diagnostics.length})` : ""}` },
+                { id: "output", label: "输出" }
               ]}
             />
-            <Button variant="ghost" aria-expanded={!bottomPanelHidden} aria-controls="bottom-workbench-panel" onClick={() => setPanelCollapsed(!panelCollapsed)}>{bottomPanelHidden ? "Show panel" : "Hide panel"}</Button>
+            <Button variant="ghost" aria-expanded={!bottomPanelHidden} aria-controls="bottom-workbench-panel" onClick={() => setPanelCollapsed(!panelCollapsed)}>{bottomPanelHidden ? "显示面板" : "隐藏面板"}</Button>
           </div>
           <div id="bottom-workbench-panel" className="workbench-bottom-panel" hidden={bottomPanelHidden}>
           <PanelDivider
-            label="Resize bottom panel"
+            label="调整底部面板大小"
             orientation="horizontal"
             active={resizing === "ai"}
             value={aiHeight}
@@ -1112,6 +1131,10 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <div className="bottom-panel-content" role="tabpanel" hidden={bottomPanelTab !== "ai"}>
           <AiWorkspace
             project={project}
+            referenceSettings={referenceSettings}
+            referencePapers={referencePapers}
+            referenceAction={referenceAction}
+            onRemoveReference={id => void removeWritingReference(id)}
             selection={selection}
             paragraphSelection={paragraphSelection}
             sectionSelection={sectionSelection}
@@ -1192,18 +1215,18 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           />
           </div>
           <div className="bottom-panel-content bottom-panel-problems" role="tabpanel" hidden={bottomPanelTab !== "problems"}>
-            <header><span>{compileState.state === "error" ? "Compilation failed" : compileState.diagnostics.length ? "Compiler diagnostics" : "No compiler problems"}</span><small>{compileState.progress}</small></header>
-            {compileState.diagnostics.length ? <div className="diagnostic-list">{compileState.diagnostics.map(diagnostic => <div className={`diagnostic-row diagnostic-row--${diagnostic.severity}`} key={diagnostic.id}><Button variant="ghost" disabled={!diagnostic.path || !diagnostic.line} onClick={() => { if (diagnostic.path && diagnostic.line) void navigateToPath(diagnostic.path, diagnostic.line); }}><Icon name={icons.warning} /><span><strong>{diagnostic.message}</strong>{diagnostic.path ? <code>{diagnostic.path}{diagnostic.line ? `:${diagnostic.line}` : ""}</code> : null}</span></Button>{compileState.failure ? <Button size="small" variant="secondary" icon={<Icon name={icons.tools} />} onClick={() => { setBottomPanelTab("ai"); setPanelCollapsed(false); fixCompileWithAgent(compileState.failure!); }}>Fix with Agent</Button> : null}</div>)}</div> : <div className="bottom-panel-empty"><Icon name={icons.passFilled} />{compileState.state === "error" ? "The compiler did not provide a source location." : "Compile the project to populate diagnostics."}</div>}
+            <header><span>{compileState.state === "error" ? "编译失败" : compileState.diagnostics.length ? "编译诊断" : "没有编译问题"}</span><small>{compileState.progress}</small></header>
+            {compileState.diagnostics.length ? <div className="diagnostic-list">{compileState.diagnostics.map(diagnostic => <div className={`diagnostic-row diagnostic-row--${diagnostic.severity}`} key={diagnostic.id}><Button variant="ghost" disabled={!diagnostic.path || !diagnostic.line} onClick={() => { if (diagnostic.path && diagnostic.line) void navigateToPath(diagnostic.path, diagnostic.line); }}><Icon name={icons.warning} /><span><strong>{diagnostic.message}</strong>{diagnostic.path ? <code>{diagnostic.path}{diagnostic.line ? `:${diagnostic.line}` : ""}</code> : null}</span></Button>{compileState.failure ? <Button size="small" variant="secondary" icon={<Icon name={icons.tools} />} onClick={() => { setBottomPanelTab("ai"); setPanelCollapsed(false); fixCompileWithAgent(compileState.failure!); }}>使用智能助手修复</Button> : null}</div>)}</div> : <div className="bottom-panel-empty"><Icon name={icons.passFilled} />{compileState.state === "error" ? "编译器未提供源文件位置。" : "编译项目后即可查看诊断信息。"}</div>}
           </div>
           <div className="bottom-panel-content bottom-panel-output" role="tabpanel" hidden={bottomPanelTab !== "output"}>
-            <header><Icon name={icons.filePdf} /><span>Compiler output</span><small>{compileState.compiledVersion === null ? "No compiled version" : `Workspace version ${compileState.compiledVersion}`}</small></header>
+            <header><Icon name={icons.filePdf} /><span>编译输出</span><small>{compileState.compiledVersion === null ? "尚未编译" : `工作区版本 ${compileState.compiledVersion}`}</small></header>
             <pre>{compileState.log ? compileState.log.slice(-24_000) : compileState.progress}</pre>
           </div>
           </div>
         </main>
 
         {!pdfForcedCollapsed ? <PanelDivider
-          label="Resize PDF preview"
+          label="调整 PDF 预览大小"
           active={resizing === "pdf"}
           value={pdfWidth}
           min={0}
@@ -1217,7 +1240,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             <Suspense
               fallback={
                 <div className="workspace-panel-loading">
-                  Loading PDF preview…
+                  正在加载 PDF 预览…
                 </div>
               }
             >
@@ -1239,7 +1262,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             </Suspense>
             <IconButton
               className="pdf-collapse"
-              label="Collapse PDF preview"
+              label="收起 PDF 预览"
               icon={<Icon name={icons.layoutPanelRight} />}
               onClick={collapsePdf}
             />
@@ -1249,15 +1272,15 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             variant="ghost"
             className="collapsed-rail collapsed-rail--right"
             onClick={collapsePdf}
-            aria-label="Expand PDF preview"
-            title="Expand PDF preview"
+            aria-label="展开 PDF 预览"
+            title="展开 PDF 预览"
           >
             <Icon name={icons.layoutPanelRight} />
             <span>PDF</span>
           </Button>
         ) : null}
       </div>
-      <footer className="workbench-status" aria-label="Workspace status"><span>Managed history</span><span>{project.source.type === "github" ? "GitHub configured" : "Local project"}</span><span>{buffersDirty ? "Unsaved buffers" : "Buffers acknowledged"}</span><span>Ln {cursorLocation.line}, Col {cursorLocation.column ?? 1}</span><span>UTF-8</span><span>Project v{project.version} · PDF {compileState.compiledVersion === null ? "not compiled" : `v${compileState.compiledVersion}`}</span></footer>
+      <footer className="workbench-status" aria-label="工作区状态"><span>托管历史</span><span>{project.source.type === "github" ? "已配置 GitHub" : "本地项目"}</span><span>{buffersDirty ? "有未保存的编辑内容" : "编辑内容已确认"}</span><span>行 {cursorLocation.line}，列 {cursorLocation.column ?? 1}</span><span>UTF-8</span><span>项目版本{project.version} · PDF {compileState.compiledVersion === null ? "未编译" : `v${compileState.compiledVersion}`}</span></footer>
       <ProjectSearchDialog open={searchOpen} project={project} onClose={() => setSearchOpen(false)} onNavigate={(path, line) => { void navigateToPath(path, line); }} />
 
       <NewFileDialog
@@ -1341,13 +1364,13 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       />
       <Dialog
         open={deleteOpen}
-        title="Move file to trash?"
+        title="将文件移入回收站？"
         description={selectedPath ?? ""}
         onClose={() => setDeleteOpen(false)}
         footer={
           <>
             <Button variant="ghost" onClick={() => setDeleteOpen(false)}>
-              Cancel
+              取消
             </Button>
             <Button
               variant="danger"
@@ -1365,19 +1388,18 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                   setDeleteError(
                     deleteFailure instanceof Error
                       ? deleteFailure.message
-                      : "Could not delete file",
+                      : "无法删除文件",
                   );
                 }
               }}
             >
-              Move to trash
+              移入回收站
             </Button>
           </>
         }
       >
         <p className="dialog-copy">
-          The file is moved to the project trash and can be recovered from
-          workspace storage.
+          文件将移入项目回收站，可从工作区存储中恢复。
         </p>
         {deleteError ? (
           <div className="form-error" role="alert">
@@ -1415,7 +1437,7 @@ function ShareDialog({
         .then(setLinks)
         .catch((e) =>
           setError(
-            e instanceof Error ? e.message : "Could not load share links",
+            e instanceof Error ? e.message : "无法加载分享链接",
           ),
         ),
     [projectId],
@@ -1429,32 +1451,32 @@ function ShareDialog({
       setCreatedUrl(`${window.location.origin}/shared/${share.token}`);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not create share link");
+      setError(e instanceof Error ? e.message : "无法创建分享链接");
     }
   };
   return (
     <Dialog
       open={open}
-      title="Share project"
-      description="Create revocable links. Read-only links cannot add comments; comment links never allow editing manuscript files."
+      title="分享项目"
+      description="创建可撤销的链接。只读链接不可评论，评论链接不可编辑稿件。"
       onClose={onClose}
       footer={
         <Button variant="ghost" onClick={onClose}>
-          Close
+          关闭
         </Button>
       }
     >
       <div className="history-dialog">
         <div>
           <Button variant="secondary" onClick={() => void create("read")}>
-            Create read-only link
+            创建只读链接
           </Button>{" "}
           <Button variant="secondary" onClick={() => void create("comment")}>
-            Create review link
+            创建审稿链接
           </Button>
         </div>
         {createdUrl ? (
-          <Field label="New link (shown once)">
+          <Field label="新链接（仅显示一次）">
             <TextField readonly value={createdUrl} />
           </Field>
         ) : null}
@@ -1465,7 +1487,7 @@ function ShareDialog({
         ) : null}
         {links.map((link) => (
           <p className="dialog-copy" key={link.id}>
-            {link.permission} · {new Date(link.createdAt).toLocaleString()} ·{" "}
+            {statusLabel(link.permission)} · {new Date(link.createdAt).toLocaleString("zh-CN")} ·{" "}
             {link.revokedAt ? (
               "revoked"
             ) : (
@@ -1476,7 +1498,7 @@ function ShareDialog({
                   await load();
                 }}
               >
-                Revoke
+                撤销
               </Button>
             )}
           </p>
@@ -1552,7 +1574,7 @@ function InviteDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not load invitations",
+          : "无法加载邀请",
       );
     }
   }, [projectId]);
@@ -1576,7 +1598,7 @@ function InviteDialog({
         ...(message.trim() ? { message: message.trim() } : {}),
       });
       setSent(
-        `Invitation created. It expires ${new Date(result.invitation.expiresAt).toLocaleDateString()}.`,
+        `邀请已创建，到期时间为 ${new Date(result.invitation.expiresAt).toLocaleDateString("zh-CN")}.`,
       );
       setToken(
         `${window.location.origin}/projects?invite=${encodeURIComponent(result.token)}`,
@@ -1589,7 +1611,7 @@ function InviteDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not create invitation",
+          : "无法创建邀请",
       );
     } finally {
       setBusy(false);
@@ -1604,14 +1626,14 @@ function InviteDialog({
         `${window.location.origin}/projects?invite=${encodeURIComponent(result.token)}`,
       );
       setSent(
-        `Invitation resent. It expires ${new Date(result.invitation.expiresAt).toLocaleDateString()}.`,
+        `邀请已重新发送，到期时间为 ${new Date(result.invitation.expiresAt).toLocaleDateString("zh-CN")}.`,
       );
       await load();
     } catch (failure) {
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not resend invitation",
+          : "无法重新发送邀请",
       );
     } finally {
       setBusy(false);
@@ -1627,7 +1649,7 @@ function InviteDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not revoke invitation",
+          : "无法撤销邀请",
       );
     } finally {
       setBusy(false);
@@ -1646,7 +1668,7 @@ function InviteDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not update member role",
+          : "无法更新成员角色",
       );
     } finally {
       setBusy(false);
@@ -1660,7 +1682,7 @@ function InviteDialog({
       await load();
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "Could not remove member",
+        failure instanceof Error ? failure.message : "无法移除成员",
       );
     } finally {
       setBusy(false);
@@ -1676,7 +1698,7 @@ function InviteDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not decide access request",
+          : "无法处理访问申请",
       );
     } finally {
       setBusy(false);
@@ -1685,13 +1707,13 @@ function InviteDialog({
   return (
     <Dialog
       open={open}
-      title="Invite collaborator"
-      description="Invite an account by email and choose the project role."
+      title="邀请协作者"
+      description="通过邮箱邀请用户，并选择项目角色。"
       onClose={onClose}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Close
+            关闭
           </Button>
           <Button
             variant="primary"
@@ -1700,13 +1722,13 @@ function InviteDialog({
             disabled={!email.trim()}
             onClick={() => void invite()}
           >
-            Invite
+            邀请
           </Button>
         </>
       }
     >
       <div className="form-stack">
-        <Field label="Email">
+        <Field label="邮箱">
           <TextField
             type="email"
             value={email}
@@ -1714,27 +1736,27 @@ function InviteDialog({
             autoFocus
           />
         </Field>
-        <Field label="Role">
+        <Field label="角色">
           <Select
-            aria-label="Role"
+            aria-label="角色"
             value={role}
             onChange={(next) => setRole(next as typeof role)}
             options={[
-              { value: "maintainer", label: "Maintainer" },
-              { value: "editor", label: "Editor" },
-              { value: "commenter", label: "Commenter" },
-              { value: "viewer", label: "Viewer" }
+              { value: "maintainer", label: "维护者" },
+              { value: "editor", label: "编辑者" },
+              { value: "commenter", label: "评论者" },
+              { value: "viewer", label: "查看者" }
             ]}
           />
         </Field>
-        <Field label="Expires at (optional)">
+        <Field label="到期时间（可选）">
           <TextField
             type="datetime-local"
             value={expiresAt}
             onChange={setExpiresAt}
           />
         </Field>
-        <Field label="Message (optional)">
+        <Field label="留言（可选）">
           <TextArea
             rows={3}
             maxLength={2000}
@@ -1748,7 +1770,7 @@ function InviteDialog({
           </div>
         ) : null}
         {token ? (
-          <Field label="Invitation link (shown once)">
+          <Field label="邀请链接（仅显示一次）">
             <TextField readonly value={token} />
           </Field>
         ) : null}
@@ -1758,7 +1780,7 @@ function InviteDialog({
           </div>
         ) : null}
         <div className="history-dialog">
-          <h3>Collaborators</h3>
+          <h3>协作者</h3>
           {members.map((member) => (
             <p className="dialog-copy" key={member.userId}>
               {member.user.displayName} ({member.user.emailNormalized}) ·{" "}
@@ -1767,7 +1789,7 @@ function InviteDialog({
               ) : (
                 <>
                   <Select
-                    aria-label={`Role for ${member.user.displayName}`}
+                    aria-label={`成员角色： ${member.user.displayName}`}
                     value={member.role}
                     disabled={busy}
                     onChange={(next) =>
@@ -1778,10 +1800,10 @@ function InviteDialog({
                       )
                     }
                     options={[
-                      { value: "maintainer", label: "Maintainer" },
-                      { value: "editor", label: "Editor" },
-                      { value: "commenter", label: "Commenter" },
-                      { value: "viewer", label: "Viewer" }
+                      { value: "maintainer", label: "维护者" },
+                      { value: "editor", label: "编辑者" },
+                      { value: "commenter", label: "评论者" },
+                      { value: "viewer", label: "查看者" }
                     ]}
                   />{" "}
                   <Button
@@ -1791,7 +1813,7 @@ function InviteDialog({
                     disabled={busy}
                     onClick={() => void removeMember(member.userId)}
                   >
-                    Remove
+                    移除
                   </Button>
                 </>
               )}
@@ -1799,12 +1821,12 @@ function InviteDialog({
           ))}
           {canManageMembers ? (
             <>
-              <h3>Access requests</h3>
+              <h3>访问申请</h3>
               {accessRequests
                 .filter((request) => request.status === "pending")
                 .map((request) => (
                   <p className="dialog-copy" key={request.id}>
-                    {request.requester.displayName} ({request.requester.emailNormalized}) · {request.requestedRole}
+                    {request.requester.displayName} ({request.requester.emailNormalized}) · {roleLabel(request.requestedRole)}
                     {request.message ? ` · ${request.message}` : ""}{" "}
                     <Button
                       size="small"
@@ -1812,7 +1834,7 @@ function InviteDialog({
                       disabled={busy}
                       onClick={() => void decideAccessRequest(request.id, true)}
                     >
-                      Approve
+                      批准
                     </Button>{" "}
                     <Button
                       size="small"
@@ -1822,21 +1844,21 @@ function InviteDialog({
                         void decideAccessRequest(request.id, false)
                       }
                     >
-                      Decline
+                      拒绝
                     </Button>
                   </p>
                 ))}
               {!accessRequests.some(
                 (request) => request.status === "pending",
               ) ? (
-                <p className="sidebar-empty">No pending access requests.</p>
+                <p className="sidebar-empty">暂无待处理的访问申请。</p>
               ) : null}
             </>
           ) : null}
-          <h3>Invitations</h3>
+          <h3>邀请</h3>
           {invitations.map((invitation) => (
             <p className="dialog-copy" key={invitation.id}>
-              {invitation.emailNormalized} · {invitation.role} ·{" "}
+              {invitation.emailNormalized} · {roleLabel(invitation.role)} ·{" "}
               {invitation.acceptedAt ? (
                 "accepted"
               ) : invitation.revokedAt ? (
@@ -1846,8 +1868,8 @@ function InviteDialog({
               ) : (
                 <>
                   <span>
-                    pending until{" "}
-                    {new Date(invitation.expiresAt).toLocaleDateString()}
+                    待接受，有效期至{" "}
+                    {new Date(invitation.expiresAt).toLocaleDateString("zh-CN")}
                   </span>{" "}
                   <Button
                     size="small"
@@ -1856,7 +1878,7 @@ function InviteDialog({
                     disabled={busy}
                     onClick={() => void resend(invitation.id)}
                   >
-                    Resend
+                    重新发送
                   </Button>{" "}
                   <Button
                     size="small"
@@ -1865,7 +1887,7 @@ function InviteDialog({
                     disabled={busy}
                     onClick={() => void revoke(invitation.id)}
                   >
-                    Revoke
+                    撤销
                   </Button>
                 </>
               )}
@@ -1930,7 +1952,7 @@ function CommentsDialog({
       setError("");
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "Could not load comments",
+        failure instanceof Error ? failure.message : "无法加载评论",
       );
     }
   }, [projectId]);
@@ -1951,7 +1973,7 @@ function CommentsDialog({
       await load();
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "Could not add comment",
+        failure instanceof Error ? failure.message : "无法添加评论",
       );
     } finally {
       setBusy(false);
@@ -1969,7 +1991,7 @@ function CommentsDialog({
       setError(
         failure instanceof Error
           ? failure.message
-          : "Could not reply to comment",
+          : "无法回复评论",
       );
     } finally {
       setBusy(false);
@@ -1978,17 +2000,17 @@ function CommentsDialog({
   return (
     <Dialog
       open={open}
-      title="Comments"
+      title="评论"
       description={
         selection
-          ? `New thread on ${selection.path}`
-          : "Select text in the editor to add a comment."
+          ? `新评论位置： ${selection.path}`
+          : "在编辑器中选择文本以添加评论。"
       }
       onClose={onClose}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Close
+            关闭
           </Button>
           <Button
             variant="primary"
@@ -1997,7 +2019,7 @@ function CommentsDialog({
             disabled={!selection || !body.trim()}
             onClick={() => void create()}
           >
-            Add comment
+            添加评论
           </Button>
         </>
       }
@@ -2005,19 +2027,19 @@ function CommentsDialog({
       <div className="history-dialog">
         {selection ? (
           <>
-            <Field label="Comment">
+            <Field label="评论">
               <TextArea
                 value={body}
                 onChange={setBody}
-                placeholder="Add a review comment"
+                placeholder="添加审稿评论"
                 rows={3}
               />
             </Field>
-            <Field label="Mention collaborator">
+            <Field label="提及协作者">
               <Select
-                aria-label="Mention collaborator"
+                aria-label="提及协作者"
                 value=""
-                placeholder="Choose a collaborator"
+                placeholder="选择协作者"
                 onChange={(next) => {
                   const member = members.find(
                     (item) => item.userId === next,
@@ -2029,7 +2051,7 @@ function CommentsDialog({
                     );
                 }}
                 options={[
-                  { value: "", label: "Choose a collaborator" },
+                  { value: "", label: "选择协作者" },
                   ...members.map((member) => ({
                     value: member.userId,
                     label: `${member.user.displayName} (${member.user.emailNormalized})`
@@ -2058,10 +2080,10 @@ function CommentsDialog({
                 >
                   {thread.path}
                 </Button>
-                <span>{thread.status}</span>
+                <span>{statusLabel(thread.status)}</span>
               </header>
               <blockquote>
-                {thread.quote || "Selected text was removed"}
+                {thread.quote || "所选文本已被移除"}
               </blockquote>
               {thread.messages.map((message) => (
                 <p key={message.id}>{message.body}</p>
@@ -2080,7 +2102,7 @@ function CommentsDialog({
                     await load();
                   }}
                 >
-                  {thread.status === "resolved" ? "Reopen" : "Resolve"}
+                  {thread.status === "resolved" ? "重新打开" : "解决"}
                 </Button>
                 {thread.status === "orphaned" ? (
                   <Button
@@ -2105,21 +2127,21 @@ function CommentsDialog({
                         setError(
                           failure instanceof Error
                             ? failure.message
-                            : "Could not reattach comment",
+                            : "无法重新关联评论",
                         );
                       } finally {
                         setBusy(false);
                       }
                     }}
                   >
-                    Reattach selection
+                    重新关联选区
                   </Button>
                 ) : null}
               </div>
               {thread.status !== "orphaned" ? (
                 <div className="comment-reply">
                   <TextArea
-                    aria-label="Reply to comment"
+                    aria-label="回复评论"
                     value={replies[thread.id] ?? ""}
                     onChange={(next) =>
                       setReplies((current) => ({
@@ -2127,7 +2149,7 @@ function CommentsDialog({
                         [thread.id]: next,
                       }))
                     }
-                    placeholder="Reply"
+                    placeholder="回复"
                     rows={2}
                   />
                   <Button
@@ -2136,14 +2158,14 @@ function CommentsDialog({
                     disabled={busy || !replies[thread.id]?.trim()}
                     onClick={() => void reply(thread.id)}
                   >
-                    Reply
+                    回复
                   </Button>
                 </div>
               ) : null}
             </article>
           ))}
         {!threads.length && !error ? (
-          <p className="sidebar-empty">No comment threads in this project.</p>
+          <p className="sidebar-empty">此项目暂无评论。</p>
         ) : null}
       </div>
     </Dialog>
@@ -2233,7 +2255,7 @@ function AssetPreview({
       objectURL = URL.createObjectURL(blob);
       setPreview({ key: assetKey, url: objectURL });
     }).catch(error => {
-      if (!controller.signal.aborted) setPreview({ key: assetKey, error: error instanceof Error ? error.message : "Could not load image" });
+      if (!controller.signal.aborted) setPreview({ key: assetKey, error: error instanceof Error ? error.message : "无法加载图片" });
     });
     return () => {
       controller.abort();
@@ -2251,8 +2273,8 @@ function AssetPreview({
       </div>
       <div className="asset-preview__canvas">
         {current?.error ? <p role="alert">{current.error}</p> : current?.url ? (
-          <img src={current.url} alt={name} onError={() => setPreview({ key: assetKey, error: "Could not display image" })} />
-        ) : <p role="status">Loading image…</p>}
+          <img src={current.url} alt={name} onError={() => setPreview({ key: assetKey, error: "无法显示图片" })} />
+        ) : <p role="status">正在加载图片…</p>}
       </div>
     </div>
   );
@@ -2283,7 +2305,7 @@ function NewFileDialog({
       setError(
         createError instanceof Error
           ? createError.message
-          : "Could not create file",
+          : "无法创建文件",
       );
     } finally {
       setLoading(false);
@@ -2292,13 +2314,13 @@ function NewFileDialog({
   return (
     <Dialog
       open={open}
-      title="Create a file"
-      description="Use a workspace-relative path, for example sections/method.tex."
+      title="创建文件"
+      description="请使用工作区相对路径，例如 sections/method.tex。"
       onClose={onClose}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            取消
           </Button>
           <Button
             variant="primary"
@@ -2306,12 +2328,12 @@ function NewFileDialog({
             disabled={!path.trim()}
             onClick={() => void create()}
           >
-            Create file
+            创建文件
           </Button>
         </>
       }
     >
-      <Field label="File path">
+      <Field label="文件路径">
         <TextField
           value={path}
           onChange={setPath}
@@ -2333,8 +2355,8 @@ function WorkspaceLoading() {
     <div className="workspace-loading">
       <span className="brand__mark">F</span>
       <div>
-        <strong>Opening paper</strong>
-        <span>Loading managed workspace…</span>
+        <strong>正在打开论文</strong>
+        <span>正在加载工作区…</span>
       </div>
     </div>
   );
@@ -2343,10 +2365,10 @@ function WorkspaceLoading() {
 function WorkspaceError({ message }: { message: string }) {
   return (
     <div className="workspace-error">
-      <h1>Could not open this paper</h1>
+      <h1>无法打开此论文</h1>
       <p>{message}</p>
       <Button variant="primary" onClick={() => navigate("/projects")}>
-        Back to projects
+        返回项目列表
       </Button>
     </div>
   );

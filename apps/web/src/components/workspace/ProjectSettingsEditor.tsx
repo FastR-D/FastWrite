@@ -1,3 +1,4 @@
+import { statusLabel } from "../../lib/labels";
 import { useEffect, useMemo, useState } from "react";
 import { isIgnoredWorkspacePath, WRITING_PROFILES, type AgentWireApi, type PaperProject, type ProjectAclAction, type PublicationTarget, type PublishedSkillDescriptor, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
 import { api, downloadFile } from "../../api/client";
@@ -100,7 +101,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
       await onSaved(updated);
       setSaved(true);
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Could not update project");
+      setError(saveError instanceof Error ? saveError.message : "无法更新项目");
     } finally {
       setLoading(false);
     }
@@ -117,7 +118,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
     try {
       await persistAgentSettings(decision.body);
     } catch (saveError) {
-      setAgentError(saveError instanceof Error ? saveError.message : "Could not save Agent settings");
+      setAgentError(saveError instanceof Error ? saveError.message : "无法保存智能助手设置");
     } finally {
       setSavingAgent(false);
     }
@@ -141,22 +142,22 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
     setAclError("");
     setAclBusy(true);
     try { await api.projects.saveAcl(project.id, "new", aclDraft); setAclRules(await api.projects.acl(project.id)); setAclDraft((current) => ({ ...current, pathPrefix: "" })); }
-    catch (failure) { setAclError(failure instanceof Error ? failure.message : "Could not save path rule"); }
+    catch (failure) { setAclError(failure instanceof Error ? failure.message : "无法保存路径规则"); }
     finally { setAclBusy(false); }
   };
   const removeAcl = async (ruleId: string) => {
     setAclError(""); setAclBusy(true);
     try { await api.projects.deleteAcl(project.id, ruleId); setAclRules((rules) => rules.filter((rule) => rule.id !== ruleId)); }
-    catch (failure) { setAclError(failure instanceof Error ? failure.message : "Could not remove path rule"); }
+    catch (failure) { setAclError(failure instanceof Error ? failure.message : "无法移除路径规则"); }
     finally { setAclBusy(false); }
   };
 
   const categories = [
-    { id: "general", label: "General", keywords: "project name main document entry file" },
-    { id: "writing", label: "Writing", keywords: "research domain publication target conference journal template year manuscript stage paper track" },
-    { id: "ai", label: "AI & Harness", keywords: "response language api key base url model wire chat completions responses agent" },
-    ...(aclAvailable ? [{ id: "access", label: "Access", keywords: "permissions path rules subject role user team group action effect allow deny" }] : []),
-    { id: "backup", label: "History & Export", keywords: "automatic git history checkpoint workspace snapshot download archive backup" }
+    { id: "general", label: "常规", keywords: "项目 名称 主文档 入口 文件" },
+    { id: "writing", label: "写作", keywords: "研究 领域 投稿 目标 会议 期刊 模板 年份 稿件 阶段 论文 类别" },
+    { id: "ai", label: "AI 与模型配置", keywords: "回复 语言 API 密钥 服务 地址 模型 接口 智能 助手" },
+    ...(aclAvailable ? [{ id: "access", label: "访问权限", keywords: "权限 路径 规则 主体 角色 用户 团队 用户组 操作 效果 允许 拒绝" }] : []),
+    { id: "backup", label: "历史与导出", keywords: "自动 Git 历史 检查点 工作区 快照 下载 归档 备份" }
   ];
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const matches = categories.filter(item => terms.every(term => `${item.label} ${item.keywords}`.toLowerCase().includes(term)));
@@ -165,93 +166,93 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
   return (
     <div className={styles.editor}>
       <header className={styles.header}>
-        <div className={styles.title}><h1>Settings</h1><span>{project.name}</span></div>
-        <TextField type="search" aria-label="Search settings" placeholder="Search settings" value={query} onChange={setQuery} autoFocus />
-        <div className={styles.scope}><span>Workspace</span><small>Settings for this project</small></div>
+        <div className={styles.title}><h1>设置</h1><span>{project.name}</span></div>
+        <TextField type="search" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} autoFocus />
+        <div className={styles.scope}><span>工作区</span><small>此项目的设置</small></div>
       </header>
       <div className={styles.body}>
-        <nav className={styles.navigation} aria-label="Settings categories">
+        <nav className={styles.navigation} aria-label="设置类别">
           {categories.map(item => <Button key={item.id} variant="ghost" aria-current={!terms.length && category === item.id ? "page" : undefined} onClick={() => { setCategory(item.id); setQuery(""); }}>{item.label}</Button>)}
         </nav>
         <div className={styles.content}>
-          {terms.length && !matches.length ? <div className={styles.empty}><h2>No settings found</h2><p>Try a different search or choose a category.</p></div> : null}
+          {terms.length && !matches.length ? <div className={styles.empty}><h2>未找到设置项</h2><p>请更换搜索词或选择其他类别。</p></div> : null}
           <section className={styles.section} hidden={!visible("general")} aria-labelledby="general-settings-title">
-            <h2 id="general-settings-title">General</h2>
-            <p className={styles.description}>Name your workspace and choose the source file used to compile your paper.</p>
-        <Field label="Project name">
+            <h2 id="general-settings-title">常规</h2>
+            <p className={styles.description}>为工作区命名，并选择编译论文所用的源文件。</p>
+        <Field label="项目名称">
           <TextField value={name} onChange={setName} />
         </Field>
-        <Field label="Main document">
-          <Select aria-label="Main document" value={mainDocument} onChange={setMainDocument} options={texFiles.map((path) => ({ value: path, label: path }))} placeholder="Choose a document" />
+        <Field label="主文档">
+          <Select aria-label="主文档" value={mainDocument} onChange={setMainDocument} options={texFiles.map((path) => ({ value: path, label: path }))} placeholder="选择文档" />
         </Field>
           </section>
           <section className={styles.section} hidden={!visible("skills")} aria-labelledby="skills-settings-title">
-            <h2 id="skills-settings-title">Skill governance</h2>
-            <p className={styles.description}>Published Skills remain governed by manifest, license, capability, risk, and review metadata.</p>
-            <div className="settings-export">{publishedSkills.length ? publishedSkills.map((skill) => <div key={skill.id}><strong>{skill.id} · v{skill.version}</strong><span>{skill.license} · {skill.scope} · {skill.riskLevel} risk · {skill.requiresReview ? "review required" : "review optional"}</span></div>) : <span>No published Skill manifests are available.</span>}</div>
+            <h2 id="skills-settings-title">技能管理</h2>
+            <p className={styles.description}>已发布技能受清单、许可证、能力、风险及审核记录约束。</p>
+            <div className="settings-export">{publishedSkills.length ? publishedSkills.map((skill) => <div key={skill.id}><strong>{skill.id} · v{skill.version}</strong><span>{skill.license} · {statusLabel(skill.scope)} · {statusLabel(skill.riskLevel)} 风险 · {skill.requiresReview ? "需要审核" : "可选审核"}</span></div>) : <span>暂无已发布的技能清单。</span>}</div>
           </section>
           <section className={styles.section} hidden={!visible("writing")} aria-labelledby="writing-settings-title">
-            <h2 id="writing-settings-title">Writing</h2>
-            <p className={styles.description}>Choose the research domain and publication guidance used when writing and reviewing.</p>
-        <Field label="Research domain">
-          <Select aria-label="Research domain" value={profile} onChange={(next) => { const value = next as WritingProfile; setProfile(value); if (publicationTarget?.domain !== value) setPublicationTarget(undefined); }} options={WRITING_PROFILES.map((item) => ({ value: item.value, label: item.label }))} />
+            <h2 id="writing-settings-title">写作</h2>
+            <p className={styles.description}>选择写作和审稿所用的研究领域与投稿规则。</p>
+        <Field label="研究领域">
+          <Select aria-label="研究领域" value={profile} onChange={(next) => { const value = next as WritingProfile; setProfile(value); if (publicationTarget?.domain !== value) setPublicationTarget(undefined); }} options={WRITING_PROFILES.map((item) => ({ value: item.value, label: item.label }))} />
         </Field>
         <PublicationTargetFields profile={profile} value={publicationTarget} onChange={setPublicationTarget} />
           </section>
           <section className={styles.section} hidden={!visible("ai")} aria-labelledby="ai-settings-title">
-            <h2 id="ai-settings-title">AI & Harness</h2>
-            <p className={styles.description}>Set the response language and model connection for Agent workflows.</p>
-        <Field label="AI response language">
-          <Select aria-label="AI response language" value={language} onChange={(next) => setLanguage(next as ResponseLanguage)} options={[{ value: "auto", label: "Follow user" }, { value: "zh-CN", label: "中文" }, { value: "en-US", label: "English" }]} />
+            <h2 id="ai-settings-title">AI 与模型配置</h2>
+            <p className={styles.description}>设置智能助手工作流的回复语言和模型连接。</p>
+        <Field label="AI 回复语言">
+          <Select aria-label="AI 回复语言" value={language} onChange={(next) => setLanguage(next as ResponseLanguage)} options={[{ value: "auto", label: "跟随用户" }, { value: "zh-CN", label: "中文" }, { value: "en-US", label: "英语" }]} />
         </Field>
         <section className="settings-agent" aria-labelledby="agent-settings-title">
-          <div><strong id="agent-settings-title">Harness</strong><span>{agentConfigured ? `Configured from ${agentSource === "environment" ? "server environment" : "this running server"}.` : "Configure a Harness model to enable Agent workflows."}</span></div>
-          <Field label="API key">
-            <TextField type="password" value={apiKey} onChange={setApiKey} placeholder={agentConfigured ? "Enter a replacement key" : "sk-…"} autoComplete="off" />
+          <div><strong id="agent-settings-title">模型连接</strong><span>{agentConfigured ? `配置来自 ${agentSource === "environment" ? "服务端环境" : "当前运行的服务端"}.` : "配置模型后即可启用智能助手工作流。"}</span></div>
+          <Field label="API 密钥">
+            <TextField type="password" value={apiKey} onChange={setApiKey} placeholder={agentConfigured ? "输入新的密钥" : "sk-…"} autoComplete="off" />
           </Field>
-          <Field label="Base URL" hint="optional">
+          <Field label="服务地址" hint="可选">
             <TextField type="url" value={baseURL} onChange={setBaseURL} placeholder="https://api.openai.com/v1" autoComplete="off" />
           </Field>
-          <Field label="Model" hint="optional">
-            <TextField value={model} onChange={setModel} placeholder="Use provider default" autoComplete="off" />
+          <Field label="模型" hint="可选">
+            <TextField value={model} onChange={setModel} placeholder="使用服务默认值" autoComplete="off" />
           </Field>
-          <Field label="Wire API">
-            <Select aria-label="Wire API" value={wireAPI} onChange={(next) => setWireAPI(next as AgentWireApi)} options={[{ value: "chat", label: "Chat Completions" }, { value: "responses", label: "Responses" }]} />
+          <Field label="接口协议">
+            <Select aria-label="接口协议" value={wireAPI} onChange={(next) => setWireAPI(next as AgentWireApi)} options={[{ value: "chat", label: "Chat Completions 接口" }, { value: "responses", label: "Responses 接口" }]} />
           </Field>
-          <div className="settings-agent__actions"><Button size="small" variant="secondary" loading={savingAgent} disabled={!apiKey.trim() || loading} onClick={() => void saveAgentSettings()}>{agentConfigured ? "Replace API key" : "Enable Agent"}</Button><small>The key is never returned or written to project files; it is cleared when the server restarts.</small></div>
+          <div className="settings-agent__actions"><Button size="small" variant="secondary" loading={savingAgent} disabled={!apiKey.trim() || loading} onClick={() => void saveAgentSettings()}>{agentConfigured ? "更换 API 密钥" : "启用智能助手"}</Button><small>密钥不会返回给客户端或写入项目文件，服务端重启后会清除。</small></div>
           {agentError ? <div className="form-error" role="alert">{agentError}</div> : null}
         </section>
           </section>
         {aclAvailable ? <section className={`${styles.section} settings-agent`} hidden={!visible("access")} aria-labelledby="acl-settings-title">
-          <div><h2 id="acl-settings-title">Path access rules</h2><span>Deny rules take precedence. A read denial also blocks editing and collaboration for that path.</span></div>
-          <Field label="File or directory prefix">
-            <TextField value={aclDraft.pathPrefix} onChange={(next) => setAclDraft((current) => ({ ...current, pathPrefix: next }))} placeholder="restricted or restricted/results.tex" />
+          <div><h2 id="acl-settings-title">路径访问规则</h2><span>拒绝规则优先。禁止读取某路径时，也会禁止该路径的编辑和协作。</span></div>
+          <Field label="文件或目录前缀">
+            <TextField value={aclDraft.pathPrefix} onChange={(next) => setAclDraft((current) => ({ ...current, pathPrefix: next }))} placeholder="restricted 或 restricted/results.tex" />
           </Field>
-          <Field label="Subject">
-            <Select aria-label="Subject" value={aclDraft.subjectType} onChange={(next) => { const subjectType = next as AclRule["subjectType"]; setAclDraft((current) => ({ ...current, subjectType, subjectId: subjectType === "project_role" ? "editor" : subjectType === "team_role" ? "member" : "" })); }} options={[{ value: "project_role", label: "Project role" }, { value: "team_role", label: "Team role" }, { value: "idp_group", label: "IdP group" }, { value: "user", label: "User ID" }]} />
+          <Field label="主体">
+            <Select aria-label="主体" value={aclDraft.subjectType} onChange={(next) => { const subjectType = next as AclRule["subjectType"]; setAclDraft((current) => ({ ...current, subjectType, subjectId: subjectType === "project_role" ? "editor" : subjectType === "team_role" ? "member" : "" })); }} options={[{ value: "project_role", label: "项目角色" }, { value: "team_role", label: "团队角色" }, { value: "idp_group", label: "身份服务用户组" }, { value: "user", label: "用户 ID" }]} />
           </Field>
-          {aclDraft.subjectType === "project_role" ? <Field label="Project role"><Select aria-label="Project role" value={aclDraft.subjectId} onChange={(next) => setAclDraft((current) => ({ ...current, subjectId: next }))} options={[{ value: "viewer", label: "Viewer" }, { value: "commenter", label: "Commenter" }, { value: "editor", label: "Editor" }, { value: "maintainer", label: "Maintainer" }, { value: "owner", label: "Owner" }]} /></Field> : aclDraft.subjectType === "team_role" ? <Field label="Team role"><Select aria-label="Team role" value={aclDraft.subjectId} onChange={(next) => setAclDraft((current) => ({ ...current, subjectId: next }))} options={[{ value: "member", label: "Member" }, { value: "admin", label: "Admin" }, { value: "owner", label: "Owner" }]} /></Field> : aclDraft.subjectType === "idp_group" ? <Field label="IdP group"><TextField value={aclDraft.subjectId} onChange={(next) => setAclDraft((current) => ({ ...current, subjectId: next }))} placeholder="https://idp.example:researchers" /></Field> : <Field label="User ID"><TextField value={aclDraft.subjectId} onChange={(next) => setAclDraft((current) => ({ ...current, subjectId: next }))} placeholder="user_…" /></Field>}
-          <Field label="Action">
-            <Select aria-label="Action" value={aclDraft.action} onChange={(next) => setAclDraft((current) => ({ ...current, action: next as ProjectAclAction }))} options={ACL_ACTIONS.map((action) => ({ value: action, label: action }))} />
+          {aclDraft.subjectType === "project_role" ? <Field label="项目角色"><Select aria-label="项目角色" value={aclDraft.subjectId} onChange={(next) => setAclDraft((current) => ({ ...current, subjectId: next }))} options={[{ value: "viewer", label: "查看者" }, { value: "commenter", label: "评论者" }, { value: "editor", label: "编辑者" }, { value: "maintainer", label: "维护者" }, { value: "owner", label: "所有者" }]} /></Field> : aclDraft.subjectType === "team_role" ? <Field label="团队角色"><Select aria-label="团队角色" value={aclDraft.subjectId} onChange={(next) => setAclDraft((current) => ({ ...current, subjectId: next }))} options={[{ value: "member", label: "成员" }, { value: "admin", label: "管理员" }, { value: "owner", label: "所有者" }]} /></Field> : aclDraft.subjectType === "idp_group" ? <Field label="身份服务用户组"><TextField value={aclDraft.subjectId} onChange={(next) => setAclDraft((current) => ({ ...current, subjectId: next }))} placeholder="https://idp.example:researchers" /></Field> : <Field label="用户 ID"><TextField value={aclDraft.subjectId} onChange={(next) => setAclDraft((current) => ({ ...current, subjectId: next }))} placeholder="user_…" /></Field>}
+          <Field label="操作">
+            <Select aria-label="操作" value={aclDraft.action} onChange={(next) => setAclDraft((current) => ({ ...current, action: next as ProjectAclAction }))} options={ACL_ACTIONS.map((action) => ({ value: action, label: statusLabel(action) }))} />
           </Field>
-          <Field label="Effect">
-            <Select aria-label="Effect" value={aclDraft.effect} onChange={(next) => setAclDraft((current) => ({ ...current, effect: next as AclRule["effect"] }))} options={[{ value: "deny", label: "Deny" }, { value: "allow", label: "Allow" }]} />
+          <Field label="效果">
+            <Select aria-label="效果" value={aclDraft.effect} onChange={(next) => setAclDraft((current) => ({ ...current, effect: next as AclRule["effect"] }))} options={[{ value: "deny", label: "拒绝" }, { value: "allow", label: "允许" }]} />
           </Field>
-          <div className="settings-agent__actions"><Button size="small" variant="secondary" loading={aclBusy} disabled={!aclDraft.subjectId.trim()} onClick={() => void saveAcl()}>Add rule</Button></div>
-          {aclRules.map((rule) => <div className="settings-export" key={rule.id}><div><strong>{rule.effect} {rule.action}: {rule.pathPrefix || "/"}</strong><span>{rule.subjectType.replace("_", " ")}: {rule.subjectId}</span></div><Button size="small" variant="ghost" disabled={aclBusy} onClick={() => void removeAcl(rule.id)}>Remove</Button></div>)}
+          <div className="settings-agent__actions"><Button size="small" variant="secondary" loading={aclBusy} disabled={!aclDraft.subjectId.trim()} onClick={() => void saveAcl()}>添加规则</Button></div>
+          {aclRules.map((rule) => <div className="settings-export" key={rule.id}><div><strong>{statusLabel(rule.effect)} {statusLabel(rule.action)}: {rule.pathPrefix || "/"}</strong><span>{statusLabel(rule.subjectType)}: {rule.subjectId}</span></div><Button size="small" variant="ghost" disabled={aclBusy} onClick={() => void removeAcl(rule.id)}>移除</Button></div>)}
           {aclError ? <div className="form-error" role="alert">{aclError}</div> : null}
         </section> : null}
           <section className={styles.section} hidden={!visible("backup")} aria-labelledby="backup-settings-title">
-            <h2 id="backup-settings-title">History & Export</h2>
-            <p className={styles.description}>Keep a local history of your work and download a portable copy.</p>
-        <div className="settings-export"><div><strong>Automatic Git history</strong><span>Accepted saves create local Git checkpoints in the FastWrite project history.</span></div></div>
-        <div className="settings-export"><div><strong>Workspace snapshot</strong><span>Download all source files as a portable tar.gz archive.</span></div><Button loading={exporting} onClick={() => { setExporting(true); setError(""); void downloadFile(api.projects.exportUrl(project.id), `fastwrite-${project.id}.tar.gz`).catch(failure => setError(failure instanceof Error ? failure.message : "Could not export workspace")).finally(() => setExporting(false)); }}><Icon name={icons.cloudDownload} />Export</Button></div>
+            <h2 id="backup-settings-title">历史与导出</h2>
+            <p className={styles.description}>保存工作历史，并下载可迁移的副本。</p>
+        <div className="settings-export"><div><strong>自动记录 Git 历史</strong><span>成功保存后，将在 FastWrite 项目历史中创建本地 Git 检查点。</span></div></div>
+        <div className="settings-export"><div><strong>工作区快照</strong><span>将全部源文件下载为可迁移的 tar.gz 压缩包。</span></div><Button loading={exporting} onClick={() => { setExporting(true); setError(""); void downloadFile(api.projects.exportUrl(project.id), `fastwrite-${project.id}.tar.gz`).catch(failure => setError(failure instanceof Error ? failure.message : "无法导出工作区")).finally(() => setExporting(false)); }}><Icon name={icons.cloudDownload} />导出</Button></div>
           </section>
         </div>
       </div>
       <footer className={styles.footer}>
-        <div role="status">{error ? <span className="form-error" role="alert">{error}</span> : saved ? "Settings saved" : "Save to apply your changes."}</div>
-        <Button variant="primary" data-save-command icon={<Icon name={icons.save} />} loading={loading} disabled={!name.trim() || !mainDocument || savingAgent} onClick={() => void save()}>Save changes</Button>
+        <div role="status">{error ? <span className="form-error" role="alert">{error}</span> : saved ? "设置已保存" : "保存后应用更改。"}</div>
+        <Button variant="primary" data-save-command icon={<Icon name={icons.save} />} loading={loading} disabled={!name.trim() || !mainDocument || savingAgent} onClick={() => void save()}>保存更改</Button>
       </footer>
     </div>
   );

@@ -218,7 +218,7 @@ console.log(JSON.stringify({ result: updating ? 'baseline-updated' : 'pass' }));
  */
 async function waitForCompiledPdf(page) {
   const pdfPreview = page.locator('section[aria-label="PDF preview"]');
-  await pdfPreview.getByText('Compiled successfully').waitFor({ timeout: 120_000 });
+  await pdfPreview.getByText("编译成功").waitFor({ timeout: 120_000 });
   await pdfPreview.locator('canvas').first().waitFor({ state: 'visible', timeout: 30_000 });
 }
 

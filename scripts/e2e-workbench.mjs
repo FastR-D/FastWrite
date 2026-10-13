@@ -18,8 +18,8 @@ try {
   await context.request.post(`${root}/history/checkpoint`);
   for (const path of ['other.tex', 'third.tex']) assert.ok((await context.request.post(`${root}/files`, { data: { path, content: path } })).ok());
   await page.goto(`${base}/projects/${project.id}`);
-  await page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true }).waitFor();
-  const activity = page.getByRole('navigation', { name: 'Workspace views' });
+  await page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true }).waitFor();
+  const activity = page.getByRole('navigation', { name: "工作区视图" });
   const tabs = page.getByRole('group', { name: 'Open editors controls' });
   await tabs.getByRole('tab', { name: 'main.tex', exact: true }).dblclick();
   await page.locator('span[title="other.tex"]').click();
@@ -36,14 +36,14 @@ try {
   await tabs.getByRole('tab', { name: 'other.tex', exact: true }).waitFor({ state: 'detached' });
   await tabs.getByRole('tab', { name: 'main.tex', exact: true }).click();
   await page.keyboard.press('Control+p');
-  await page.getByRole('textbox', { name: 'Find file by name' }).fill('other.tex');
+  await page.getByRole('textbox', { name: "按名称查找文件" }).fill('other.tex');
   await page.getByRole('option', { name: 'other.tex', exact: true }).waitFor();
-  await page.getByRole('textbox', { name: 'Find file by name' }).press('Enter');
-  await page.getByRole('textbox', { name: 'Source editor for other.tex', exact: true }).waitFor();
+  await page.getByRole('textbox', { name: "按名称查找文件" }).press('Enter');
+  await page.getByRole('textbox', { name: "源文件编辑器： other.tex", exact: true }).waitFor();
   await tabs.getByRole('tab', { name: 'main.tex', exact: true }).click();
-  await page.getByRole('button', { name: 'Hide panel', exact: true }).click();
+  await page.getByRole('button', { name: "隐藏面板", exact: true }).click();
   assert.equal(await page.locator('#bottom-ai-panel').isVisible(), false);
-  await page.getByRole('button', { name: 'Show panel', exact: true }).click();
+  await page.getByRole('button', { name: "显示面板", exact: true }).click();
   await page.locator('#bottom-workbench-panel').waitFor({ state: 'visible' });
 
 
@@ -79,7 +79,7 @@ try {
   const dirty = await (await context.request.get(`${root}/file?path=main.tex`)).json();
   assert.ok((await context.request.put(`${root}/file?path=main.tex`, { data: { content: dirty.content + '% Working change\n', baseVersion: dirty.file.version } })).ok());
   await page.reload();
-  const changes = page.getByRole('region', { name: 'Changes', exact: true });
+  const changes = page.getByRole('region', { name: "更改", exact: true });
   /*
    * `exact` matters twice over. The group is scoped because a path can appear in
    * both groups at once, and the name is exact because the row's own actions are
@@ -93,23 +93,23 @@ try {
    * The layout combobox is asserted for what it still controls — its own value —
    * because the comparison it would re-lay-out never loads (reason 1 above).
    */
-  await page.getByRole('combobox', { name: 'Diff layout' }).click();
-  await page.getByRole('option', { name: 'Inline', exact: true }).click();
-  assert.equal((await page.getByRole('combobox', { name: 'Diff layout' }).innerText()).trim(), 'Inline');
+  await page.getByRole('combobox', { name: "差异布局" }).click();
+  await page.getByRole('option', { name: "行内对比", exact: true }).click();
+  assert.equal((await page.getByRole('combobox', { name: "差异布局" }).innerText()).trim(), 'Inline');
   /*
    * Close it again: the source editor tab is unmounted while the comparison tab
    * is active, and `source retained` below is about the source coming back.
    */
-  await page.getByRole('button', { name: 'Close comparison', exact: true }).click();
+  await page.getByRole('button', { name: "关闭对比", exact: true }).click();
   await page.locator('.workspace-diff').waitFor({ state: 'detached' });
 
-  assert.equal(await page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true }).count(), 1);
+  assert.equal(await page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true }).count(), 1);
   await activity.getByRole('button', { name: 'Git', exact: true }).click();
   assert.equal(await page.locator('.workspace-sidebar').isVisible(), false);
   await page.keyboard.press('Control+Shift+e');
   assert.equal(await page.locator('#sidebar-files').isVisible(), true);
   await page.setViewportSize({ width: 640, height: 900 });
-  await activity.getByRole('button', { name: 'Evidence', exact: true }).click();
+  await activity.getByRole('button', { name: "证据", exact: true }).click();
   assert.equal(await page.locator('#sidebar-evidence').isVisible(), true, 'narrow view remains reachable');
   assert.equal(await activity.isVisible(), true);
   assert.deepEqual(errors, []);

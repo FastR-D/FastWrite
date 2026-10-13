@@ -16,14 +16,14 @@ try {
     assert.ok(response.ok(), await response.text());
   }
   await page.goto(`${base}/projects/${project.id}`);
-  await page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true }).waitFor();
+  await page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true }).waitFor();
   await page.locator('span[title="perf-1.tex"]').waitFor();
   const samples = [];
   for (let index = 1; index <= 20; index++) {
     const item = page.locator(`span[title="perf-${index}.tex"]`);
     const started = performance.now();
     await item.click();
-    await page.getByRole('textbox', { name: `Source editor for perf-${index}.tex`, exact: true }).waitFor();
+    await page.getByRole('textbox', { name: `源文件编辑器： perf-${index}.tex`, exact: true }).waitFor();
     samples.push(performance.now() - started);
   }
   const sorted = [...samples].sort((a, b) => a - b);

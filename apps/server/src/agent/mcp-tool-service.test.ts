@@ -35,7 +35,7 @@ test("search revalidates earlier result paths after later reads before returning
  const registry=new McpRegistry();registry.register({id:"workspace",name:"Workspace",version:"1",enabled:true,tools:[{name:"search",description:"search",inputSchema:{type:"object",required:["query"],properties:{query:{type:"string"}}}}]});
  let revoked=false;const paths:string[]=[];
  const service=new McpToolService(registry,{async tree(){return [{type:"file",path:"first.tex"},{type:"file",path:"second.tex"}];},async readTextFile(_id:string,path:string){paths.push(path);if(path==="second.tex")revoked=true;return {content:"private result",file:{version:1}};}} as never);
- await expect(service.call("project","workspace.search",{query:"private"},{allow:["workspace.search"]})).rejects.toMatchObject({status:403});
+ await expect(service.call("project","workspace.search",{query:"private"},{allow:["workspace.search"]},{authorizePath:path=>{if(revoked && path==="first.tex")throw new ApiError(403,"revoked","Path access revoked");}})).rejects.toMatchObject({status:403});
  expect(paths).toEqual(["first.tex","second.tex"]);
 });
 
@@ -44,9 +44,9 @@ test("read and compile withhold results when access expires while awaiting execu
  const registry=new McpRegistry();registry.register({id:"workspace",name:"Workspace",version:"1",enabled:true,tools:[{name:"read",description:"read",inputSchema:{type:"object",required:["path"],properties:{path:{type:"string"}}}}]});registry.register({id:"latex",name:"LaTeX",version:"1",enabled:true,tools:[{name:"compile",description:"compile",inputSchema:{type:"object"}}]});
  let revoked=false;const validate=()=>{if(revoked)throw new ApiError(401,"expired","Session expired");};
  const service=new McpToolService(registry,{async readTextFile(){revoked=true;return {content:"private result",file:{version:1}};}} as never,{async compile(){revoked=true;return {pdfPath:"private.pdf"};}} as never);
- await expect(service.call("project","workspace.read",{path:"main.tex"},{allow:["workspace.read"]})).rejects.toMatchObject({status:401});
+ await expect(service.call("project","workspace.read",{path:"main.tex"},{allow:["workspace.read"]},{validate})).rejects.toMatchObject({status:401});
  revoked=false;
- await expect(service.call("project","latex.compile",{},{allow:["latex.compile"]})).rejects.toMatchObject({status:401});
+ await expect(service.call("project","latex.compile",{},{allow:["latex.compile"]},{validate})).rejects.toMatchObject({status:401});
 });
 
 
@@ -81,7 +81,7 @@ test("MCP forwards cancellation to in-flight compilation and records one failed 
   const database=new JsonDatabase(directory);await database.initialize();const registry=new McpRegistry();registry.register({id:"latex",name:"LaTeX",version:"1",enabled:true,tools:[{name:"compile",description:"compile",inputSchema:{type:"object"}}]});
   const controller=new AbortController();let entered!:()=>void;const ready=new Promise<void>(resolve=>{entered=resolve;});
   const service=new McpToolService(registry,{} as never,{async compile(_project:string,signal:AbortSignal){expect(signal).toBe(controller.signal);return new Promise((_resolve,reject)=>{signal.addEventListener("abort",()=>reject(new ApiError(409,"compile_cancelled","cancelled")),{once:true});entered();});}} as never,database);
-  const operation=service.call("project","latex.compile",{},{allow:["latex.compile"]});void operation.catch(()=>{});
+  const operation=service.call("project","latex.compile",{},{allow:["latex.compile"]},{signal:controller.signal});void operation.catch(()=>{});
   await ready;controller.abort();await expect(operation).rejects.toMatchObject({code:"compile_cancelled"});
   expect(service.audit("project").map(item=>item.status)).toEqual(["failed"]);
  }finally{await rm(directory,{recursive:true,force:true});}
@@ -89,14 +89,12 @@ test("MCP forwards cancellation to in-flight compilation and records one failed 
 
 test("external research cannot bypass approval through the generic MCP executor",async()=>{
  const registry=new McpRegistry();registry.register({id:"research",name:"Research",version:"1",enabled:true,tools:[{name:"search",description:"search",inputSchema:{type:"object"}}]});
- let calls=0;const service=new McpToolService(registry,{} as never);
+ const service=new McpToolService(registry,{} as never);
  await expect(service.call("project","research.search",{query:"topic"},{allow:["research.search"]})).rejects.toMatchObject({code:"mcp_approval_required"});
- expect(calls).toBe(0);
 });
 
 test("credential-like research queries are blocked before approval or provider calls",async()=>{
  const registry=new McpRegistry();registry.register({id:"research",name:"Research",version:"1",enabled:true,tools:[{name:"search",description:"search",inputSchema:{type:"object"}}]});
- let calls=0,approvals=0;const service=new McpToolService(registry,{} as never);
+ const service=new McpToolService(registry,{} as never);
  await expect(service.call("project","research.search",{query:"api_key="+"fixture-secret-material-1234567890"},{allow:["research.search"]})).rejects.toMatchObject({code:"mcp_sensitive_input"});
- expect(calls).toBe(0);expect(approvals).toBe(0);
 });

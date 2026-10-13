@@ -1,3 +1,4 @@
+import type { ReferencePaperService } from "../references/service";
 import type { AgentRun, ChangeSet, DraftOutlineSection, DraftPlan, DraftPlanResponse, DraftRequest, TextChange } from "@fastwrite/shared";
 import { isTextFile, normalizeWorkspacePath } from "@fastwrite/shared";
 import { ApiError } from "../http";
@@ -16,15 +17,17 @@ export class DraftService {
     private readonly database: JsonDatabase,
     private readonly workspaces: WorkspaceService,
     private readonly skills: SkillRegistry,
-    private readonly provider?: AgentProvider | AgentGateway
+    private readonly provider?: AgentProvider | AgentGateway,
+    private readonly references?: ReferencePaperService
   ) {}
 
   private get agent(): AgentProvider | undefined { return this.provider as AgentProvider | undefined; }
 
-  async plan(projectId: string, request: DraftRequest, requestSignal?: AbortSignal): Promise<DraftPlanResponse> {
+  async plan(projectId: string, request: DraftRequest, requestSignal?: AbortSignal, actorUserId?: string): Promise<DraftPlanResponse> {
     if (!this.agent?.planDraft) throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable Draft Agent");
     this.validateRequest(request);
     const normalizedRequest = this.normalizeRequest(request);
+    const styleReferenceContext = await this.references?.resolve(projectId, request.references, requestSignal, false, actorUserId);
     const project = this.workspaces.getProject(projectId);
     const loaded = await this.skills.load(project.skill, project.publicationTarget);
     const workflowInstructions = await this.skills.loadWorkflow("draft");
@@ -33,6 +36,7 @@ export class DraftService {
       id: `run_${crypto.randomUUID()}`,
       projectId,
       type: "draft",
+      ...(styleReferenceContext ? { styleReferenceContext } : {}),
       status: "running",
       objective: `Plan a paper draft for: ${(normalizedRequest.brief ?? normalizedRequest.topic ?? "research brief").slice(0, 240)}`,
       skill: structuredClone(project.skill),
@@ -40,14 +44,14 @@ export class DraftService {
       createdAt,
       updatedAt: createdAt,
       steps: [
-        { id: "outline", label: "Plan paper structure", status: "running" },
-        { id: "draft", label: "Generate section drafts", status: "pending" },
-        { id: "approval", label: "Review multi-file changes", status: "pending" }
+        { id: "outline", label: "规划论文结构", status: "running" },
+        { id: "draft", label: "生成章节初稿", status: "pending" },
+        { id: "approval", label: "审核多文件更改", status: "pending" }
       ],
     };
     await this.database.mutate((state) => state.agentRuns.push(run));
     try {
-      const input = { request: normalizedRequest, skill: project.skill, skillInstructions: `${workflowInstructions}\n\n${loaded.instructions}`, venueInstructions: loaded.venueInstructions };
+      const input = { ...(styleReferenceContext ? { styleReferenceContext } : {}), request: normalizedRequest, skill: project.skill, skillInstructions: `${workflowInstructions}\n\n${loaded.instructions}`, venueInstructions: loaded.venueInstructions };
       const result = await runAgentOperation<{ outline: DraftOutlineSection[] }>((signal) => this.agent!.planDraft!(input, signal), { signal: requestSignal, label: "Draft planning" });
       const outline = this.validateOutline(result.outline, project.mainDocument);
       const plan: DraftPlan = {
@@ -56,6 +60,7 @@ export class DraftService {
         agentRunId: run.id,
         status: "proposed",
         request: normalizedRequest,
+        ...(styleReferenceContext ? { styleReferenceContext } : {}),
         outline,
         createdAt,
         updatedAt: now()
@@ -98,6 +103,7 @@ export class DraftService {
     try {
       const input = {
         request: plan.request,
+        ...(plan.styleReferenceContext ? { styleReferenceContext: plan.styleReferenceContext } : {}),
         outline: checkedOutline,
         mainDocument: project.mainDocument,
         skill: plannedSkill,
@@ -183,8 +189,9 @@ export class DraftService {
   }
 
   private normalizeRequest(request: DraftRequest): DraftRequest {
-    if (request.brief?.trim()) return { brief: request.brief.trim().slice(0, 20_000) };
+    if (request.brief?.trim()) return { brief: request.brief.trim().slice(0, 20_000), ...(request.references ? { references: request.references } : {}) };
     return {
+      ...(request.references ? { references: request.references } : {}),
       topic: request.topic!.trim(),
       researchQuestion: request.researchQuestion!.trim(),
       contributions: request.contributions!.map((item) => item.trim()).filter(Boolean),

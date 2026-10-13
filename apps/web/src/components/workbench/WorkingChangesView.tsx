@@ -45,7 +45,7 @@ export function WorkingChangesView({ projectId, version, onCompare, onCommit, on
       const next = await api.projects.workingStatus(projectId);
       if (request === generation.current) { setStatus(next); setError(""); }
     } catch (failure) {
-      if (request === generation.current) setError(failure instanceof Error ? failure.message : "Working changes unavailable");
+      if (request === generation.current) setError(failure instanceof Error ? failure.message : "无法获取当前更改");
     }
   }, [projectId]);
 
@@ -68,7 +68,7 @@ export function WorkingChangesView({ projectId, version, onCompare, onCommit, on
   const act = async (run: () => Promise<void>) => {
     setBusy(true); setError("");
     try { await onFlush(); await run(); await load(); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "The Git operation failed"); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "Git 操作失败"); }
     finally { setBusy(false); }
   };
 
@@ -97,32 +97,32 @@ export function WorkingChangesView({ projectId, version, onCompare, onCommit, on
 
   const commit = () => { if (!canCommit) return; void act(async () => { await onCommit(message.trim()); setMessage(""); }); };
 
-  if (!status && !error) return <p role="status">Loading changes…</p>;
-  return <section className="working-changes" aria-label="Working changes">
-    <Field label="Commit message">
+  if (!status && !error) return <p role="status">正在加载更改…</p>;
+  return <section className="working-changes" aria-label="当前更改">
+    <Field label="提交说明">
       <TextArea
         value={message}
         onChange={setMessage}
         rows={2}
         resize="none"
-        placeholder="Describe this change"
-        aria-label="Commit message"
+        placeholder="描述本次更改"
+        aria-label="提交说明"
         onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); commit(); } }}
       />
     </Field>
-    <Button variant="primary" disabled={!canCommit} onClick={commit}>{busy ? "Working…" : "Commit"}</Button>
+    <Button variant="primary" disabled={!canCommit} onClick={commit}>{busy ? "正在处理…" : "提交"}</Button>
     {error ? <Alert tone="error">{error}</Alert> : null}
 
-    {merge.length ? <Group title="Merge Changes" files={merge} group="merge" count={merge.length} onOpen={open} /> : null}
-    <Group title="Changes" files={changes} group="changes" count={changes.length} onOpen={open}
-      bulkAction={changes.length ? { label: "Stage all changes", run: () => act(() => api.projects.stagePaths(projectId, changes.map((file) => file.path))) } : undefined}
+    {merge.length ? <Group title="合并更改" files={merge} group="merge" count={merge.length} onOpen={open} /> : null}
+    <Group title="更改" files={changes} group="changes" count={changes.length} onOpen={open}
+      bulkAction={changes.length ? { label: "暂存全部更改", run: () => act(() => api.projects.stagePaths(projectId, changes.map((file) => file.path))) } : undefined}
       perFile={{ stage: (file) => act(() => api.projects.stagePaths(projectId, [file.path])),
                  discard: (file) => act(() => onDiscard([file.path])) }} />
-    <Group title="Staged Changes" files={staged} group="staged" count={staged.length} onOpen={open}
-      bulkAction={staged.length ? { label: "Unstage all changes", run: () => act(() => api.projects.unstagePaths(projectId, staged.map((file) => file.path))) } : undefined}
+    <Group title="已暂存更改" files={staged} group="staged" count={staged.length} onOpen={open}
+      bulkAction={staged.length ? { label: "取消暂存全部更改", run: () => act(() => api.projects.unstagePaths(projectId, staged.map((file) => file.path))) } : undefined}
       perFile={{ unstage: (file) => act(() => api.projects.unstagePaths(projectId, [file.path])) }} />
 
-    {!merge.length && !changes.length && !staged.length ? <EmptyState title="No changes" detail="The workspace matches the last commit." /> : null}
+    {!merge.length && !changes.length && !staged.length ? <EmptyState title="没有更改" detail="工作区与最近一次提交一致。" /> : null}
   </section>;
 }
 
@@ -140,7 +140,7 @@ function Group({ title, files, group, count, onOpen, bulkAction, perFile }: {
   if (!count) return null;
   return <section className="working-group" aria-label={title}>
     <header className="working-group__header">
-      <h3>{title} <span aria-label={`${count} files`}>{count}</span></h3>
+      <h3>{title} <span aria-label={`${count} 个文件`}>{count}</span></h3>
       {bulkAction ? <Button size="small" variant="ghost" onClick={bulkAction.run}>{bulkAction.label}</Button> : null}
     </header>
     <div className="working-group__files">

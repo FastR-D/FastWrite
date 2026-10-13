@@ -22,8 +22,8 @@ try {
   assert.ok((await context.request.delete(`${root}/files?path=delete.tex`)).ok());
   assert.ok((await context.request.post(`${root}/files`, { data: { path: 'added.tex', content: 'added current\n' } })).ok());
   await page.goto(`${base}/projects/${project.id}`);
-  const source = page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true }); await source.waitFor();
-  await page.getByRole('navigation', { name: 'Workspace views' }).getByRole('button', { name: 'Git', exact: true }).click();
+  const source = page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true }); await source.waitFor();
+  await page.getByRole('navigation', { name: "工作区视图" }).getByRole('button', { name: 'Git', exact: true }).click();
   /*
    * The list is now the sidebar's `Changes` group, not the old
    * `CurrentChangesView` list, and there is no baseline picker to set: the
@@ -32,10 +32,10 @@ try {
    * substring-matches `Staged Changes` and is a strict-mode violation as soon as
    * both groups are populated.
    */
-  const panel = page.getByRole('region', { name: 'Working changes' });
+  const panel = page.getByRole('region', { name: "当前更改" });
   await panel.waitFor();
-  const changes = page.getByRole('region', { name: 'Changes', exact: true });
-  const staged = page.getByRole('region', { name: 'Staged Changes', exact: true });
+  const changes = page.getByRole('region', { name: "更改", exact: true });
+  const staged = page.getByRole('region', { name: "已暂存更改", exact: true });
   await until(async () => { const text = await changes.innerText(); return ['main.tex', 'rename-old.tex', 'rename-new.tex', 'delete.tex', 'added.tex'].every(path => text.includes(path)); }, 'saved working tree change list');
   const unstaged = await changes.innerText();
   assert.match(unstaged, /M\s+main\.tex/);
@@ -52,7 +52,7 @@ try {
   assert.equal(await staged.count(), 0, 'nothing is staged before the stage-all');
 
   const beforeStage = await head();
-  await changes.getByRole('button', { name: 'Stage all changes', exact: true }).click();
+  await changes.getByRole('button', { name: "暂存全部更改", exact: true }).click();
   await until(async () => (await staged.innerText()).includes('rename-old.tex → rename-new.tex'), 'staged rename pairs the old and new paths');
   const stagedText = await staged.innerText();
   assert.match(stagedText, /rename-old\.tex → rename-new\.tex/);
@@ -69,8 +69,8 @@ try {
   const beforeReload = await head();
   assert.equal(beforeReload, beforeStage, 'staging does not move HEAD');
   await page.reload();
-  await page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true }).waitFor();
-  const reloaded = page.getByRole('region', { name: 'Staged Changes', exact: true });
+  await page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true }).waitFor();
+  const reloaded = page.getByRole('region', { name: "已暂存更改", exact: true });
   await until(async () => (await reloaded.innerText()).includes('rename-old.tex → rename-new.tex'), 'the index survives the reload');
   assert.equal(await head(), beforeReload, 're-reading the panel does not create or move a managed checkpoint');
   assert.deepEqual(errors, []);

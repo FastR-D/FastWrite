@@ -30,7 +30,7 @@ export async function readDroppedFiles(
   }
 
   if (files.length === 0) {
-    throw new Error("No files were dropped");
+    throw new Error("未拖入文件");
   }
 
   return files;
@@ -43,10 +43,10 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
       if (reader.result instanceof ArrayBuffer) {
         resolve(reader.result);
       } else {
-        reject(new Error("Failed to read file as ArrayBuffer"));
+        reject(new Error("无法读取文件数据"));
       }
     };
-    reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
+    reader.onerror = () => reject(reader.error || new Error("无法读取文件"));
     reader.readAsArrayBuffer(file);
   });
 }
