@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile, stat, rename } from "node:fs/promises";
+import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { JsonDatabase } from "./database";
+import type { DatabaseState, JsonDatabase } from "./database";
 import type { ObjectStore } from "./object-storage";
 
 export class BackupService {
@@ -29,18 +29,14 @@ export class BackupService {
     if (!this.objectStore) throw new Error("Object store is not configured");
     const object = await this.objectStore.get(key); const payload = JSON.parse(new TextDecoder().decode(object.body)) as { format?: string; version?: number; state?: { schemaVersion?: number; projects?: unknown[] } };
     if (payload.format !== "fastwrite-json-backup" || payload.version !== 1 || !payload.state || !Number.isInteger(payload.state.schemaVersion) || !Array.isArray(payload.state.projects)) throw new Error("Invalid FastWrite backup");
-    const target = join(this.dataDirectory, "database.json"); const temporary = `${target}.${process.pid}.restore.tmp`;
-    await mkdir(this.dataDirectory, { recursive: true }); await writeFile(temporary, JSON.stringify(payload.state, null, 2), "utf8"); await rename(temporary, target);
-    return { schemaVersion: payload.state.schemaVersion!, projects: payload.state.projects.length };
+    await this.database.replaceState(payload.state as DatabaseState);
+    return { schemaVersion: this.database.version(), projects: this.database.snapshot().projects.length };
   }
   async restore(path: string, options: { confirm: "replace-database" }): Promise<{ schemaVersion: number; projects: number }> {
     if (options.confirm !== "replace-database") throw new Error("Explicit restore confirmation is required");
-    const payload = JSON.parse(await readFile(path, "utf8")) as { format?: string; state?: { schemaVersion?: number; projects?: unknown[] } };
-    if (payload.format !== "fastwrite-json-backup" || !payload.state || !Number.isInteger(payload.state.schemaVersion) || !Array.isArray(payload.state.projects)) throw new Error("Invalid FastWrite backup");
-    const target = join(this.dataDirectory, "database.json"); const temporary = `${target}.${process.pid}.restore.tmp`;
-    await mkdir(this.dataDirectory, { recursive: true });
-    await writeFile(temporary, JSON.stringify(payload.state, null, 2), "utf8");
-    await rename(temporary, target);
-    return { schemaVersion: payload.state.schemaVersion!, projects: payload.state.projects.length };
+    const payload = JSON.parse(await readFile(path, "utf8")) as { format?: string; version?: number; state?: { schemaVersion?: number; projects?: unknown[] } };
+    if (payload.format !== "fastwrite-json-backup" || payload.version !== 1 || !payload.state || !Number.isInteger(payload.state.schemaVersion) || !Array.isArray(payload.state.projects)) throw new Error("Invalid FastWrite backup");
+    await this.database.replaceState(payload.state as DatabaseState);
+    return { schemaVersion: this.database.version(), projects: this.database.snapshot().projects.length };
   }
 }

@@ -1,3 +1,4 @@
+import { useFileDropTarget } from "../../lib/uploads/use-file-drop-target";
 import { useEffect, useMemo, useState, type HTMLAttributes } from "react";
 import { Icon, icons, Tree, treeRowClasses } from "../ui";
 import type { WorkspaceTreeNode } from "@fastwrite/shared";
@@ -6,6 +7,7 @@ interface FileTreeProps {
   nodes: WorkspaceTreeNode[];
   selectedPath: string | null;
   mainDocument: string;
+  onDropFiles?: (transfer: DataTransfer, directory: string) => void;
   onPin?: (node: WorkspaceTreeNode) => void;
   onSelect: (node: WorkspaceTreeNode) => void;
   onExpand?: (path: string) => Promise<void>;
@@ -24,7 +26,8 @@ const ROW_HEIGHT = 27;
  * label keeps its `<span title={path}>` — sixteen Playwright selectors look for
  * exactly that, so it travels through `renderRow` unchanged.
  */
-export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand, onPin }: FileTreeProps) {
+export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand, onPin, onDropFiles }: FileTreeProps) {
+  const drop = useFileDropTarget(onDropFiles);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState<Set<string>>(() => new Set());
   const [loadFailed, setLoadFailed] = useState<Set<string>>(() => new Set());
@@ -73,7 +76,7 @@ export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand
   };
 
   const rowProps = ({ node }: VisibleNode): HTMLAttributes<HTMLButtonElement> => node.type === "directory"
-    ? { "aria-expanded": expanded.has(node.path), "aria-busy": loading.has(node.path), onClick: () => toggle(node) }
+    ? { ...drop.props(node.path), title: drop.activeTarget === node.path ? `Drop files into ${node.path}` : node.path, "aria-expanded": expanded.has(node.path), "aria-busy": loading.has(node.path), onClick: () => toggle(node) }
     : { onClick: () => onSelect(node), onDoubleClick: () => onPin?.(node) };
 
   return (
@@ -86,7 +89,7 @@ export function FileTree({ nodes, selectedPath, mainDocument, onSelect, onExpand
       selectedKey={selectedPath}
       rowIndent={({ node, depth }) => (node.type === "directory" ? 8 : 26) + depth * 14}
       rowProps={rowProps}
-      renderRow={(row) => <TreeRow row={row} expanded={expanded} loading={loading} mainDocument={mainDocument} />}
+      renderRow={(row) => <><TreeRow row={row} expanded={expanded} loading={loading} mainDocument={mainDocument} />{drop.activeTarget === row.node.path ? <span className="upload-drop-hint">Drop here</span> : null}</>}
     />
   );
 }

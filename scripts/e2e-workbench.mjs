@@ -20,7 +20,7 @@ try {
   await page.goto(`${base}/projects/${project.id}`);
   await page.getByRole('textbox', { name: 'Source editor for main.tex', exact: true }).waitFor();
   const activity = page.getByRole('navigation', { name: 'Workspace views' });
-  const tabs = page.getByRole('tablist', { name: 'Open editors' });
+  const tabs = page.getByRole('group', { name: 'Open editors' });
   await tabs.getByRole('tab', { name: 'main.tex', exact: true }).dblclick();
   await page.locator('span[title="other.tex"]').click();
   await tabs.getByRole('tab', { name: 'other.tex', exact: true }).waitFor();

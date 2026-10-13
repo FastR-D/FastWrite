@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { Button, Dialog, Field, FileField, Icon, icons, TextField } from "../ui";
+import type { DroppedFile } from "../../lib/uploads/drop-files";
 
 interface AddFileDialogProps {
   open: boolean;
   projectId: string;
   onClose: () => void;
-  onAdded: (path: string) => void | Promise<void>;
+  onAdded: (path: string, targetKind?: "skill-resource" | "reference-artifact") => void | Promise<void>;
+  initialFiles?: DroppedFile[];
+  targetPath?: string;
 }
 
-export function AddFileDialog({ open, projectId, onClose, onAdded }: AddFileDialogProps) {
+export function AddFileDialog({ open, projectId, onClose, onAdded, initialFiles, targetPath }: AddFileDialogProps) {
   const [file, setFile] = useState<File | null>(null);
   const [path, setPath] = useState("");
   const [loading, setLoading] = useState(false);
@@ -17,10 +20,21 @@ export function AddFileDialog({ open, projectId, onClose, onAdded }: AddFileDial
 
   useEffect(() => {
     if (!open) return;
-    setFile(null);
-    setPath("");
+    if (initialFiles && initialFiles.length > 0) {
+      const dropped = initialFiles[0];
+      if (dropped) {
+        // Convert ArrayBuffer back to File
+        const blob = new Blob([dropped.content], { type: dropped.type });
+        const fileObj = new File([blob], dropped.name, { type: dropped.type });
+        setFile(fileObj);
+        setPath(dropped.path);
+      }
+    } else {
+      setFile(null);
+      setPath(targetPath || "");
+    }
     setError("");
-  }, [open]);
+  }, [open, initialFiles, targetPath]);
 
   const upload = async () => {
     if (!file || !path.trim()) return;

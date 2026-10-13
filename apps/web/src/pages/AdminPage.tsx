@@ -1,3 +1,4 @@
+import { HarnessProfileEditor } from "../components/workspace/ProjectHarnessProfile";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, ApiClientError } from "../api/client";
 import type { SupportAccessRequest } from "@fastwrite/shared";
@@ -88,6 +89,7 @@ export function AdminPage() {
       {health.jobs ? <Metric icon={<Icon name={icons.pulse} />} label="Queued jobs" value={health.jobs.queued} /> : null}
       {health.postgres ? <Metric icon={<Icon name={icons.database} />} label={health.postgres.healthy ? "Postgres healthy" : health.postgres.configured ? "Postgres degraded" : "Postgres off"} value={health.postgres.failures} /> : null}
     </section> : null}
+    {canManageAccounts ? <section className="admin-section"><HarnessProfileEditor scope="system"/></section> : null}
     {identityProviders ? <section className="admin-section"><header><div><h2>Identity providers</h2><p>Configuration metadata only. Client secrets and issued tokens are never shown here.</p></div></header><div className="admin-table-wrap"><Table label="Identity providers" columns={["Provider", "Status", "Public configuration"]}><TableRow><TableCell>Local accounts</TableCell><TableCell><span className="admin-status admin-status--active">configured</span></TableCell><TableCell>Break-glass sign-in enabled</TableCell></TableRow><IdentityProviderRow name="OIDC" provider={identityProviders.oidc} details={[identityProviders.oidc.issuer, identityProviders.oidc.redirectUri, identityProviders.oidc.clientId].filter(Boolean).join(" · ")} /><IdentityProviderRow name="CAS" provider={identityProviders.cas} details={[identityProviders.cas.serverUrl, identityProviders.cas.serviceUrl].filter(Boolean).join(" · ")} /></Table></div></section> : null}
     <section className="admin-section">
       <header><div><h2>Account controls</h2><p>Actions revoke active access immediately and require an audit reason.</p></div></header>

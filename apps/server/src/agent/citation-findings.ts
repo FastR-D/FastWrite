@@ -1,14 +1,19 @@
+import { stripLatexComments } from "./latex-comments";
 import type { ChangeSet, HunkFinding } from "@fastwrite/shared";
 
-const CITATION = /\\(?:cite|citep|citet|parencite|textcite|autocite)\*?(?:\[[^\]]*\]){0,2}\{([^}]+)\}/g;
+const CITATION = /\\(?:cite|citep|citet|citealt|citealp|citeauthor|citeyearpar|citeyear|citenum|parencite|textcite|autocite|footcite|footcitetext|smartcite|supercite|nocite)\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^}]+)\}/gi;
 
 export function isEvidencePlaceholderCitation(key: string): boolean {
   const normalized = key.replace(/[\[\]{}]/g, " ").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
   return /^(?:evidence|required evidence|evidence required|citation|citation needed|citation required|cite needed|todo|tbd|placeholder|\?+)$/.test(normalized);
 }
 
+export function citationKeys(content: string): string[] {
+  return [...new Set([...stripLatexComments(content).matchAll(CITATION)].flatMap(match => (match[1] ?? "").split(",").map(key => key.trim()).filter(Boolean)))];
+}
+
 export function citationFindings(content: string, approved: Set<string>): HunkFinding[] {
-  const keys = [...content.matchAll(CITATION)].flatMap((match) => (match[1] ?? "").split(",").map((key) => key.trim()).filter(Boolean));
+  const keys = citationKeys(content);
   return [...new Set(keys)].map((key) => isEvidencePlaceholderCitation(key)
     ? { id: `citation:${key}`, source: "citation", referenceId: key, status: "warning", message: `Citation placeholder '${key}' is evidence-honest but must be replaced with a verified source before submission.` }
     : approved.has(key)

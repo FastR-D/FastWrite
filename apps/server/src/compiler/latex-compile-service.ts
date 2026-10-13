@@ -4,6 +4,7 @@ import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { normalizeWorkspacePath } from "@fastwrite/shared";
 import { ApiError } from "../http";
+import { runCompilerProcess } from "./run-compiler-process";
 import type { WorkspaceService } from "../workspace/workspace-service";
 
 export interface ServerCompileResult {
@@ -37,7 +38,8 @@ export class LatexCompileService {
     this.policy = { mode, network: "disabled", timeoutMs: Math.min(Math.max(policy.timeoutMs ?? Number(process.env.FASTWRITE_COMPILE_TIMEOUT_MS ?? 120_000), 5_000), 300_000), memoryMb: Math.min(Math.max(policy.memoryMb ?? Number(process.env.FASTWRITE_COMPILE_MEMORY_MB ?? 1024), 128), 4096), pids: Math.min(Math.max(policy.pids ?? Number(process.env.FASTWRITE_COMPILE_MAX_PIDS ?? 256), 32), 4096) };
   }
 
-  async compile(projectId: string): Promise<ServerCompileResult> {
+  async compile(projectId: string, signal?: AbortSignal): Promise<ServerCompileResult> {
+    if (signal?.aborted) throw new ApiError(409, "compile_cancelled", "Compilation cancelled");
     this.workspaces.getProject(projectId);
     const executable = Bun.which("latexmk") ?? Bun.which("pdflatex");
     if (!executable) throw new ApiError(503, "latex_unavailable", "Local LaTeX compilation is unavailable: install latexmk or pdflatex on this machine.");
@@ -52,15 +54,12 @@ export class LatexCompileService {
       const mainDocument = normalizeWorkspacePath(snapshot.mainDocument);
       const identity = { projectVersion: snapshot.projectVersion, snapshotId };
       await mkdir(output, { recursive: true });
+      const compilerOutput = this.policy.mode === "bubblewrap" ? "/workspace/output" : output;
       const argumentsList = executable.endsWith("latexmk") || executable.includes("latexmk")
-        ? [executable, "-pdf", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${output}`, `-auxdir=${output}`, mainDocument]
-        : [executable, "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-output-directory=${output}`, mainDocument];
+        ? [executable, "-pdf", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${compilerOutput}`, `-auxdir=${compilerOutput}`, mainDocument]
+        : [executable, "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-output-directory=${compilerOutput}`, mainDocument];
       const command = this.policy.mode === "bubblewrap" ? this.bubblewrapCommand(argumentsList, source, output) : argumentsList;
-      const child = Bun.spawn(command, { cwd: source, stdout: "pipe", stderr: "pipe", env: { ...process.env, TEXMFOUTPUT: output, openin_any: "p", openout_any: "p", SOURCE_DATE_EPOCH: "0", TEXMFCONFIG: join(output, "texmf-config"), TEXMFVAR: join(output, "texmf-var") } });
-      const timeout = setTimeout(() => child.kill(), this.policy.timeoutMs);
-      const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-      clearTimeout(timeout);
-      const log = [stdout, stderr].filter(Boolean).join("\n").slice(-1_000_000);
+      const { exitCode, log } = await runCompilerProcess(command, { cwd: source, ...(signal ? { signal } : {}), timeoutMs: this.policy.timeoutMs, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: compilerOutput, TEXMFOUTPUT: compilerOutput, openin_any: "p", openout_any: "p", SOURCE_DATE_EPOCH: "0", TEXMFCONFIG: join(compilerOutput, "texmf-config"), TEXMFVAR: join(compilerOutput, "texmf-var") } });
       const stem = basename(mainDocument, ".tex");
       const pdfPath = await findOutputFile(output, `${stem}.pdf`);
       const syncPath = await findOutputFile(output, `${stem}.synctex.gz`);
@@ -68,6 +67,7 @@ export class LatexCompileService {
       const pdf = pdfPath ? await readFile(pdfPath).catch(() => null) : null;
       if (!pdf) return { ...identity, success: false, engine: "server", log, error: "LaTeX completed without producing a PDF.", workspacePaths: await listWorkspacePaths(source) };
       const syncTexData = syncPath ? await readFile(syncPath).then((data) => promisify(gunzip)(data).then((value) => value.toString("utf8"))).catch(() => undefined) : undefined;
+      if (signal?.aborted) throw new ApiError(409, "compile_cancelled", "Compilation cancelled");
       return { ...identity, success: true, engine: "server", log, pdfBase64: pdf.toString("base64"), ...(syncTexData ? { syncTexData } : {}), workspacePaths: await listWorkspacePaths(source) };
     } finally {
       await rm(temporary, { recursive: true, force: true }).catch(() => undefined);
@@ -79,7 +79,7 @@ export class LatexCompileService {
     if (!bwrap) throw new ApiError(503, "compile_sandbox_unavailable", "Bubblewrap is required for sandboxed server compilation.");
     const cpuSeconds = Math.max(1, Math.ceil(this.policy.timeoutMs / 1000));
     const memoryKb = this.policy.memoryMb * 1024;
-    return [bwrap, "--die-with-parent", "--unshare-net", "--new-session", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib", "--ro-bind", "/lib64", "/lib64", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--bind", source, "/workspace/source", "--bind", output, "/workspace/output", "--chdir", "/workspace/source", "--", "sh", "-c", `ulimit -t ${cpuSeconds}; ulimit -v ${memoryKb}; ulimit -u ${this.policy.pids}; exec "$@"`, "fastwrite-compile", ...command.map((part) => part === source ? "/workspace/source" : part === output ? "/workspace/output" : part)];
+    return [bwrap, "--die-with-parent", "--unshare-net", "--unshare-pid", "--new-session", "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib", "--ro-bind", "/lib64", "/lib64", "--ro-bind-try", "/etc/texmf", "/etc/texmf", "--ro-bind-try", "/var/lib/texmf", "/var/lib/texmf", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--bind", source, "/workspace/source", "--bind", output, "/workspace/output", "--chdir", "/workspace/source", "--", "/bin/bash", "-c", `set -e; ulimit -t ${cpuSeconds}; ulimit -v ${memoryKb}; ulimit -u ${this.policy.pids}; exec "$@"`, "fastwrite-compile", ...command.map((part) => part === source ? "/workspace/source" : part === output ? "/workspace/output" : part)];
   }
 }
 

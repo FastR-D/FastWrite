@@ -1,3 +1,4 @@
+import { HarnessProfileEditor } from "../components/workspace/ProjectHarnessProfile";
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type {
@@ -837,12 +838,9 @@ function TeamsDialog({
                 onChange={(next) =>
                   setPolicy((current) => {
                     const updated = { ...current };
-                    // Faithful to the pre-migration handler, which wrote the
-                    // daily budget into maxConcurrentRuns. Left as-is: a control
-                    // swap must not change behaviour (see the task report).
                     if (next !== undefined)
-                      updated.maxConcurrentRuns = next;
-                    else delete updated.maxConcurrentRuns;
+                      updated.dailyBudgetUsd = next;
+                    else delete updated.dailyBudgetUsd;
                     return updated;
                   })
                 }
@@ -856,6 +854,7 @@ function TeamsDialog({
             >
               Save Harness policy
             </Button>
+            {canManageMembers ? <HarnessProfileEditor key={selected.id} scope="team" teamId={selected.id}/> : null}
             {canManageMembers ? <div className="field" role="group" aria-labelledby="idp-group-bindings-title">
               <span id="idp-group-bindings-title">IdP group bindings</span>
               <Field label="Issuer-qualified group"><TextField value={groupValue} onChange={(next) => { setGroupValue(next); setGroupPreview([]); }} placeholder="https://idp.example:lab-members" /></Field>

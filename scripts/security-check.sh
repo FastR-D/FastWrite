@@ -13,11 +13,8 @@ if ! bun audit --production > "$audit_file"; then
   exit 1
 fi
 
-echo "[security] tracked secret patterns"
-if git grep -n -I -E '(OPENAI_API_KEY|FASTWRITE_.*SECRET|AWS_SECRET_ACCESS_KEY)[[:space:]]*=[[:space:]]*[A-Za-z0-9_./+=-]{8,}|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----' -- ':!docs' ':!scripts/security-check.sh' ':!*.test.ts' | grep -v -E 'process\.env|\.env\.example|placeholder|example|YOUR_|\.\.\.' ; then
-  echo "Potential tracked secret detected" >&2
-  exit 1
-fi
+echo "[security] source secret patterns"
+bun scripts/check-source-secrets.ts
 
 echo "[security] TypeScript verification"
 bun run typecheck

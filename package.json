@@ -57,7 +57,7 @@
     "yjs": "^13.6.32"
   },
   "patchedDependencies": {
-    "monaco-editor@0.56.0": "patches/monaco-editor@0.55.1.patch"
+    "monaco-editor@0.56.0": "patches/monaco-editor@0.56.0.patch"
   },
   "overrides": {
     "dompurify": "3.4.13"

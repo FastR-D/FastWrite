@@ -26,21 +26,20 @@ run_code() {
     status=$?
   fi
   printf '%s\n' "$output"
-  if [ "$status" -ne 0 ]; then return "$status"; fi
+  if [ "$status" -ne 0 ]; then pw snapshot || true; return "$status"; fi
   case "$output" in
-    *"### Error"*) return 1 ;;
+    *"### Error"*) pw snapshot || true; return 1 ;;
   esac
 }
 
 run_accessibility() {
   run_code 'async (page) => {
-  await page.addScriptTag({ path: "node_modules/axe-core/axe.min.js" });
   const result = await page.evaluate(async () => await window.axe.run(document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] }
   }));
   const violations = result.violations.filter(item => item.impact === "critical" || item.impact === "serious");
   if (violations.length) {
-    throw new Error(violations.map(item => item.id + ": " + item.nodes.map(node => node.target.join(" ")).join(", ")).join("\n"));
+    throw new Error(violations.map(item => item.id + ": " + item.nodes.map(node => node.target.join(" ") + " " + node.html + " " + node.failureSummary).join(", ")).join("\n"));
   }
 }'
 }
@@ -57,9 +56,9 @@ trap cleanup EXIT INT TERM
 cd "$PROJECT_ROOT"
 if [ "${FASTWRITE_E2E_SKIP_BUILD:-0}" != "1" ]; then bun run build >/dev/null; fi
 if [ -n "$E2E_SERVER_BIN" ]; then
-  FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" "$E2E_SERVER_BIN" >"$QA_DATA/server.log" 2>&1 &
+  FASTWRITE_SERVER_AUTH=false FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" "$E2E_SERVER_BIN" >"$QA_DATA/server.log" 2>&1 &
 else
-  FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" bun apps/server/src/server.ts >"$QA_DATA/server.log" 2>&1 &
+  FASTWRITE_SERVER_AUTH=false FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" bun apps/server/src/server.ts >"$QA_DATA/server.log" 2>&1 &
 fi
 SERVER_PID=$!
 
@@ -74,9 +73,22 @@ until curl --fail --silent "http://127.0.0.1:$E2E_PORT/projects" >/dev/null; do
 done
 
 pw open "http://127.0.0.1:$E2E_PORT/projects" --browser "$E2E_BROWSER"
+# Browser initialization scripts are installed by the test driver before page CSP.
+# Keep production CSP intact while making axe available across navigations.
+run_code 'async (page) => {
+  await page.context().addInitScript({ path: "node_modules/axe-core/axe.min.js" });
+  await page.reload();
+}'
 run_accessibility
 
 run_code 'async (page) => {
+  const registered = await page.request.post(page.url().replace(/\/projects.*$/, "") + "/api/auth/register", {
+    data: { email: "smoke@fastwrite.test", password: "smoke-fixture-password" }
+  });
+  if (!registered.ok()) throw new Error("Could not register isolated smoke-test account");
+  const account = await registered.json();
+  await page.evaluate(token => localStorage.setItem("fastwrite.session-token", token), account.token);
+  await page.reload();
   await page.getByRole("button", { name: "New paper" }).click();
   await page.getByRole("textbox", { name: "Project name" }).fill("E2E Smoke Paper");
   await page.getByRole("button", { name: "Create paper" }).click();
@@ -104,7 +116,7 @@ run_code 'async (page) => {
 run_code 'async (page) => {
   const toolbar = page.locator(".pdf-toolbar");
   const idleBox = await toolbar.boundingBox();
-  await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
+  await page.locator(".pdf-pane").getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
   await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 90000 });
   const successBox = await toolbar.boundingBox();
   for (const box of [successBox]) {
@@ -115,7 +127,9 @@ run_code 'async (page) => {
 }'
 
 run_code 'async (page) => {
-  await page.getByRole("treeitem", { name: "sections", exact: true }).click();
+  const filesButton = page.getByRole("navigation", { name: "Workspace views" }).getByRole("button", { name: "Files", exact: true });
+  if (await filesButton.getAttribute("aria-pressed") !== "true") await filesButton.click();
+  await page.locator("span[title=\"sections\"]").click();
   await page.locator("span[title=\"sections/method.tex\"]").click();
   const methodEditor = page.getByRole("textbox", { name: "Source editor for sections/method.tex" });
   await methodEditor.waitFor({ state: "attached" });
@@ -628,6 +642,8 @@ run_code 'async (page) => {
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   await conflictDialog.getByRole("button", { name: "Overwrite with reviewed result", exact: true }).click();
+  await agentPanel.getByRole("button", { name: "Rollback", exact: true }).waitFor();
+  await agentPanel.getByRole("button", { name: "New task", exact: true }).click();
   const composerAfterAcceptedFinish = agentPanel.getByLabel("What should Agent do?");
   await composerAfterAcceptedFinish.waitFor();
   if (await composerAfterAcceptedFinish.inputValue()) throw new Error("Finishing an accepted Agent review did not open an empty next-task composer");
@@ -862,7 +878,7 @@ run_code 'async (page) => {
   await revisionPanel.getByRole("button", { name: "Accept all & complete", exact: true }).click();
   await revisionPanel.getByText("needs review", { exact: true }).waitFor();
   await revisionPanel.getByRole("button", { name: "Compile current version" }).click();
-  await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
+  await page.locator(".pdf-pane").getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
   const rereview = revisionPanel.getByRole("button", { name: "Targeted re-review" });
   await rereview.waitFor();
   await rereview.click();
@@ -925,7 +941,7 @@ run_code 'async (page) => {
   if (!metrics.suggested || !metrics.accepted || Object.values(metrics).some(value => typeof value !== "number")) throw new Error("Completion metrics were not privacy-safe counters");
 
   const toggle = page.getByRole("checkbox", { name: "Complete" });
-  await page.getByTitle("Skill-guided writing completion", { exact: true }).click();
+  await page.locator("label").filter({ has: toggle }).click();
   if (await toggle.isChecked()) throw new Error("Completion toggle did not switch off");
   const beforeDisabledEdit = completionRequests;
   const disabledValue = acceptedContent;
@@ -958,12 +974,14 @@ run_code 'async (page) => {
   await editor.focus();
   await editor.press("ControlOrMeta+A");
   await page.keyboard.insertText("\\documentclass{article}\n\\begin{document}\n\\undefinedFastWriteCommand\n\\end{document}");
-  const diagnostics = page.locator(".pdf-diagnostics");
-  await diagnostics.waitFor({ timeout: 90000 });
+  await page.locator(".compile-strip--error").waitFor({ timeout: 90000 });
+  await page.getByRole("tab", { name: /^Problems/ }).click();
+  const diagnostics = page.locator(".diagnostic-list");
+  await diagnostics.waitFor();
   const errorIcon = page.locator(".compile-status-icon--error");
   await errorIcon.waitFor();
   if (await errorIcon.getAttribute("aria-label") !== "Compilation error") throw new Error("Compilation failure does not expose an unambiguous error icon");
-  if (!await diagnostics.getByText(/LaTeX diagnostics|Compilation log/).isVisible()) {
+  if (!await diagnostics.getByText(/Undefined control sequence/, { exact: false }).first().isVisible()) {
     throw new Error("Compilation failure did not expose diagnostics or its log");
   }
   if (await page.locator(".react-pdf__Page__canvas").count() < 1) {
@@ -982,11 +1000,12 @@ run_code 'async (page) => {
     await page.screenshot({ path: "output/playwright/workspace-pdf-error-" + viewport.name + browserSuffix + ".png", fullPage: true });
   }
   await page.setViewportSize({ width: 1280, height: 800 });
-  const fixButton = page.getByRole("button", { name: "Fix with Agent" });
+  const fixButton = page.locator(".pdf-pane").getByRole("button", { name: "Fix with Agent" });
   await fixButton.waitFor();
   const fixBox = await fixButton.boundingBox();
   const pdfBox = await page.locator(".pdf-pane").boundingBox();
   if (!fixBox || !pdfBox || fixBox.x < pdfBox.x || fixBox.x + fixBox.width > pdfBox.x + pdfBox.width) throw new Error("Fix with Agent is clipped in the PDF failure state");
+  await page.getByRole("button", { name: "Hide panel", exact: true }).click();
   await fixButton.click();
   await page.getByRole("region", { name: "Agent workspace" }).waitFor();
   const agentObjective = page.getByRole("textbox", { name: "What should Agent do?" });
@@ -1063,15 +1082,15 @@ run_code 'async (page) => {
   await dialog.getByLabel(/Branch, tag or commit/).fill("camera-ready");
   await dialog.getByLabel(/Project name/).fill("Imported Security Paper");
   await dialog.getByLabel(/Main document/).fill("paper.tex");
-  await dialog.getByLabel("Research domain").selectOption("network-information-security");
+  await dialog.getByRole("combobox", { name: "Research domain", exact: true }).click();
+  await page.getByRole("option", { name: "网络与信息安全", exact: true }).click();
   await page.waitForTimeout(350);
-  await page.addScriptTag({ path: "node_modules/axe-core/axe.min.js" });
   const accessibility = await page.evaluate(async () => await window.axe.run(document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] }
   }));
   const violations = accessibility.violations.filter(item => item.impact === "critical" || item.impact === "serious");
   if (violations.length) {
-    throw new Error(violations.map(item => item.id + ": " + item.nodes.map(node => node.target.join(" ")).join(", ")).join("\n"));
+    throw new Error(violations.map(item => item.id + ": " + item.nodes.map(node => node.target.join(" ") + " " + node.html + " " + node.failureSummary).join(", ")).join("\n"));
   }
   await dialog.getByRole("button", { name: "Import paper", exact: true }).click();
   await page.waitForURL(new RegExp("/projects/" + imported.id + "$"));

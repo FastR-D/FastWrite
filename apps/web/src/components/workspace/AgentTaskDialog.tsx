@@ -12,7 +12,7 @@ import { changeSetHunkCounts, fileReviewState, hunkCounts, pendingDecisions } fr
 
 type Stage = "input" | "planning" | "plan" | "generating" | "diff" | "applying" | "accepted" | "rereviewing";
 type PendingConflict = { details: ChangeSetConflictDetails; request: ChangeSetDecisionRequest; finishAfter: boolean };
-export interface AgentTaskSeed { issueIds?: string[]; objective?: string; path?: string; harness?: "codex" | "claude" }
+export interface AgentTaskSeed { planId?: string; issueIds?: string[]; objective?: string; path?: string; harness?: "codex" | "claude" }
 
 export function AgentTaskWorkspace({ open, project, seed, compileState, onRequestCompile, onClose, onAccepted, onNavigate }: { open: boolean; project: PaperProject; seed: AgentTaskSeed; compileState: CompileStateReport; onRequestCompile: () => void; onClose: () => void; onAccepted: (path: string) => void | Promise<void>; onNavigate?: (path: string, line?: number) => void }) {
   const [stage, setStage] = useState<Stage>("input");
@@ -43,15 +43,17 @@ export function AgentTaskWorkspace({ open, project, seed, compileState, onReques
   useEffect(() => { if (open) void api.agentSkills.list().then(setTaskSkills).catch(() => setTaskSkills([])); }, [open]);
   useEffect(() => () => requestRef.current?.abort(), []);
   useEffect(() => {
-    if (!open || stage !== "input" || seed.objective || seed.issueIds?.length) return;
+    if (!open || stage !== "input" || (seed.planId && seed.planId === dismissedPlanId) || (!seed.planId && (seed.objective || seed.issueIds?.length))) return;
     const controller = new AbortController();
     void Promise.all([api.agentTasks.list(project.id, controller.signal), api.agentTasks.resolutions(project.id, controller.signal), api.agentTasks.runs(project.id, controller.signal)]).then(async ([plans, resolutions, runs]) => {
-      const recoverable = recoverableAgentPlan(plans, dismissedPlanId);
-      if (!recoverable) return;
+      if (controller.signal.aborted) return;
+      const recoverable = recoverableAgentPlan(seed.planId ? plans.filter(candidate => candidate.id === seed.planId) : plans, dismissedPlanId);
+      if (!recoverable) { if(seed.planId)setError("This plan is no longer available for review. Refresh the Skills runs to inspect its status.");return; }
       const recoveredRun = runs.find((candidate) => candidate.id === recoverable.agentRunId) ?? null;
       const recoveredResolution = resolutions.find((candidate) => candidate.agentRunId === recoverable.agentRunId) ?? null;
       if (recoverable.changeSetId) {
         const restoredChangeSet = await api.revisions.get(project.id, recoverable.changeSetId, controller.signal);
+        if (controller.signal.aborted) return;
         const restoredStage = restoredAgentReviewStage(restoredChangeSet);
         if (!restoredStage) { setDismissedPlanId(recoverable.id); return; }
         setChangeSet(restoredChangeSet);
@@ -61,9 +63,9 @@ export function AgentTaskWorkspace({ open, project, seed, compileState, onReques
       setRun(recoveredRun);
       setObjective(recoverable.request.objective);
       setResolution(recoveredResolution);
-    }).catch(() => undefined);
+    }).catch(error => { if(!controller.signal.aborted&&seed.planId)setError(error instanceof Error?error.message:String(error)); });
     return () => controller.abort();
-  }, [dismissedPlanId, open, project.id, seed.issueIds, seed.objective, stage]);
+  }, [dismissedPlanId, open, project.id, seed.issueIds, seed.objective, seed.planId, stage]);
   useEffect(() => {
     if (!open || stage !== "diff" || !changeSet) return;
     const controller = new AbortController();
@@ -120,11 +122,10 @@ export function AgentTaskWorkspace({ open, project, seed, compileState, onReques
   const refreshTaskState = async () => { const [resolutions, runs] = await Promise.all([api.agentTasks.resolutions(project.id), api.agentTasks.runs(project.id)]); const refreshedResolution = resolutions.find((item) => item.id === resolution?.id || item.agentRunId === plan?.agentRunId) ?? resolution; if (refreshedResolution) setResolution(refreshedResolution); setRun(runs.find((item) => item.id === plan?.agentRunId) ?? run); return refreshedResolution; };
   const applyFinishedReview = async (finished: ChangeSet) => {
     setChangeSet(finished);
-    const refreshedResolution = await refreshTaskState();
+    await refreshTaskState();
     if (finished.status === "accepted") {
       await onAccepted(finished.changes.find((change) => change.hunks?.some((hunk) => hunk.status === "accepted"))?.path ?? finished.changes[0]!.path);
-      if (refreshedResolution) setStage("accepted");
-      else startNewTask();
+      setStage("accepted");
     } else startNewTask();
   };
   const submitDecisions = async (request: ChangeSetDecisionRequest, finishAfter: boolean) => {
@@ -165,10 +166,16 @@ export function AgentTaskWorkspace({ open, project, seed, compileState, onReques
     setPendingConflict(null);
     await submitDecisions({ ...request, overwriteConflicts: details.conflicts.map((conflict) => ({ path: conflict.path, currentVersion: conflict.currentVersion })) }, finishAfter);
   };
-  const rollback = async () => { if (!changeSet) return; setStage("applying"); setError(""); try { await api.revisions.rollback(project.id, changeSet.id); await onAccepted(changeSet.changes[0]!.path); reset(); onClose(); } catch (failure) { setError(message(failure)); setStage("accepted"); } };
+  const rollback = async () => { if (!changeSet) return; setStage("applying"); setError(""); try { await api.revisions.rollback(project.id, changeSet.id); await onAccepted(changeSet.changes[0]!.path); setDismissedPlanId(plan?.id ?? null); reset(); onClose(); } catch (failure) { setError(message(failure)); setStage("accepted"); } };
   const rereview = async () => { if (!resolution) return; const controller = beginRequest(requestRef); setStage("rereviewing"); setError(""); try { setResolution(await api.agentTasks.rereview(project.id, resolution.id, controller.signal)); setStage("accepted"); } catch (failure) { setError(cancelMessage(failure, "Targeted re-review")); setStage("accepted"); } finally { finishRequest(requestRef, controller); } };
   const reopen = async () => { if (!resolution) return; setError(""); try { setResolution(await api.agentTasks.reopen(project.id, resolution.id)); } catch (failure) { setError(message(failure)); } };
-  const discardPlan = async () => { if (plan?.status === "proposed") await api.agentTasks.cancel(project.id, plan.id).catch(() => undefined); reset(); };
+  const discardPlan = async () => {
+    try {
+      if (plan?.status === "proposed") await api.agentTasks.cancel(project.id, plan.id);
+      setDismissedPlanId(plan?.id ?? null);
+      reset();
+    } catch (failure) { setError(message(failure)); }
+  };
   const applyIntent = (intent: AgentTaskIntent) => {
     setObjective((current) => applyAgentIntentCommand(current, intent));
     window.requestAnimationFrame(() => objectiveRef.current?.focus());
@@ -182,7 +189,7 @@ export function AgentTaskWorkspace({ open, project, seed, compileState, onReques
     stage === "accepted" ? <><Button variant="ghost" onClick={startNewTask}>New task</Button><Button variant="secondary" icon={<Icon name={icons.discard} />} onClick={() => void rollback()}>Rollback</Button>{resolution?.status === "resolved" ? <Button variant="secondary" onClick={() => void reopen()}>Reopen issue</Button> : null}{!compiledCurrentVersion ? <Button variant="secondary" loading={compiling} disabled={compiling} onClick={onRequestCompile}>{compiling ? "Compiling" : "Compile current version"}</Button> : null}{resolution?.status === "needs-review" || resolution?.status === "reopened" ? <Button variant="primary" icon={<Icon name={icons.verified} />} disabled={!compiledCurrentVersion} onClick={() => void rereview()}>Targeted re-review</Button> : null}</> : null
   );
   const content = <>
-    {stage === "input" ? <div className="agent-task-form"><Field label="What should Agent do?"><TextArea id="agent-task-objective" name="agent-task-objective" ref={objectiveRef} value={objective} onChange={setObjective} placeholder="Create an initial draft, continue the TODO sections, or revise the Introduction and Evaluation consistently…" autoFocus /></Field><div className="agent-command-buttons" aria-label="Agent intent commands">{AGENT_INTENT_COMMANDS.map(({ intent, label }) => <Button type="button" size="small" variant="secondary" icon={intent === "draft" ? <Icon name={icons.newFile} /> : intent === "continue" ? <Icon name={icons.checklist} /> : <Icon name={icons.edit} />} aria-pressed={activeAgentIntentCommand(objective) === intent} key={intent} onClick={() => applyIntent(intent)}>{label}</Button>)}</div>{taskSkills.length ? <Field label="Task Skills"><MultiSelect label="Task Skills" value={taskSkillIds} onChange={setTaskSkillIds} options={taskSkills.filter((skill) => !skill.supportedIntents.length || skill.supportedIntents.includes(activeAgentIntentCommand(objective) ?? "revise")).map((skill) => ({ value: skill.id, label: `${skill.id} · ${skill.description}` }))} /></Field> : null}{seed.path ? <small className="agent-command-hint">Editor context: {seed.path}</small> : null}{seed.issueIds?.length ? <div className="agent-issue-seed"><Icon name={icons.verified} /> Revision is linked to {seed.issueIds.length} Review Issue{seed.issueIds.length === 1 ? "" : "s"}.</div> : null}</div> : null}
+    {stage === "input" ? <div className="agent-task-form"><Field label="What should Agent do?"><TextArea name="agent-task-objective" ref={objectiveRef} value={objective} onChange={setObjective} placeholder="Create an initial draft, continue the TODO sections, or revise the Introduction and Evaluation consistently…" autoFocus /></Field><div className="agent-command-buttons" aria-label="Agent intent commands">{AGENT_INTENT_COMMANDS.map(({ intent, label }) => <Button type="button" size="small" variant="secondary" icon={intent === "draft" ? <Icon name={icons.newFile} /> : intent === "continue" ? <Icon name={icons.checklist} /> : <Icon name={icons.edit} />} aria-pressed={activeAgentIntentCommand(objective) === intent} key={intent} onClick={() => applyIntent(intent)}>{label}</Button>)}</div>{taskSkills.length ? <Field label="Task Skills"><MultiSelect label="Task Skills" value={taskSkillIds} onChange={setTaskSkillIds} options={taskSkills.filter((skill) => !skill.supportedIntents.length || skill.supportedIntents.includes(activeAgentIntentCommand(objective) ?? "revise")).map((skill) => ({ value: skill.id, label: `${skill.id} · ${skill.description}` }))} /></Field> : null}{seed.path ? <small className="agent-command-hint">Editor context: {seed.path}</small> : null}{seed.issueIds?.length ? <div className="agent-issue-seed"><Icon name={icons.verified} /> Revision is linked to {seed.issueIds.length} Review Issue{seed.issueIds.length === 1 ? "" : "s"}.</div> : null}</div> : null}
     {busy ? <div className="agent-progress agent-task-progress" role="status" aria-live="polite"><Icon name={icons.loading} spin /><strong>{stage === "planning" ? "Planning Agent task" : stage === "generating" ? "Executing approved plan in parallel" : stage === "rereviewing" ? "Checking whether the issue is resolved" : "Finishing the reviewed changes"}</strong><span>{stage === "planning" ? "Reading source context and asking Agent for a reviewed file plan. No files are changed yet." : stage === "generating" ? "Planned files run in parallel bounded model calls, then every hunk still requires review before applying." : "Files remain unchanged until their hunks are accepted."}</span>{stage === "generating" && run?.steps?.length ? <Stepper variant="list" label="Agent task steps" steps={run.steps.map((step) => ({ id: step.id, label: step.label, status: agentStepStatus(step.status), icon: agentStepIcon(step.status), detail: step.status }))} /> : null}</div> : null}
     {stage === "plan" && plan?.sectionContracts?.length ? <div className="agent-contract-preview"><h3>Section contracts</h3>{plan.sectionContracts.map((contract) => <article key={contract.path}><strong>{contract.path}</strong><span>{contract.purpose}</span><small>{contract.requiredClaimIds.length} required claims · {contract.allowedEvidenceIds.length} allowed evidence{contract.openQuestions.length ? ` · ${contract.openQuestions.length} open questions` : ""}</small></article>)}</div> : null}
     {stage === "plan" && plan ? <div className="agent-plan"><div className="agent-plan__objective"><small>{plan.intent ?? plan.request.intent ?? "revise"} plan</small><strong>{plan.request.objective}</strong></div><section><h3>Steps</h3><List ordered label="Plan steps">{plan.steps.map((step, index) => <ListRow key={index}>{step}</ListRow>)}</List></section>{plan.sectionBudget?.length ? <section><h3>Section budget</h3><List label="Section budget">{plan.sectionBudget.map((item, index) => <ListRow key={index}><strong>{item.section}</strong>{item.targetPages ? ` · ${item.targetPages} pages` : ""} — {item.purpose}</ListRow>)}</List></section> : null}{plan.venueChecks?.length ? <section><h3>Venue compliance</h3><List label="Venue compliance">{plan.venueChecks.map((item, index) => <ListRow key={index}><strong>{item.status.replace("-", " ")}: {item.requirement}</strong>{item.action ? ` — ${item.action}` : ""}</ListRow>)}</List></section> : null}<section><h3>Affected files</h3>{plan.affectedFiles.map((path) => <code key={path}>{path}</code>)}</section><section><h3>Validation</h3><List label="Validation">{plan.validation.map((item, index) => <ListRow key={index}>{item}</ListRow>)}</List></section><section><h3>Risks</h3>{plan.risks.length ? <List label="Risks">{plan.risks.map((risk, index) => <ListRow key={index}>{risk}</ListRow>)}</List> : <p>No special risks reported.</p>}</section></div> : null}

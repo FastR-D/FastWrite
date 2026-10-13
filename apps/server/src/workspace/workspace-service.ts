@@ -247,14 +247,20 @@ export class WorkspaceService {
     });
   }
 
-  async addFile(id: string, requestedPath: string, content: ArrayBuffer): Promise<PaperFile> {
+  async addFile(id: string, requestedPath: string, content: ArrayBuffer, overwrite = false): Promise<PaperFile> {
     return this.projectQueue.run(id, async () => {
       const root = this.workspaceRoot(id);
       const { relativePath, absolutePath } = resolveWorkspacePath(root, requestedPath);
       this.assertPaperSourcePath(relativePath);
+      let parent = root;
+      for (const segment of relativePath.split("/").slice(0, -1)) {
+        parent = join(parent, segment);
+        try { if ((await lstat(parent)).isSymbolicLink()) throw new ApiError(400, "invalid_path", "Symbolic link parents are forbidden"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      }
       try {
-        await lstat(absolutePath);
-        throw new ApiError(409, "file_exists", "A file or folder already exists at this path");
+        const existing = await lstat(absolutePath);
+        if (!overwrite || !existing.isFile() || existing.isSymbolicLink()) throw new ApiError(409, "file_exists", "A file or folder already exists at this path");
       } catch (error) {
         if (error instanceof ApiError) throw error;
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -262,8 +268,9 @@ export class WorkspaceService {
       await mkdir(dirname(absolutePath), { recursive: true });
       await writeFile(absolutePath, new Uint8Array(content));
       const timestamp = now();
-      await this.touchProject(id, relativePath, 1, timestamp);
-      return this.paperFile(relativePath, content.byteLength, 1, timestamp);
+      const version = (this.database.snapshot().fileVersions[id]?.[relativePath]?.version ?? 0) + 1;
+      await this.touchProject(id, relativePath, version, timestamp);
+      return this.paperFile(relativePath, content.byteLength, version, timestamp);
     });
   }
 

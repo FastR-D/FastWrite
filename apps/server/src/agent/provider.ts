@@ -1,4 +1,4 @@
-import type { AgentTaskRequest, AgentWireApi, ComplianceFinding, DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection, EvidenceDependency } from "@fastwrite/shared";
+import type { FactualSupportInput, AgentTaskRequest, AgentWireApi, ComplianceFinding, DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection, EvidenceDependency } from "@fastwrite/shared";
 
 export interface ReviseAgentInput {
   instruction: string;
@@ -24,6 +24,7 @@ export interface ReviseAgentOutput {
 }
 
 export interface AgentProvider {
+  assessFactualSupport?(input: FactualSupportInput, signal?: AbortSignal): Promise<unknown>;
   generateDiagram?(input: { instruction: string; svg: string; model: string; previous: unknown }, signal?: AbortSignal): Promise<unknown>;
   fileGenerationConcurrency?(): number;
   revise(input: ReviseAgentInput, signal?: AbortSignal): Promise<ReviseAgentOutput>;

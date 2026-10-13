@@ -275,6 +275,8 @@ export interface UploadManifestEntry {
   checksum?: string;
 }
 
+export type UploadTargetKind = "project" | "skill-resource" | "reference-artifact";
+
 export interface UploadSession {
   id: string;
   projectName: string;
@@ -291,6 +293,7 @@ export interface UploadSession {
   expiresAt: string;
   projectId?: string;
   error?: string;
+  targetKind?: UploadTargetKind;
 }
 
 export type ImportStatus = "queued" | "analyzing" | "copying" | "completed" | "failed" | "cancelled";
@@ -414,6 +417,12 @@ export interface ReviseRequest {
   history?: ReviseTurn[];
   issueIds?: string[];
   responseLanguage?: "auto" | "zh-CN" | "en-US";
+}
+
+export interface FactualSupportInput {
+  claim: string;
+  context?: string;
+  evidenceSources?: string[];
 }
 
 export interface ReviseTurn {

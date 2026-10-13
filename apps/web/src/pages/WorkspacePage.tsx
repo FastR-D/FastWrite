@@ -1,3 +1,6 @@
+import { useFileDropTarget } from "../lib/uploads/use-file-drop-target";
+import { readDroppedFiles, type DroppedFile } from "../lib/uploads/drop-files";
+import { ReferenceStylePanel } from "../components/workspace/ReferenceStylePanel";
 import { projectDocumentRegistry } from "../lib/editor/documentRegistry";
 import { QuickOpenDialog } from "../components/workbench/QuickOpenDialog";
 import { EditorTabs, diffRequestKey, type ComparisonTab } from "../components/workbench/EditorTabs";
@@ -78,7 +81,9 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [sourceTabs, setSourceTabs] = useState<SourceTab[]>([]);
   const [dirtyFiles, setDirtyFiles] = useState<Record<string, boolean>>({});
   const [tabError, setTabError] = useState("");
-  const [sidebarView, setSidebarView] = useStoredString(`fastwrite.workbench-layout:${projectId}:sidebar-view`, "files", ["files", "git", "evidence", "outline"] as const);
+  const rootDrop = useFileDropTarget((transfer) => receiveDrop(transfer, ""));
+  const [sidebarView, setSidebarView] = useStoredString(`fastwrite.workbench-layout:${projectId}:sidebar-view`, "files", ["files", "git", "evidence", "outline", "reference-style", "skills"] as const);
+  const [skillRevision, setSkillRevision] = useState(0);
   const [historyDiff, setHistoryDiff] = useState<DiffRequest | null>(null);
   const [comparisonTabs, setComparisonTabs] = useState<ComparisonTab[]>([]);
   const comparisonTabsRef = useRef(comparisonTabs); comparisonTabsRef.current = comparisonTabs;
@@ -150,6 +155,9 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [aiFullscreen, setAiFullscreen] = useState(false);
   const [newFileOpen, setNewFileOpen] = useState(false);
   const [addFileOpen, setAddFileOpen] = useState(false);
+  const [droppedFiles, setDroppedFiles] = useState<DroppedFile[]>([]);
+  const [dropDirectory, setDropDirectory] = useState("");
+  const receiveDrop = (transfer: DataTransfer, directory: string) => { void readDroppedFiles(transfer).then(files => { setDroppedFiles(files); setDropDirectory(directory); setAddFileOpen(true); }).catch(error => window.alert(error instanceof Error ? error.message : String(error))); };
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -188,13 +196,15 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   );
   const fixCompileWithAgent = useCallback(
     (failure: CompileFailureContext) => {
+      setBottomPanelTab("ai");
+      setPanelCollapsed(false);
       setCompileRepairRequest((current) => ({
         id: (current?.id ?? 0) + 1,
         failure,
       }));
       setAiHeight(Math.max(aiHeight, 380));
     },
-    [aiHeight, setAiHeight],
+    [aiHeight, setAiHeight, setBottomPanelTab, setPanelCollapsed],
   );
   const updateOutlineHeight = useCallback(
     (next: number) => {
@@ -743,10 +753,11 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       </header>
 
       <div className="workspace-shell" ref={containerRef}>
-        <ActivityBar active={sidebarView} expanded={!sidebarForcedCollapsed && sidebarWidth > 0} onSelect={chooseSidebar} onSettings={() => void openSettings()} evidenceCount={evidenceCockpit?.counts.unresolved ?? claims.filter(claim => claim.reviewStatus === "needs-review" || claim.anchorStatus === "stale").length} />
+        <ActivityBar onDropFiles={transfer => receiveDrop(transfer, "")} active={sidebarView} expanded={!sidebarForcedCollapsed && sidebarWidth > 0} onSelect={chooseSidebar} onSettings={() => void openSettings()} evidenceCount={evidenceCockpit?.counts.unresolved ?? claims.filter(claim => claim.reviewStatus === "needs-review" || claim.anchorStatus === "stale").length} />
         {(
           <aside className="workspace-sidebar" hidden={sidebarForcedCollapsed || sidebarWidth === 0} style={{ width: sidebarWidth }}>
-            <section id="sidebar-files" hidden={sidebarView !== "files"} className="sidebar-section sidebar-section--files">
+            <section {...rootDrop.props("")} id="sidebar-files" hidden={sidebarView !== "files"} className="sidebar-section sidebar-section--files">
+              {rootDrop.activeTarget !== null ? <div className="upload-drop-hint" role="status">Drop files into project root</div> : null}
               <header className="panel-heading">
                 <div>
                   <Icon name={icons.listTree} />
@@ -788,7 +799,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                   <IconButton
                     label="Add external file"
                     icon={<Icon name={icons.cloudUpload} />}
-                    onClick={() => setAddFileOpen(true)}
+                    onClick={() => { setDroppedFiles([]); setDropDirectory(""); setAddFileOpen(true); }}
                   />
                   <IconButton
                     label="Rename selected file"
@@ -817,6 +828,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 </div>
               </header>
               <FileTree
+                onDropFiles={receiveDrop}
                 nodes={tree}
                 selectedPath={selectedPath}
                 mainDocument={project.mainDocument}
@@ -824,6 +836,17 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 onPin={node => setSourceTabs(tabs => openSourceTab(tabs, node.path, true))}
                 onExpand={expandDirectory}
               />
+            </section>
+            <section id="sidebar-reference-style" hidden={sidebarView !== "reference-style"} className="sidebar-section">
+              <header className="panel-heading">
+                <div>
+                  <Icon name={icons.book} />
+                  <span>Reference Style</span>
+                </div>
+              </header>
+              <div className="reference-style-content">
+                {sidebarView === "reference-style" ? <ReferenceStylePanel projectId={projectId} {...(selectedPath ? {path:selectedPath} : {})} onApplied={() => refreshWorkspace()} /> : null}
+              </div>
             </section>
             <section id="sidebar-outline" hidden={sidebarView !== "outline"} className="sidebar-section workbench-outline">
               <header className="panel-heading panel-heading--plain">
@@ -1221,11 +1244,15 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         }}
       />
       <AddFileDialog
+        initialFiles={droppedFiles}
+        targetPath={dropDirectory}
         open={addFileOpen}
         projectId={projectId}
         onClose={() => setAddFileOpen(false)}
-        onAdded={async (path) => {
+        onAdded={async (path, targetKind) => {
           setAddFileOpen(false);
+          if (targetKind === "skill-resource") { setSkillRevision(value => value + 1); setSidebarView("skills"); return; }
+          if (targetKind === "reference-artifact") { setSidebarView("reference-style"); return; }
           await refreshWorkspace(undefined, path);
           setSelectedPath(path);
         }}

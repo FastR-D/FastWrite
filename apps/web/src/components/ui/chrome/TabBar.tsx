@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import styles from "./TabBar.module.css";
 
 export interface TabItem {
@@ -46,6 +46,7 @@ export interface TabBarProps {
  */
 export function TabBar({ tabs, activeId, onSelect, label, onClose, onActivate, closeLabel, scrollActiveIntoView = false, className = "" }: TabBarProps) {
   const host = useRef<HTMLDivElement>(null);
+  const tabIdPrefix = useId();
 
   useEffect(() => {
     if (!scrollActiveIntoView) return;
@@ -62,13 +63,15 @@ export function TabBar({ tabs, activeId, onSelect, label, onClose, onActivate, c
     <div
       ref={host}
       className={`${styles.bar} ${onClose ? "" : styles.simple} ${className}`.trim()}
-      role="tablist"
+      role={onClose ? "group" : "tablist"}
       aria-label={label}
       onWheel={(event) => {
         // A vertical wheel over a horizontal strip scrolls the strip.
         if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY;
       }}
     >
+      {/* Close buttons remain independent controls, outside the owned tablist. */}
+      {onClose ? <div role="tablist" aria-label={label} aria-owns={tabs.map((_, index) => `${tabIdPrefix}-${index}`).join(" ")} /> : null}
       {tabs.map((tab, index) => {
         const selected = tab.id === activeId;
         return (
@@ -82,6 +85,7 @@ export function TabBar({ tabs, activeId, onSelect, label, onClose, onActivate, c
             <button
               type="button"
               role="tab"
+              id={`${tabIdPrefix}-${index}`}
               className={`${styles.tab} ${selected ? styles.active : ""} ${tab.preview ? styles.preview : ""}`.trim()}
               aria-controls={tab.controls}
               aria-selected={selected}
