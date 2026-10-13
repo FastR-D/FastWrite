@@ -55,6 +55,12 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
     if (!access.ok) socket.close(4003, "Collaboration access revoked");
     return access.ok;
   };
+  const broadcastBinary = async (room: Set<ServerWebSocket<CollaborationSocketData>>, payload: Buffer, exclude?: ServerWebSocket<CollaborationSocketData>) => {
+    await Promise.all([...room].filter(socket => socket !== exclude).map(async socket => {
+      try { if (await reauthorizeCollaborationSocket(socket)) socket.send(payload); }
+      catch { socket.close(1011, "Collaboration authorization unavailable"); }
+    }));
+  };
   fetch.onAuthChange?.(() => {
     for (const socket of harnessUnsubscribers.keys()) reauthorizeHarnessSocket(socket);
     for (const room of rooms.values()) for (const socket of room) void reauthorizeCollaborationSocket(socket).catch(() => socket.close(1011, "Collaboration authorization unavailable"));
@@ -163,7 +169,6 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
 interface CollaborationSocketData { room: string; projectId: string; path: string; clientId: string; roomToken: string; scope: "read" | "write"; userId: string; displayName: string; color: string; lastActivityAt: number; awarenessClientId?: number; awarenessClock?: number; awarenessUpdate?: Buffer }
 interface HarnessSocketData { kind: "harness"; runId: string; accessRequest: Request }
 type SocketData = (CollaborationSocketData & { kind: "collaboration" }) | HarnessSocketData;
-function broadcastBinary(room: Set<ServerWebSocket<CollaborationSocketData>>, payload: Buffer, exclude?: ServerWebSocket<CollaborationSocketData>) { for (const socket of room) if (socket !== exclude) socket.send(payload); }
 async function roomDocument(fetch: (request: Request) => Promise<Response>, socket: ServerWebSocket<CollaborationSocketData>) { const response = await fetch(new Request("http://fastwrite.local/api/collaboration/room-state", { headers: { "x-fastwrite-room-token": socket.data.roomToken } })); if (!response.ok) throw new Error("Room state unavailable"); const state = await response.json() as { update: string }; const document = new Y.Doc(); Y.applyUpdate(document, Buffer.from(state.update, "base64")); return document; }
 async function sendSyncStep1(fetch: (request: Request) => Promise<Response>, socket: ServerWebSocket<CollaborationSocketData>) { const encoder = encoding.createEncoder(); encoding.writeVarUint(encoder, MESSAGE_SYNC); writeSyncStep1(encoder, await roomDocument(fetch, socket)); socket.send(encoding.toUint8Array(encoder)); }
 async function sendSyncStep2(fetch: (request: Request) => Promise<Response>, socket: ServerWebSocket<CollaborationSocketData>, stateVector: Uint8Array) { const encoder = encoding.createEncoder(); encoding.writeVarUint(encoder, MESSAGE_SYNC); writeSyncStep2(encoder, await roomDocument(fetch, socket), stateVector); socket.send(encoding.toUint8Array(encoder)); }
