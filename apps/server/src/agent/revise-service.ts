@@ -21,6 +21,7 @@ import type { SkillRegistry } from "./skill-registry";
 import type { MemoryService } from "./memory-service";
 import { replaceSelectionChange } from "./change-set";
 import { citationFindings, normalizePlaceholderFindings } from "./citation-findings";
+import type { AgentContextAccess } from "./context-access";
 
 const COMMANDS: Record<ReviseCommandId, string> = {
   "academic-polish": "Polish the selected manuscript text for precision, concision, formal academic tone, and smooth information flow. Preserve claim strength, technical terms, numbers, citations, equations, and LaTeX structure exactly.",
@@ -71,7 +72,7 @@ export class ReviseService {
 
   private get agent(): AgentProvider | undefined { return this.provider as AgentProvider | undefined; }
 
-  async propose(projectId: string, request: ReviseRequest): Promise<ReviseResponse> {
+  async propose(projectId: string, request: ReviseRequest, access?: AgentContextAccess): Promise<ReviseResponse> {
     if (!this.agent) {
       throw new ApiError(503, "agent_not_configured", "Configure a Harness to enable AI revision");
     }
@@ -84,8 +85,8 @@ export class ReviseService {
     const history = compactHistory((request.history ?? [])
       .filter((turn) => (turn.role === "user" || turn.role === "assistant") && turn.content?.trim())
       .map((turn) => ({ role: turn.role, content: turn.content.trim().slice(0, 4_000) })));
-    const context = await this.contextFor(projectId, request, opened.content);
-    const memory = this.memories ? await this.memories.focusedWriterContext(projectId, opened.file.path, context.sectionTitle) : { content: "" };
+    const context = await this.contextFor(projectId, request, opened.content, access);
+    const memory = this.memories && (!access || access.includeMemory) ? await this.memories.focusedWriterContext(projectId, opened.file.path, context.sectionTitle) : { content: "" };
 
     const runId = `run_${crypto.randomUUID()}`;
     const createdAt = timestamp();
@@ -583,9 +584,9 @@ export class ReviseService {
     }
   }
 
-  private async contextFor(projectId: string, request: ReviseRequest, content: string): Promise<Pick<ReviseAgentInput, "contextBefore" | "contextAfter" | "sectionTitle">> {
+  private async contextFor(projectId: string, request: ReviseRequest, content: string, access?: AgentContextAccess): Promise<Pick<ReviseAgentInput, "contextBefore" | "contextAfter" | "sectionTitle">> {
     const { selection } = request;
-    const outline = flattenOutline(await this.workspaces.outline(projectId));
+    const outline = flattenOutline(await this.workspaces.outline(projectId)).filter(item => !access || access.canUsePath(item.path));
     const section = outline
       .filter((item) => item.path === selection.path && item.line <= selection.startLine)
       .sort((a, b) => b.line - a.line)[0];

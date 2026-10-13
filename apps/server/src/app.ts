@@ -502,6 +502,18 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     }
     return changeSet;
   };
+  const agentContextAccess = async (request: Request, projectId: string) => {
+    if (!principal(request)) return undefined;
+    const canUsePath = (path: string) => {
+      try {
+        const current = principal(request, true)!;
+        authorization.requireProjectPath(current, projectId, path, "project:read");
+        authorization.requireProjectPath(current, projectId, path, "agent:propose");
+        return true;
+      } catch { return false; }
+    };
+    return { canUsePath, includeMemory: textPathsForAuthorization(await workspaces.tree(projectId)).every(canUsePath) };
+  };
   const uploadIdFor = (request: Request, params: Record<string, string>) => {
     const current = principal(request);
     const id = required(params, "uploadId");
@@ -1140,11 +1152,11 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("GET", "/api/projects/:projectId/skills", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(workspaces.getProject(projectId).skill); }),
     route("POST", "/api/projects/:projectId/completions", async (request, params) => {
       const projectId = required(params, "projectId"); const body = await readJson<CompletionRequest>(request); const current = principal(request, authEnabled); if (current) authorization.requireProjectPath(current, projectId, body.path, "agent:propose"); await collaboration.flushProject(projectId);
-      return json(await completions.suggest(projectId, body), 201);
+      return json(await completions.suggest(projectId, body, await agentContextAccess(request, projectId)), 201);
     }),
     route("POST", "/api/projects/:projectId/revisions", async (request, params) => {
       const projectId = required(params, "projectId"); const body = await readJson<ReviseRequest>(request); const current = principal(request, authEnabled); if (current) authorization.requireProjectPath(current, projectId, body.selection.path, "agent:propose"); await collaboration.flushProject(projectId);
-      return json(await revisions.propose(projectId, body), 201);
+      return json(await revisions.propose(projectId, body, await agentContextAccess(request, projectId)), 201);
     }),
     route("POST", "/api/projects/:projectId/table-equation-candidates", async (request, params) => {
       const projectId = required(params, "projectId");

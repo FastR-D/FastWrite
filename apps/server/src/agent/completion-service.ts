@@ -5,6 +5,7 @@ import type { AgentProvider } from "./provider";
 import type { AgentGateway } from "./agent-gateway";
 import type { SkillRegistry } from "./skill-registry";
 import type { MemoryService } from "./memory-service";
+import type { AgentContextAccess } from "./context-access";
 
 const COMPLETION_KINDS = new Set(["auto"]);
 const BEFORE_LIMIT = 2_500;
@@ -14,10 +15,6 @@ const SUGGESTION_LIMIT = 2_000;
 
 function textPaths(nodes: WorkspaceTreeNode[]): string[] {
   return nodes.flatMap((node) => node.type === "directory" ? textPaths(node.children) : node.kind === "text" ? [node.path] : []);
-}
-
-function outlineTitles(items: OutlineItem[]): string[] {
-  return items.flatMap((item) => [item.title, ...outlineTitles(item.children)]);
 }
 
 function activeSectionTitle(items: OutlineItem[], path: string, line: number): string | undefined {
@@ -41,7 +38,7 @@ export class CompletionService {
 
   private get agent(): AgentProvider | undefined { return this.provider as AgentProvider | undefined; }
 
-  async suggest(projectId: string, request: CompletionRequest): Promise<CompletionResponse> {
+  async suggest(projectId: string, request: CompletionRequest, access?: AgentContextAccess): Promise<CompletionResponse> {
     if (!this.agent?.complete) throw new ApiError(503, "completion_not_configured", "Configure a Harness to use writing completion");
     if (!COMPLETION_KINDS.has(request.kind)) throw new ApiError(400, "completion_kind_invalid", "Unknown completion kind");
     if (!Number.isInteger(request.cursor) || request.cursor < 0 || !Number.isInteger(request.fileVersion) || request.fileVersion < 1) {
@@ -61,12 +58,12 @@ export class CompletionService {
       this.workspaces.outline(projectId),
       this.workspaces.tree(projectId).then(textPaths)
     ]);
-    const bibliographyParts = await Promise.all(paths.filter((path) => path.toLowerCase().endsWith(".bib")).map(async (path) => {
+    const bibliographyParts = await Promise.all(paths.filter((path) => path.toLowerCase().endsWith(".bib") && (!access || access.canUsePath(path))).map(async (path) => {
       const file = await this.workspaces.readTextFile(projectId, path);
       return `% ${path}\n${file.content}`;
     }));
     const cursorLine = opened.content.slice(0, request.cursor).split("\n").length;
-    const memory = await this.memories.focusedWriterContext(projectId, opened.file.path, activeSectionTitle(outline, opened.file.path, cursorLine));
+    const memory = !access || access.includeMemory ? await this.memories.focusedWriterContext(projectId, opened.file.path, activeSectionTitle(outline, opened.file.path, cursorLine)) : { content: "" };
     const memoryInstructions = memory.content ? `\n\nLocal Paper Context (paper core and current section only):\n${memory.content}` : "";
     const contextBefore = opened.content.slice(Math.max(0, request.cursor - BEFORE_LIMIT), request.cursor);
     const contextAfter = opened.content.slice(request.cursor, request.cursor + AFTER_LIMIT);
@@ -76,7 +73,7 @@ export class CompletionService {
       contextBefore,
       contextAfter,
       ...(memory.content ? { paperContext: memory.content } : {}),
-      outline: outlineTitles(outline),
+      outline: flattenOutline(outline).filter(item => !access || access.canUsePath(item.path)).map(item => item.title),
       bibliography: bibliographyParts.join("\n\n").slice(0, BIBLIOGRAPHY_LIMIT),
       skill: project.skill,
       skillInstructions: `${workflowInstructions}\n\n${skill.instructions}${memoryInstructions}`,
