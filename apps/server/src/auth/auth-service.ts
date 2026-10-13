@@ -199,6 +199,10 @@ export class AuthService {
   }
 
   collaborationRoomGrant(token: string): CollaborationRoomGrant {
+    return this.collaborationRoomAccess(token).grant;
+  }
+
+  collaborationRoomAccess(token: string): { grant: CollaborationRoomGrant; principal: Principal } {
     const [encoded, signature, ...extra] = token.split(".");
     if (!encoded || !signature || extra.length || !safeEqual(signature, this.roomSignature(encoded))) throw new ApiError(401, "collaboration_room_invalid", "Collaboration room token is invalid");
     let grant: CollaborationRoomGrant;
@@ -206,7 +210,7 @@ export class AuthService {
     if (!grant.userId || !grant.sessionId || !grant.projectId || !grant.path || (grant.scope !== "read" && grant.scope !== "write") || !Number.isInteger(grant.authzVersion) || !grant.expiresAt || Date.parse(grant.expiresAt) <= Date.now()) throw new ApiError(401, "collaboration_room_expired", "Collaboration room token has expired");
     const state = this.database.snapshot(); const session = state.sessions.find((item) => item.id === grant.sessionId && item.userId === grant.userId && !item.revokedAt && item.expiresAt > new Date().toISOString()); const user = state.users.find((item) => item.id === grant.userId);
     if (!session || !user || user.status !== "active" || user.authzVersion !== grant.authzVersion) throw new ApiError(401, "collaboration_room_revoked", "Collaboration room access has been revoked");
-    return grant;
+    return { grant, principal: { user, sessionId: session.id, idpGroups: session.idpGroups ?? [] } };
   }
 
   async logout(request: Request): Promise<void> { const principal = this.principal(request); await this.database.mutate((state) => { const item = state.sessions.find((candidate) => candidate.id === principal!.sessionId); if (item) item.revokedAt = new Date().toISOString(); state.auditEvents.push(audit(principal!.user.id, "auth.logout", "session", principal!.sessionId)); }); }
