@@ -22,6 +22,17 @@ writeFileSync(resolve(fixture, 'figure.png'), Buffer.concat([Buffer.from([137,80
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true, ...(process.env.FASTWRITE_E2E_EXECUTABLE ? { executablePath: process.env.FASTWRITE_E2E_EXECUTABLE } : {}) });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true, serviceWorkers: 'block' });
+// This acceptance checks writing/storage, not live models. Never launch the
+// user's installed Codex harness as a side effect of typing fixture text.
+await context.addInitScript(() => {
+  localStorage.setItem('fastwrite.completion.enabled', 'false');
+  localStorage.setItem('fastwrite.collaboration.enabled', 'false');
+});
+const modelRequests = [];
+await context.route('**/api/projects/*/completions', route => {
+  modelRequests.push(route.request().url());
+  return route.fulfill({ status: 503, json: { error: { code: 'unexpected_model_request', message: 'Live models are disabled in this acceptance test' } } });
+});
 const page = await context.newPage();
 const cases = [], errors = [], apiFailures = [];
 let token, projectId;
@@ -61,6 +72,7 @@ try {
   await page.getByRole('dialog').getByRole('button', { name: 'Import paper', exact: true }).click();
   await expect(page).toHaveURL(url => url.pathname.startsWith(`${new URL(base).pathname.replace(/\/$/, '')}/projects/paper_`));
   await compiled();
+  await expect(page.getByRole('checkbox', { name: 'Complete', exact: true })).not.toBeChecked();
   console.log('IMPORTED_AND_COMPILED');
   projectId = page.url().split('/').at(-1);
   const projects = await (await api('/projects')).json();
@@ -116,8 +128,9 @@ try {
   await page.getByRole('dialog').getByRole('button', { name: 'Import paper', exact: true }).click();
   await compiled(); cases.push('exported source can be reimported and compiled');
   assert.deepEqual(errors, []);
-  writeFileSync(resolve(out, 'result.json'), JSON.stringify({ result: 'pass', base, cases, apiFailures, pageErrors: errors }, null, 2));
-  console.log(JSON.stringify({ result: 'pass', cases, artifacts: out }));
+  assert.deepEqual(modelRequests, [], 'non-AI acceptance must not request live completions');
+  writeFileSync(resolve(out, 'result.json'), JSON.stringify({ result: 'pass', base, cases, apiFailures, pageErrors: errors, modelRequests }, null, 2));
+  console.log(JSON.stringify({ result: 'pass', cases, modelRequests: modelRequests.length, artifacts: out }));
 } catch (error) {
   await context.storageState({ path: resolve(out, 'session.json') }).catch(() => {});
   await page.screenshot({ path: resolve(out, 'failure.png') }).catch(() => {});

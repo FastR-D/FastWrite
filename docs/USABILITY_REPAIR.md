@@ -42,6 +42,8 @@ HTML 在 JavaScript 下载前即可显示加载状态，入口或懒加载资源
 
 浏览器完整流程使用开启认证的独立本地服务和 `/write/` 反向代理，真实调用修复后的服务器，使用本机 MiKTeX 编译，未拦截项目、上传、导出或编译 API：
 
+非 AI 验收脚本显式关闭自动补全和协作，拦截意外补全请求并断言模型请求数量为 0。早期验收遗漏关闭默认补全，曾触发本机 Codex 并产生包含测试稿的聊天；这些补全响应未用于功能通过判定。隔离修复后，使用拒绝全部模型操作的服务端 provider 复跑，8 项流程通过，客户端补全请求和服务端模型操作均为 0。
+
 1. 注册并进入个人工作区。
 2. 导入 main.tex、section.tex、refs.bib、figure.png，创建者能在列表找到、打开并编译稿件。
 3. 认证图片预览成功。
@@ -65,7 +67,7 @@ HTML 在 JavaScript 下载前即可显示加载状态，入口或懒加载资源
 
 ## 证据与交付边界
 
-当前任务证据在上层 `../fixed-e2e-v7/`：`result.json`、`01-imported.png`、`02-compile-error.png`、`03-recovered.png`、`paper.pdf`、`source.tar.gz`。首屏 `/write/` 证据在 `../startup-write-validation/`。这些数据不是源码提交的一部分。
+最终隔离验收证据在上层 `../fixed-e2e-no-ai/`：`result.json`、`01-imported.png`、`02-compile-error.png`、`03-recovered.png`、`paper.pdf`、`source.tar.gz`；服务端模型操作记录在 `../isolated-model-calls.json`（空数组）。首屏 `/write/` 证据在 `../startup-write-validation/`。这些数据不是源码提交的一部分。
 
 前期验证还遇到一个既有 Web 控件规范测试失败，来自未修改的 SourceControlView 原生 button 和 ResearchDialog 原生 label/input。本轮专项测试、类型检查、构建与真实流程均通过；没有宣称全套仓库测试或 GitHub CI 全绿。
 
