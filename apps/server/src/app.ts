@@ -152,6 +152,7 @@ export interface ApplicationOptions {
   mailTransport?: MailTransport;
   researchFetcher?: (input: string | Request | URL, init?: RequestInit) => Promise<Response>;
   researchAdapterBaseUrls?: ResearchAdapterBaseUrls;
+  githubRemoteResolver?: (repository: string) => string;
   metrics?: MetricsRegistry;
   collaborationBus?: CollaborationBus;
   postgresRepository?: import("./storage/repository").PostgresRepository;
@@ -383,7 +384,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
     return (provider?.generateDiagram ? provider : defaultDiagramProvider).generateDiagram!(input, signal);
   } });
   await diagrams.initialize();
-  const services: Services = { diagrams, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
+  const services: Services = { diagrams, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces, options.githubRemoteResolver), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
   const routes = buildRoutes(services, {
     status: () => {
       const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
@@ -527,6 +528,10 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     // instead of claiming that filtering output file names sanitizes their text.
     const prefixes = new Set(database.snapshot().projectAclRules.filter(rule => rule.projectId === projectId && rule.pathPrefix).map(rule => rule.pathPrefix));
     for (const path of prefixes) authorization.requireProjectPath(current, projectId, path, action);
+  };
+  const authorizeGithubSync = async (request: Request, projectId: string) => {
+    await authorizeProjectRecords(request, projectId, "github:sync");
+    await authorizeProjectRecords(request, projectId, "project:write");
   };
   const agentContextAccess = async (request: Request, projectId: string) => {
     if (!principal(request)) return undefined;
@@ -1111,15 +1116,16 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     }),
     route("POST", "/api/projects/:projectId/github-sync", async (request, params) => {
       const projectId = required(params, "projectId"); await collaboration.flushProject(projectId);
-      const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "github:sync", workspaces);
-      return json(await githubSync.start(projectId), 201);
+      return json(await githubSync.start(projectId, () => authorizeGithubSync(request, projectId)), 201);
     }),
     route("POST", "/api/projects/:projectId/github-sync/:syncId/resolve", async (request, params) => {
       const body = await readJson<{ resolutions: GithubSyncResolution[] }>(request);
-      return json(await githubSync.resolve(required(params, "projectId"), required(params, "syncId"), body.resolutions));
+      const projectId = required(params, "projectId");
+      return json(await githubSync.resolve(projectId, required(params, "syncId"), body.resolutions, () => authorizeGithubSync(request, projectId)));
     }),
-    route("POST", "/api/projects/:projectId/github-sync/:syncId/finalize", async (_request, params) => {
-      return json(await githubSync.finalize(required(params, "projectId"), required(params, "syncId")));
+    route("POST", "/api/projects/:projectId/github-sync/:syncId/finalize", async (request, params) => {
+      const projectId = required(params, "projectId");
+      return json(await githubSync.finalize(projectId, required(params, "syncId"), () => authorizeGithubSync(request, projectId)));
     }),
     route("GET", "/api/projects/:projectId/files", async (request, params, url) => {
       const projectId = required(params, "projectId"); const directory = url.searchParams.get("directory"); const current = principal(request, authEnabled); const support = supportGrant(request, projectId, directory ?? "", current);

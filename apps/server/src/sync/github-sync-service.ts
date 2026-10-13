@@ -10,6 +10,7 @@ import type { WorkspaceService } from "../workspace/workspace-service";
 const MAX_EDITABLE_CONFLICT_BYTES = 400_000;
 
 type RemoteResolver = (repository: string) => string;
+type AuthorizeSync = () => Promise<void>;
 
 export class GithubSyncService {
   private readonly syncRoot: string;
@@ -24,19 +25,19 @@ export class GithubSyncService {
     this.syncRoot = join(dataDirectory, "github-sync");
   }
 
-  async start(projectId: string): Promise<GithubSyncRun> {
-    return this.serialized(projectId, () => this.startNow(projectId));
+  async start(projectId: string, authorize?: AuthorizeSync): Promise<GithubSyncRun> {
+    return this.serialized(projectId, async () => { await authorize?.(); return this.startNow(projectId, authorize); });
   }
 
-  async resolve(projectId: string, runId: string, resolutions: GithubSyncResolution[]): Promise<GithubSyncRun> {
-    return this.serialized(projectId, () => this.resolveNow(projectId, runId, resolutions));
+  async resolve(projectId: string, runId: string, resolutions: GithubSyncResolution[], authorize?: AuthorizeSync): Promise<GithubSyncRun> {
+    return this.serialized(projectId, async () => { await authorize?.(); return this.resolveNow(projectId, runId, resolutions, authorize); });
   }
 
-  async finalize(projectId: string, runId: string): Promise<GithubSyncRun> {
-    return this.serialized(projectId, () => this.finalizeNow(projectId, runId));
+  async finalize(projectId: string, runId: string, authorize?: AuthorizeSync): Promise<GithubSyncRun> {
+    return this.serialized(projectId, async () => { await authorize?.(); return this.finalizeNow(projectId, runId, authorize); });
   }
 
-  private async startNow(projectId: string): Promise<GithubSyncRun> {
+  private async startNow(projectId: string, authorize?: AuthorizeSync): Promise<GithubSyncRun> {
     const project = this.githubProject(projectId);
     await this.workspaces.createSyncCheckpoint(projectId);
     await this.discardOpenRuns(projectId);
@@ -93,11 +94,12 @@ export class GithubSyncService {
           if (conflicts.length === 0) throw new ApiError(409, "github_sync_merge_failed", cleanGitError(merge.stderr));
           run = { ...run, status: "conflicts", conflicts, updatedAt: now() };
           await this.saveRun(run);
+          await authorize?.();
           return run;
         }
       }
 
-      return this.prepareMergedRun(run);
+      return this.prepareMergedRun(run, authorize);
     } catch (error) {
       run = { ...run, status: "failed", error: errorMessage(error), updatedAt: now() };
       await this.saveRun(run);
@@ -106,7 +108,7 @@ export class GithubSyncService {
     }
   }
 
-  private async resolveNow(projectId: string, runId: string, resolutions: GithubSyncResolution[]): Promise<GithubSyncRun> {
+  private async resolveNow(projectId: string, runId: string, resolutions: GithubSyncResolution[], authorize?: AuthorizeSync): Promise<GithubSyncRun> {
     let run = this.getRun(projectId, runId);
     if (run.status !== "conflicts") throw new ApiError(409, "github_sync_not_waiting", "This Sync is not waiting for conflict resolution");
     const byPath = new Map(resolutions.map((resolution) => [resolution.path, resolution]));
@@ -142,15 +144,16 @@ export class GithubSyncService {
     if (remaining) throw new ApiError(409, "github_sync_unresolved", "Some GitHub conflicts are still unresolved");
     run = { ...run, conflicts: [], updatedAt: now() };
     await this.saveRun(run);
-    return this.prepareMergedRun(run);
+    return this.prepareMergedRun(run, authorize);
   }
 
-  private async prepareMergedRun(run: GithubSyncRun): Promise<GithubSyncRun> {
+  private async prepareMergedRun(run: GithubSyncRun, authorize?: AuthorizeSync): Promise<GithubSyncRun> {
     const repositoryDirectory = this.repositoryDirectory(run.id);
     await git(["-C", repositoryDirectory, "add", "-A", "--", "."]);
     const mergedTree = (await git(["-C", repositoryDirectory, "write-tree"])).stdout.trim();
     const remoteTree = await revision(repositoryDirectory, `${run.remoteCommit}^{tree}`);
     const before = this.workspaces.getProject(run.projectId);
+    await authorize?.();
     const project = await this.workspaces.applyGithubSyncTree(run.projectId, repositoryDirectory, run.projectVersion);
     const hasChangesToPush = mergedTree !== remoteTree;
     if (project.version === before.version && !hasChangesToPush) {
@@ -165,7 +168,7 @@ export class GithubSyncService {
     return ready;
   }
 
-  private async finalizeNow(projectId: string, runId: string): Promise<GithubSyncRun> {
+  private async finalizeNow(projectId: string, runId: string, authorize?: AuthorizeSync): Promise<GithubSyncRun> {
     let run = this.getRun(projectId, runId);
     if (run.status !== "ready-to-compile" || run.projectVersion === undefined) throw new ApiError(409, "github_sync_not_ready", "Compile the merged paper before finishing Sync");
     if (this.workspaces.getProject(projectId).version !== run.projectVersion) throw new ApiError(409, "github_sync_workspace_changed", "The paper changed during Sync. Run Sync again so the new edits are included");
@@ -186,8 +189,10 @@ export class GithubSyncService {
     const mergedTree = (await git(["-C", repositoryDirectory, "write-tree"])).stdout.trim();
     const remoteTree = await revision(repositoryDirectory, `${run.remoteCommit}^{tree}`);
     let syncedCommit = run.remoteCommit;
+    await authorize?.();
     if (mergedTree !== remoteTree) {
       syncedCommit = (await git(["-C", repositoryDirectory, "commit-tree", mergedTree, "-p", run.remoteCommit, "-m", "Sync from FastWrite"])).stdout.trim();
+      await authorize?.();
       try {
         await git(["-C", repositoryDirectory, "push", "--porcelain", "origin", `${syncedCommit}:refs/heads/${run.branch}`]);
       } catch (error) {
