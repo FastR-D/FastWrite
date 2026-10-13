@@ -487,6 +487,21 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     if (current) authorization.requireProject(current, projectId, action);
     return current;
   };
+  const authorizeChangeSet = (request: Request, projectId: string, changeSetId: string, mutate = false) => {
+    const current = principal(request);
+    const changeSet = database.snapshot().changeSets.find(item => item.projectId === projectId && item.id === changeSetId);
+    if (!changeSet) throw new ApiError(404, "changeset_not_found", "Change set not found");
+    // Responses and conflict details contain complete base documents, including
+    // files not selected by a hunk decision. Authorize the entire proposal first.
+    if (current) for (const change of changeSet.changes) {
+      authorization.requireProjectPath(current, projectId, change.path, "project:read");
+      if (mutate) {
+        authorization.requireProjectPath(current, projectId, change.path, "project:write");
+        authorization.requireProjectPath(current, projectId, change.path, "changeset:approve");
+      }
+    }
+    return changeSet;
+  };
   const uploadIdFor = (request: Request, params: Record<string, string>) => {
     const current = principal(request);
     const id = required(params, "uploadId");
@@ -1149,8 +1164,7 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
     route("POST", "/api/projects/:projectId/table-equation-candidates/:changeSetId/compile-check", async (request, params) => {
       const projectId = required(params, "projectId");
       const changeSetId = required(params, "changeSetId");
-      const changeSet = database.snapshot().changeSets.find((candidate) => candidate.projectId === projectId && candidate.id === changeSetId);
-      if (!changeSet) throw new ApiError(404, "changeset_not_found", "Candidate ChangeSet not found");
+      const changeSet = authorizeChangeSet(request, projectId, changeSetId);
       const change = changeSet.changes[0];
       if (!change) throw new ApiError(400, "candidate_invalid", "Candidate ChangeSet has no file change");
       const result = validateLatexCandidate(change.after);
@@ -1291,37 +1305,42 @@ function buildRoutes({ diagrams, database, workspaces, projectSearch, uploads, g
         return record;
       }), 201);
     }),
-    route("GET", "/api/projects/:projectId/change-sets/:changeSetId", async (_request, params) => {
+    route("GET", "/api/projects/:projectId/change-sets/:changeSetId", async (request, params) => {
       const projectId = required(params, "projectId");
-      const changeSet = database.snapshot().changeSets.find((candidate) => candidate.projectId === projectId && candidate.id === required(params, "changeSetId"));
-      if (!changeSet) throw new ApiError(404, "changeset_not_found", "Change set not found");
+      const changeSet = authorizeChangeSet(request, projectId, required(params, "changeSetId"));
       return json(normalizePlaceholderFindings(changeSet));
     }),
     route("PATCH", "/api/projects/:projectId/change-sets/:changeSetId", async (request, params) => {
+      authorizeChangeSet(request, required(params, "projectId"), required(params, "changeSetId"), true);
       return json(await revisions.editProposal(required(params, "projectId"), required(params, "changeSetId"), await readJson<ChangeSetEditRequest>(request)));
     }),
-    route("POST", "/api/projects/:projectId/change-sets/:changeSetId/accept", async (_request, params) => {
+    route("POST", "/api/projects/:projectId/change-sets/:changeSetId/accept", async (request, params) => {
       const projectId = required(params, "projectId");
+      authorizeChangeSet(request, projectId, required(params, "changeSetId"), true);
       const accepted = await revisions.accept(projectId, required(params, "changeSetId"));
       await claims.refresh(projectId);
       return json(accepted);
     }),
     route("POST", "/api/projects/:projectId/change-sets/:changeSetId/decide", async (request, params) => {
       const projectId = required(params, "projectId");
+      authorizeChangeSet(request, projectId, required(params, "changeSetId"), true);
       const decided = await revisions.decide(projectId, required(params, "changeSetId"), await readJson<ChangeSetDecisionRequest>(request));
       await claims.refresh(projectId);
       return json(decided);
     }),
-    route("POST", "/api/projects/:projectId/change-sets/:changeSetId/finish", async (_request, params) => {
+    route("POST", "/api/projects/:projectId/change-sets/:changeSetId/finish", async (request, params) => {
       const projectId = required(params, "projectId");
+      authorizeChangeSet(request, projectId, required(params, "changeSetId"), true);
       const finished = await revisions.finishReview(projectId, required(params, "changeSetId"));
       await claims.refresh(projectId);
       return json(finished);
     }),
-    route("POST", "/api/projects/:projectId/change-sets/:changeSetId/reject", async (_request, params) => {
+    route("POST", "/api/projects/:projectId/change-sets/:changeSetId/reject", async (request, params) => {
+      authorizeChangeSet(request, required(params, "projectId"), required(params, "changeSetId"), true);
       return json(await revisions.reject(required(params, "projectId"), required(params, "changeSetId")));
     }),
     route("POST", "/api/projects/:projectId/change-sets/:changeSetId/rollback", async (request, params) => {
+      authorizeChangeSet(request, required(params, "projectId"), required(params, "changeSetId"), true);
       const body = request.headers.get("content-length") === "0" || !request.headers.get("content-type")?.includes("application/json") ? {} : await readJson<{ resolutions?: Array<{ path: string; currentVersion: number; content: string }> }>(request);
       const projectId = required(params, "projectId");
       const rolledBack = await revisions.rollback(projectId, required(params, "changeSetId"), body.resolutions ?? []);
