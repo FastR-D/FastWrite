@@ -670,7 +670,7 @@ run_code 'async (page) => {
     throw new Error("Confirmed Agent overwrite did not apply the reviewed hunk result");
   }
   await page.screenshot({ path: "output/playwright/workspace-agent-composer.png", fullPage: true });
-  await page.getByRole("button", { name: "修改", exact: true }).click();
+  await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "修改", exact: true }).click();
   await page.unroute("**/api/projects/*/agent-tasks");
   await page.unroute("**/api/projects/*/agent-tasks/agent-plan-review-e2e/confirm");
   await page.unroute("**/api/projects/*/change-sets/agent-change-review-e2e");
@@ -688,7 +688,7 @@ run_code 'async (page) => {
   const agentPanel = page.getByRole("region", { name: "智能助手工作区" });
   await agentPanel.waitFor();
   await agentPanel.getByLabel("希望智能助手做什么？").fill("Inspect cancellation behavior without creating changes");
-  await page.getByRole("button", { name: "修改", exact: true }).click();
+  await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "修改", exact: true }).click();
 }'
 
 run_code 'async (page) => {
@@ -1040,7 +1040,7 @@ run_code 'async (page) => {
   await page.screenshot({ path: "output/playwright/workspace-compile-repair-agent-720x800" + browserSuffix + ".png", fullPage: true });
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.getByRole("button", { name: "修改", exact: true }).click();
+  await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "修改", exact: true }).click();
   await editor.focus();
   await editor.press("ControlOrMeta+A");
   await page.keyboard.insertText("\\documentclass{article}\n\\begin{document}\nCompilation repaired.\n\\end{document}");
