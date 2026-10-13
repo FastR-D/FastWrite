@@ -134,7 +134,7 @@ run_code 'async (page) => {
 run_code 'async (page) => {
   const toolbar = page.locator(".pdf-toolbar");
   const idleBox = await toolbar.boundingBox();
-  await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
+  await page.locator(".pdf-pane .compile-strip").getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
   await page.locator(".react-pdf__Page__canvas").first().waitFor({ timeout: 90000 });
   const successBox = await toolbar.boundingBox();
   for (const box of [successBox]) {
@@ -892,7 +892,7 @@ run_code 'async (page) => {
   await revisionPanel.getByRole("button", { name: "Accept all & complete", exact: true }).click();
   await revisionPanel.getByText("needs review", { exact: true }).waitFor();
   await revisionPanel.getByRole("button", { name: "Compile current version" }).click();
-  await page.getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
+  await page.locator(".pdf-pane .compile-strip").getByText("Compiled successfully", { exact: true }).waitFor({ timeout: 90000 });
   const rereview = revisionPanel.getByRole("button", { name: "Targeted re-review" });
   await rereview.waitFor();
   await rereview.click();
