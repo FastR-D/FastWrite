@@ -1,6 +1,5 @@
 import type { StyleReferenceContext, ReferenceStyleAnalysisInput, ReferenceStyleAnalysis } from "@fastwrite/shared";
 import OpenAI from "openai";
-import { diagramPrompt, diagramSchema } from "../diagrams/scene";
 import type { FactualSupportInput, AgentTaskRequest, AgentWireApi, ComplianceFinding, DraftOutlineSection, DraftRequest, MemoryCategory, PaperSkillRef, ReviseTurn, TextSelection, EvidenceDependency } from "@fastwrite/shared";
 
 export interface ReviseAgentInput {
@@ -30,7 +29,6 @@ export interface ReviseAgentOutput {
 export interface AgentProvider {
   analyzeReferenceStyle?(input: ReferenceStyleAnalysisInput, signal?: AbortSignal): Promise<ReferenceStyleAnalysis>;
   assessFactualSupport?(input: FactualSupportInput, signal?: AbortSignal): Promise<unknown>;
-  generateDiagram?(input: { instruction: string; svg: string; model: string; previous: unknown }, signal?: AbortSignal): Promise<unknown>;
   fileGenerationConcurrency?(): number;
   revise(input: ReviseAgentInput, signal?: AbortSignal): Promise<ReviseAgentOutput>;
   planDraft?(input: DraftAgentInput, signal?: AbortSignal): Promise<{ outline: DraftOutlineSection[] }>;
@@ -280,9 +278,6 @@ export class OpenAIAgentProvider implements AgentProvider {
     );
   }
 
-  async generateDiagram(input: { instruction: string; svg: string; model: string; previous: unknown }, signal?: AbortSignal): Promise<unknown> {
-    return this.structured(diagramPrompt, input, "diagram_scene", diagramSchema, signal);
-  }
 
   async revise(input: ReviseAgentInput, signal?: AbortSignal): Promise<ReviseAgentOutput> {
     return this.structured<ReviseAgentOutput>(

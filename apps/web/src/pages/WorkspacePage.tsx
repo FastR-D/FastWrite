@@ -39,6 +39,7 @@ import { OutlineTree } from "../components/workspace/OutlineTree";
 import type { CompileStateReport } from "../components/workspace/PdfPane";
 import { ProjectSettingsEditor } from "../components/workspace/ProjectSettingsEditor";
 import { RenameFileDialog } from "../components/workspace/RenameFileDialog";
+import { CollaborationButton } from "../components/workspace/CollaborationButton";
 import type { SourceEditorHandle } from "../components/workspace/SourceEditor";
 import { AiWorkspace } from "../components/workspace/AiWorkspace";
 import { GithubSyncDialog } from "../components/workspace/GithubSyncDialog";
@@ -81,6 +82,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const treeRef = useRef<WorkspaceTreeNode[]>([]);
   const editorRef = useRef<SourceEditorHandle>(null);
+  const [completionEnabled, setCompletionEnabled] = useState(() => localStorage.getItem("fastwrite.completion.enabled") !== "false");
   const [referenceSettings, setReferenceSettings] = useState<ReferenceSettings | null>(null);
   const [referencePapers, setReferencePapers] = useState<ReferencePaper[]>([]);
   const [referenceAction, setReferenceAction] = useState<ReferenceWriteAction | null>(null);
@@ -707,6 +709,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           </div>
         </div>
         <div className="workspace-topbar__right">
+          <CollaborationButton key={projectId} registry={registry} path={!settingsActive && !historyDiff ? fileDocument?.file.path ?? null : null} />
           <span
             className="skill-badge"
             title={project.publicationTarget?.venueId ?? project.skill.name}
@@ -1066,6 +1069,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               >
                 <SourceEditor
                   ref={editorRef}
+                  completionEnabled={completionEnabled}
                   registry={registry}
                   projectId={projectId}
                   references={referenceSettings?.selections ?? []}
@@ -1117,7 +1121,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             />
             <Button variant="ghost" aria-expanded={!bottomPanelHidden} aria-controls="bottom-workbench-panel" onClick={() => setPanelCollapsed(!panelCollapsed)}>{bottomPanelHidden ? "显示面板" : "隐藏面板"}</Button>
           </div>
-          <div id="bottom-workbench-panel" className="workbench-bottom-panel" hidden={bottomPanelHidden}>
+          <div id="bottom-workbench-panel" className="workbench-bottom-panel" style={{ height: aiHeight }} hidden={bottomPanelHidden}>
           <PanelDivider
             label="调整底部面板大小"
             orientation="horizontal"
@@ -1138,7 +1142,11 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             selection={selection}
             paragraphSelection={paragraphSelection}
             sectionSelection={sectionSelection}
-            height={aiHeight}
+            completionEnabled={completionEnabled}
+            onCompletionEnabledChange={enabled => {
+              setCompletionEnabled(enabled);
+              localStorage.setItem("fastwrite.completion.enabled", String(enabled));
+            }}
             fullscreen={aiFullscreen}
             onToggleFullscreen={() => setAiFullscreen((value) => !value)}
             onUseSelection={(nextSelection) => {
@@ -1280,7 +1288,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           </Button>
         ) : null}
       </div>
-      <footer className="workbench-status" aria-label="工作区状态"><span>托管历史</span><span>{project.source.type === "github" ? "已配置 GitHub" : "本地项目"}</span><span>{buffersDirty ? "有未保存的编辑内容" : "编辑内容已确认"}</span><span>行 {cursorLocation.line}，列 {cursorLocation.column ?? 1}</span><span>UTF-8</span><span>项目版本{project.version} · PDF {compileState.compiledVersion === null ? "未编译" : `v${compileState.compiledVersion}`}</span></footer>
       <ProjectSearchDialog open={searchOpen} project={project} onClose={() => setSearchOpen(false)} onNavigate={(path, line) => { void navigateToPath(path, line); }} />
 
       <NewFileDialog
@@ -2265,12 +2272,6 @@ function AssetPreview({
   const current = preview?.key === assetKey ? preview : undefined;
   return (
     <div className="asset-preview">
-      <div className="editor-toolbar">
-        <div className="editor-toolbar__file">
-          <span>{name}</span>
-          <code>{path}</code>
-        </div>
-      </div>
       <div className="asset-preview__canvas">
         {current?.error ? <p role="alert">{current.error}</p> : current?.url ? (
           <img src={current.url} alt={name} onError={() => setPreview({ key: assetKey, error: "无法显示图片" })} />

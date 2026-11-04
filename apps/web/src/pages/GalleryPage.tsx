@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   Alert, Badge, Button, Checkbox, Disclosure, Divider, EmptyState, Field, FileField, Icon, IconButton, icons,
   Label, Link, List, ListEmpty, ListRow, ListRowText, Loader, MultiSelect, NumberField, ProgressBar,
-  SegmentedControl, Select, Spinner, StatusBar, StatusItem, Table, TableCell, TableRow,
+  SegmentedControl, Select, Spinner, Table, TableCell, TableRow,
   Tag, TextArea, TextField, Tooltip, View
 } from "../components/ui";
 import styles from "./GalleryPage.module.css";
@@ -299,14 +299,7 @@ export function GalleryPage() {
           </List>
         </div>
 
-        <div style={{ marginTop: 18 }}>
-          <StatusBar label="工作区状态" className="workbench-status">
-            <StatusItem>托管历史</StatusItem>
-            <StatusItem>本地项目</StatusItem>
-            <StatusItem>编辑内容已确认</StatusItem>
-            <StatusItem trailing>第 1 行，第 1 列</StatusItem>
-          </StatusBar>
-        </div>
+
       </section>
     </main>
   );

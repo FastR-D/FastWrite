@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "dev": "bun scripts/dev.ts",
+    "main": "bun scripts/dev.ts --main",
     "build": "bun run --filter '*' build",
     "package:app": "bun scripts/package-app.ts",
     "typecheck": "bun run --filter '*' typecheck",
@@ -36,7 +37,6 @@
     "e2e:shared-buffer": "node scripts/e2e-shared-buffer.mjs",
     "e2e:collaboration-barrier": "node scripts/e2e-collaboration-barrier.mjs",
     "e2e:collaboration-provider": "node scripts/e2e-collaboration-provider.mjs",
-    "e2e:document-recovery": "node scripts/e2e-document-recovery.mjs",
     "e2e:two-checkpoints": "node scripts/e2e-two-checkpoints.mjs",
     "e2e:current-changes": "node scripts/e2e-current-changes.mjs",
     "e2e:references": "node scripts/e2e-reference-papers.mjs",

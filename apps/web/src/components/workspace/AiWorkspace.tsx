@@ -25,7 +25,8 @@ interface AiWorkspaceProps {
   selection: TextSelection | null;
   paragraphSelection: TextSelection | null;
   sectionSelection: TextSelection | null;
-  height: number;
+  completionEnabled: boolean;
+  onCompletionEnabledChange: (enabled: boolean) => void;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   onUseSelection: (selection: TextSelection) => void;
@@ -57,7 +58,7 @@ const SHORTCUTS: ReadonlyArray<{ id: ReviseCommandId; label: string }> = [
 type PanelState = "idle" | "running" | "applying" | "accepted" | "error";
 interface ChatMessage { id: string; role: "user" | "assistant"; content: string; rationale?: string }
 
-export function AiWorkspace({ referenceSettings = null, referencePapers = [], referenceAction, onRemoveReference = () => {}, project, selection, paragraphSelection, sectionSelection, height, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onWorkspaceChanged, onPrepareLocalRevision, compileState, compileRepairRequest, onRequestCompile }: AiWorkspaceProps) {
+export function AiWorkspace({ referenceSettings = null, referencePapers = [], referenceAction, onRemoveReference = () => {}, project, selection, paragraphSelection, sectionSelection, completionEnabled, onCompletionEnabledChange, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onWorkspaceChanged, onPrepareLocalRevision, compileState, compileRepairRequest, onRequestCompile }: AiWorkspaceProps) {
   const [instruction, setInstruction] = useState("");
   const [state, setState] = useState<PanelState>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -325,7 +326,7 @@ export function AiWorkspace({ referenceSettings = null, referencePapers = [], re
   const harnessState = harnessStatus?.state;
 
   return (<>
-    <section className={`ai-workspace${activeTab === "agent" ? " ai-workspace--agent" : ""}${fullscreen ? " ai-workspace--fullscreen" : ""}`} style={{ "--ai-workspace-height": `${height}px` } as React.CSSProperties} aria-label="AI 写作工作区">
+    <section className={`ai-workspace${activeTab === "agent" ? " ai-workspace--agent" : ""}${fullscreen ? " ai-workspace--fullscreen" : ""}`} aria-label="AI 写作工作区">
       <header className="ai-workspace__header">
         <div className="ai-workspace__controls">
           <SegmentedControl
@@ -344,6 +345,7 @@ export function AiWorkspace({ referenceSettings = null, referencePapers = [], re
           </div>
         </div>
         <div className="ai-workspace__tools">
+          <Button className="ai-workspace__completion" size="small" variant={completionEnabled ? "secondary" : "ghost"} type="button" aria-pressed={completionEnabled} title="技能指导的写作补全" icon={<Icon name={icons.sparkle} />} onClick={() => onCompletionEnabledChange(!completionEnabled)}>补全</Button>
           <IconButton label="论文记忆" icon={<Icon name={icons.database} />} onClick={() => setMemoryOpen(true)} />
           <IconButton label="文献研究" icon={<Icon name={icons.search} />} onClick={() => setResearchOpen(true)} />
           <IconButton label="表格或公式助手" icon={<Icon name={icons.listTree} />} onClick={() => setStructuredOpen(true)} />

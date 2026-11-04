@@ -125,7 +125,6 @@ try {
     { id: 'projects', path: '/' },
     { id: 'workspace', path: `/projects/${project.id}`, ready: waitForCompiledPdf },
     { id: 'admin', path: '/admin' },
-    { id: 'diagrams', path: '/diagrams' },
     { id: 'components', path: '/components' }
   ];
 

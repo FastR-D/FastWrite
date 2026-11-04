@@ -305,9 +305,9 @@ try {
   assert.ok(await page.getByRole('list', { name: "当前更改文件" }).count() === 1, 'list is labelled');
   cases.push('list exposes an accessible name');
 
-  // The status bar keeps the stable hook the workbench assertions depend on.
-  await page.locator('.workbench-status').waitFor();
-  cases.push('status bar keeps the workbench-status hook');
+  // The removed workbench footer is absent from the catalogue.
+  assert.equal(await page.locator('.workbench-status').count(), 0);
+  cases.push('removed workbench footer');
 
   // Accessibility gate over the whole catalogue.
   //

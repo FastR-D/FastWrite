@@ -42,7 +42,7 @@ try {
   await nav.getByRole('button', { name: "大纲", exact: true }).click();
   await page.getByText("已保存的工作区版本", { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Results', exact: true }).click();
-  await until(async () => (await page.locator('.workbench-status').innerText()).includes('Ln 5'), 'saved outline uses exact heading line');
+  await until(async () => (await page.locator('.source-editor .line-numbers.active-line-number').innerText()).trim() === '5', 'saved outline uses exact heading line');
   await page.getByRole('button', { name: "当前文档", exact: true }).click();
   await page.getByText("当前编辑内容 · 本地解析", { exact: true }).waitFor();
   await source.focus(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('\\section{Local unsaved}\n');
@@ -56,7 +56,7 @@ try {
   assert.ok((await context.request.put(`${root}/file?path=main.tex`, { data: { content: shifted, baseVersion: current.file.version } })).ok());
   // The stale anchor must reanchor and select the exact claim, not jump to line 1.
   await claimButton.click();
-  await until(async () => (await page.locator('.workbench-status').innerText()).includes('Ln 6'), 'claim reanchor navigates to shifted exact text');
+  await until(async () => (await page.locator('.source-editor .line-numbers.active-line-number').innerText()).trim() === '6', 'claim reanchor navigates to shifted exact text');
   await until(async () => (await page.locator('.monaco-editor .selected-text').count()) > 0, 'claim text receives Monaco selection');
   const refreshed = await (await context.request.get(`${root}/claims`)).json();
   const updated = refreshed.find(item => item.id === claim.id);

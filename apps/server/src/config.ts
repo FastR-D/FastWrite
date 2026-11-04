@@ -140,6 +140,7 @@ export const config = {
   fastcas: fastcasIssuer && fastcasClientId && fastcasSecret && fastcasRedirect ? { issuer: fastcasIssuer, clientId: fastcasClientId, clientSecret: fastcasSecret, redirectUri: fastcasRedirect, allowLoopbackHTTP: process.env.FASTWRITE_FASTCAS_LOOPBACK_HTTP === "true", allowRegistration: process.env.FASTWRITE_FASTCAS_ALLOW_SIGNUP === "true" } : undefined,
   mail: smtpUrl && mailFrom ? { smtpUrl, from: mailFrom, ...(mailWebhookSecret ? { webhookSecret: mailWebhookSecret } : {}) } satisfies MailConfiguration : undefined,
   objectStore: objectStoreBucket && objectStoreEndpoint && objectStoreAccessKey && objectStoreSecretKey ? { bucket: objectStoreBucket, endpoint: objectStoreEndpoint, region: objectStoreRegion, accessKey: objectStoreAccessKey, secretKey: objectStoreSecretKey } : undefined,
+  developmentAdmin: process.env.FASTWRITE_DEVELOPMENT_ADMIN === "true",
   bootstrapAdmin: bootstrapAdminConfiguration(),
   agentProviders: agentProviderConfigurations(),
   features: {

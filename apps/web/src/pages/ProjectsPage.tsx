@@ -183,7 +183,6 @@ export function ProjectsPage() {
             {account ? account.displayName : "登录"}
           </Button>
           {account ? <Button size="small" variant="ghost" onClick={() => setFastcasOpen(true)}>账号认证</Button> : null}
-          <Link href="/diagrams">科研绘图</Link>
           <ThemeToggle />
         </div>
       </header>

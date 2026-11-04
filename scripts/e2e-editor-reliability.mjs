@@ -58,7 +58,6 @@ try {
   release();
   const read = async path => (await (await context.request.get(`${root}/file?path=${encodeURIComponent(path)}`)).json()).content;
   await waitFor(async () => (await read('main.tex')).startsWith('SAVE_A_B'), 'new text survives old ACK');
-  await page.locator('.save-indicator--saved').waitFor();
   assert.match(await page.locator('.view-lines').innerText(), /SAVE_A_B/, 'ACK must not overwrite the rendered model');
   assert.equal(reads, 0, 'save metadata refresh must not read active text');
   await editor().focus();
@@ -83,12 +82,11 @@ try {
   await editor().focus();
   await page.keyboard.press('Control+Home');
   await page.keyboard.insertText('RETRY_');
-  await page.locator('.save-indicator--offline').waitFor();
+  await page.locator('.editor-message--offline').waitFor();
   assert.match(await page.locator('.view-lines').innerText(), /RETRY_/, 'failed save retains visible text');
   assert.ok(!(await read('main.tex')).startsWith('RETRY_'), 'failed save must not claim persistence');
   await page.keyboard.press('Control+s');
   await waitFor(async () => (await read('main.tex')).startsWith('RETRY_'), 'explicit retry persists retained text');
-  await page.locator('.save-indicator--saved').waitFor();
   const sourceEditorCountBeforeStress = await page.locator('.source-editor-container .monaco-editor').count();
   for (let index = 0; index < 25; index++) {
     await editor().focus();

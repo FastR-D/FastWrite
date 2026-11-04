@@ -8,14 +8,7 @@ export interface StatusBarProps {
   className?: string;
 }
 
-/**
- * The workbench status strip.
- *
- * `className` reaches the <footer> so the caller can keep the stable
- * `workbench-status` hook the e2e suite reads its innerText from. That element
- * carries aria-label but no role, so a role-based locator is impossible — the
- * class name is the only handle and must survive.
- */
+/** Generic status strip for component consumers. */
 export function StatusBar({ children, label, className = "" }: StatusBarProps) {
   return (
     <footer className={`${styles.bar} ${className}`.trim()} aria-label={label}>

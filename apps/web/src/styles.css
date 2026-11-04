@@ -367,17 +367,6 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .workspace-center { min-width: 360px; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; background: var(--surface); }
 .editor-region { min-height: 250px; flex: 1; overflow: hidden; }
 .source-editor, .asset-preview { width: 100%; height: 100%; display: flex; flex-direction: column; position: relative; }
-.editor-toolbar { height: 35px; flex: 0 0 35px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 10px 0 12px; border-bottom: 1px solid var(--border); background: var(--slate-25); }
-.editor-toolbar__file { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
-.editor-toolbar__file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 650; }
-.editor-toolbar__file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 9px; }
-.editor-toolbar__actions { display: flex; align-items: center; gap: 7px; }
-.editor-toolbar .editor-undo-completion { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--blue-700); font-size: 9px; font-weight: 400; justify-content: flex-start; }
-.editor-undo-completion svg { width: 11px; height: 11px; }
-.save-indicator { display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: 9px; white-space: nowrap; }
-.save-indicator svg { width: 12px; height: 12px; }
-.save-indicator--saved { color: var(--green-600); }
-.save-indicator--error, .save-indicator--conflict { color: var(--red-600); }
 .monaco-editor-host { min-height: 0; flex: 1; overflow: hidden; background: #fff; }
 .monaco-editor-host .monaco-editor, .monaco-editor-host .overflow-guard { height: 100%; }
 .monaco-editor-host .monaco-editor .margin { border-right: 1px solid var(--slate-100); }
@@ -398,10 +387,9 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .asset-preview__canvas { min-height: 0; flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 30px; background: var(--canvas); }
 .asset-preview__canvas img { max-width: 100%; max-height: 100%; object-fit: contain; box-shadow: 0 2px 14px rgba(20,30,45,.16); }
 
-.ai-workspace { height: var(--ai-workspace-height, 322px); flex: 0 0 var(--ai-workspace-height, 322px); display: flex; flex-direction: column; border-top: 1px solid var(--border-strong); background: var(--vscode-editor-background); container-type: inline-size; }
+.ai-workspace { min-height: 0; height: 100%; flex: 1 1 0; overflow: hidden; display: flex; flex-direction: column; border-top: 1px solid var(--border-strong); background: var(--vscode-editor-background); container-type: inline-size; }
 .ai-workspace__body { position: relative; min-height: 0; width: 100%; flex: 1; display: flex; flex-direction: column; }
 .ai-workspace__body > [hidden] { display: none !important; }
-.ai-workspace--diff, .ai-workspace--agent { min-height: 220px; }
 .ai-workspace--fullscreen { position: fixed; inset: 0; z-index: 80; height: 100vh; flex-basis: 100vh; border: 0; box-shadow: 0 0 0 1px var(--border-strong), 0 14px 48px rgba(20,35,52,.28); }
 .ai-workspace--fullscreen .ai-workspace__body { margin: 0 auto; border-right: 1px solid var(--border); border-left: 1px solid var(--border); }
 .ai-workspace__width-handle { position: absolute; z-index: 4; top: 0; right: 0; bottom: 0; width: 10px; display: flex; align-items: center; justify-content: center; cursor: col-resize; color: var(--slate-400); }
@@ -421,6 +409,8 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .ai-workspace__harness [role="combobox"] { height: 30px; }
 .ai-workspace__tools { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .ai-workspace__tools button { width: 28px; height: 28px; }
+.ai-workspace__tools .ai-workspace__completion { width: auto; padding: 0 8px; }
+.ai-workspace__completion[aria-pressed="true"] { color: var(--accent); background: var(--vscode-active); }
 
 .github-sync-dialog .dialog__body { padding: 0; }
 .sync-progress { min-height: 180px; display: flex; align-items: center; justify-content: center; gap: 14px; padding: 28px; text-align: left; }
@@ -1132,37 +1122,25 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 
 .workspace-center { min-width: 0; }
 .editor-region { min-height: 0; }
-.workbench-bottom-panel { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow: hidden; max-height: 65%; }
+.workbench-bottom-panel { display: flex; flex-direction: column; flex: 0 0 auto; min-height: 0; overflow: hidden; max-height: 65%; }
 .bottom-panel-heading { height: 28px; flex: 0 0 28px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border); padding: 0 8px; font-size: 11px; }
 .bottom-panel-heading button { background: transparent; border: 0; color: var(--accent); cursor: pointer; }
 .bottom-panel-tabs { display: flex; align-self: stretch; align-items: stretch; gap: 2px; }
 .bottom-panel-tabs button { min-width: 48px; padding: 0 8px; color: var(--text-muted); }
 .bottom-panel-tabs button[aria-selected="true"] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); }
-.bottom-panel-content { display: flex; min-height: 0; height: 100%; flex: 1; flex-direction: column; overflow: hidden; }
+.bottom-panel-content { display: flex; min-height: 0; flex: 1 1 0; flex-direction: column; overflow: auto; }
 .bottom-panel-content[hidden] { display: none; }
+.bottom-panel-problems .diagnostic-list { min-height: 0; flex: 1; overflow: auto; }
+.bottom-panel-problems > header, .bottom-panel-output > header { flex-shrink: 0; }
 .bottom-panel-problems, .bottom-panel-output { background: #171d26; color: #d9e0e9; }
 .bottom-panel-problems > header, .bottom-panel-output > header { min-height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border-bottom: 1px solid #26374a; font-size: 11px; font-weight: 650; }
 .bottom-panel-problems header small, .bottom-panel-output header small { margin-left: auto; color: #aeb9c6; font-size: 10px; font-weight: 400; }
 .bottom-panel-output > pre { min-height: 0; flex: 1; margin: 0; overflow: auto; padding: 10px; white-space: pre-wrap; color: #c7d0dc; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; line-height: 1.55; }
 .bottom-panel-empty { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1; color: #aeb9c6; font-size: 11px; }
 .bottom-panel-empty svg { width: 16px; color: #86c995; }
-.workbench-status { flex: 0 0 24px; min-width: 0; display: flex; align-items: center; gap: 16px; overflow-x: auto; white-space: nowrap; padding: 0 10px; background: var(--slate-100); border-top: 1px solid var(--border); font-size: 10px; }
 .diff-restore-confirmation { padding: 8px; background: var(--slate-100); border-bottom: 1px solid var(--border); font-size: 12px; }
 .diff-restore-confirmation button { margin-right: 8px; }
 
-.document-recovery .dialog__body { display: flex; flex-direction: column; gap: 10px; overflow: hidden; min-height: 0; padding: 12px; }
-.recovery-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: none; }
-.recovery-controls label { display: flex; align-items: center; gap: 6px; }
-.recovery-controls select, .recovery-controls input { max-width: min(440px, 60vw); }
-/*
- * Removed: a rule that gave unstyled raw buttons a surface, border and padding.
- * Its three scopes are library components now, but it kept matching them —
- * the library renders real <button> elements — and beat vscrui's background
- * while vscrui's own `color: white` still applied, so the recovery dialog's
- * primary action rendered white text on a white surface.
- *
- * Library variants own appearance. An app rule should only add layout.
- */.recovery-controls button[aria-pressed="true"] { color: var(--blue-700); background: var(--blue-50); }
 .text-model-comparison { min-width: 0; min-height: 100px; flex: 1; display: flex; flex-direction: column; }
 .text-model-comparison .workbench-actions { flex: none; flex-wrap: wrap; }
 .text-model-comparison__editor { flex: 1; min-width: 0; min-height: 0; }
@@ -1185,7 +1163,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .workspace-page { background: var(--vscode-panel); }
 .workspace-topbar { background: var(--vscode-chrome); border-bottom-color: var(--vscode-border); }
 .workspace-sidebar, .activity-bar { background: var(--vscode-panel); border-color: var(--vscode-border); }
-.panel-heading, .workbench-status, .bottom-panel-heading { background: var(--vscode-chrome); border-color: var(--vscode-border); }
+.panel-heading, .bottom-panel-heading { background: var(--vscode-chrome); border-color: var(--vscode-border); }
 .panel-heading { color: var(--text-secondary); font-size: 10px; letter-spacing: .06em; }
 .activity-bar button:hover, .activity-bar button[aria-pressed="true"] { background: var(--vscode-hover); }
 .activity-bar button[aria-pressed="true"] { border-left-color: var(--accent); color: var(--accent); }

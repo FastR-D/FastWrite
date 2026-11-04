@@ -22,7 +22,6 @@ try {
   assert.ok(modelId);
   await source().focus(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('% SOURCE_MARKER\n');
   await until(async () => (await read()).startsWith('% SOURCE_MARKER\n'), 'source save');
-  await page.locator('.save-indicator--saved').waitFor();
   let releaseSave;
   const saveGate = new Promise(resolve => { releaseSave = resolve; });
   await page.route('**/file?path=main.tex', async route => {

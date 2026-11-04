@@ -16,7 +16,6 @@ export function ProductLanding({ onSignIn }: { onSignIn: () => void }) {
           <span className="brand__mark">F</span><span>FastWrite</span>
         </Link>
         <nav className={styles.navigation} aria-label="首页导航">
-          <Link href="/diagrams">科研绘图</Link>
           <ThemeToggle />
           <Button variant="ghost" onClick={onSignIn}>登录</Button>
         </nav>

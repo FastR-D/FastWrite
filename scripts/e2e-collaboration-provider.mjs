@@ -35,7 +35,7 @@ try {
   await a.unroute('**/collaboration?path=main.tex');
   await b.goto(`${base}/projects/${project.id}`); await source(b).waitFor();
   await until(async () => (await visible(b)).includes('BEFORE_READY'), 'second client sees initialization input');
-  await until(async () => (await a.locator('.source-editor').innerText()).includes('Collaborate · 1'), 'authenticated peer awareness is decoded');
+  await until(async () => (await a.locator('.workspace-topbar__right').innerText()).includes('协作已开启 · 1'), 'authenticated peer awareness is decoded');
   await source(a).focus(); await a.keyboard.press('Control+Home'); await a.keyboard.insertText('% AUTHOR_A\n');
   await until(async () => (await visible(b)).includes('AUTHOR_A'), 'A update reaches B');
   await source(b).focus(); await b.keyboard.press('Control+Home'); await b.keyboard.insertText('% AUTHOR_B\n');

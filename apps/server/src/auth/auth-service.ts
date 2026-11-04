@@ -7,6 +7,7 @@ import type { Identity, Link } from "@fastrd/fastcas/server";
 
 export interface Principal { user: AccountUser; sessionId: string; idpGroups?: string[]; }
 
+const DEVELOPMENT_ADMIN_ID = "user_fastwrite_development_admin";
 const LOCAL_ISSUER = "fastwrite:local";
 const ACCESS_TOKEN_MS = 15 * 60_000;
 const REFRESH_TOKEN_MS = 30 * 86400_000;
@@ -15,10 +16,10 @@ export interface CollaborationRoomGrant { userId: string; sessionId: string; pro
 
 export class AuthService {
   private readonly roomTokenSecret: string;
-  constructor(private readonly database: JsonDatabase, roomTokenSecret?: string) { this.roomTokenSecret = roomTokenSecret || randomBytes(32).toString("base64url"); }
+  constructor(private readonly database: JsonDatabase, roomTokenSecret?: string, private readonly developmentAdmin = false) { this.roomTokenSecret = roomTokenSecret || randomBytes(32).toString("base64url"); }
 
   async ensureBootstrapAdmin(input?: { email: string; password: string }): Promise<boolean> {
-    if (this.database.snapshot().users.some((user) => user.platformRole === "platform_admin" && user.status === "active")) return false;
+    if (this.database.snapshot().users.some((user) => user.id !== DEVELOPMENT_ADMIN_ID && user.platformRole === "platform_admin" && user.status === "active")) return false;
     if (!input) throw new Error("No active administrator exists. Set FASTWRITE_BOOTSTRAP_ADMIN_EMAIL and FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD before enabling server authentication");
     const email = normalizeEmail(input.email);
     if (input.password.trim().length < 12) throw new Error("Bootstrap admin password must contain at least 12 non-padding characters");
@@ -26,7 +27,7 @@ export class AuthService {
     const user: AccountUser = { id: `user_${crypto.randomUUID()}`, emailNormalized: email, displayName: "FastWrite Administrator", platformRole: "platform_admin", status: "active", authzVersion: 1, createdAt: timestamp, updatedAt: timestamp };
     const passwordHash = await Bun.password.hash(input.password, { algorithm: "argon2id" });
     return await this.database.mutate((state) => {
-      if (state.users.some((existing) => existing.platformRole === "platform_admin" && existing.status === "active")) return false;
+      if (state.users.some((existing) => existing.id !== DEVELOPMENT_ADMIN_ID && existing.platformRole === "platform_admin" && existing.status === "active")) return false;
       if (state.users.some((existing) => existing.emailNormalized === email)) throw new Error("Bootstrap admin email is already in use; choose an unused email");
       state.users.push(user);
       state.externalIdentities.push({ id: `identity_${crypto.randomUUID()}`, userId: user.id, issuer: LOCAL_ISSUER, subject: email, email, createdAt: timestamp });
@@ -34,6 +35,25 @@ export class AuthService {
       state.auditEvents.push(audit(user.id, "auth.bootstrap_register", "user", user.id));
       return true;
     });
+  }
+
+  async developmentSession(): Promise<{ user: AccountUser; token: string }> {
+    if (!this.developmentAdmin) throw new ApiError(404, "route_not_found", "API route not found");
+    const timestamp = new Date().toISOString();
+    const token = randomToken();
+    const user = await this.database.mutate((state) => {
+      let user = state.users.find(item => item.id === DEVELOPMENT_ADMIN_ID);
+      if (!user) {
+        user = { id: DEVELOPMENT_ADMIN_ID, emailNormalized: "admin@development.invalid", displayName: "Admin (开发)", platformRole: "platform_admin", status: "active", authzVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+        state.users.push(user);
+      }
+      if (user.status !== "active" || user.platformRole !== "platform_admin") throw new ApiError(403, "development_admin_disabled", "The development administrator is disabled");
+      // No password, external identity or refresh cookie is created for this account.
+      state.sessions = state.sessions.filter(item => item.userId !== DEVELOPMENT_ADMIN_ID || (!item.revokedAt && item.expiresAt > timestamp));
+      state.sessions.push({ ...session(user.id, token, randomToken(), timestamp), expiresAt: new Date(Date.now() + REFRESH_TOKEN_MS).toISOString() });
+      return user;
+    });
+    return { user, token };
   }
 
   async register(input: { email: string; password: string; displayName?: string }): Promise<AuthResult> {
@@ -92,6 +112,7 @@ export class AuthService {
     if (!raw) throw new ApiError(401, "refresh_missing", "Refresh session is required");
     const tokenHash = hash(raw); const timestamp = new Date().toISOString();
     const snapshot = this.database.snapshot(); const existing = snapshot.sessions.find((item) => item.refreshTokenHash === tokenHash);
+    if (existing?.userId === DEVELOPMENT_ADMIN_ID) throw new ApiError(401, "refresh_invalid", "Development sessions cannot be refreshed");
     if (!existing || !existing.refreshExpiresAt || existing.refreshExpiresAt <= timestamp) throw new ApiError(401, "refresh_invalid", "Refresh session is invalid or expired");
     if (existing.revokedAt) {
       await this.database.mutate((state) => { for (const session of state.sessions) if (session.familyId && session.familyId === existing.familyId) session.revokedAt ??= timestamp; state.auditEvents.push(audit(existing.userId, "auth.refresh.replay", "session", existing.id)); });
@@ -116,7 +137,7 @@ export class AuthService {
     if (!raw) { if (required) throw new ApiError(401, "authentication_required", "Sign in is required"); return undefined; }
     const state = this.database.snapshot(); const item = state.sessions.find((candidate) => !candidate.revokedAt && candidate.expiresAt > new Date().toISOString() && candidate.tokenHash === hash(raw));
     const user = item && state.users.find((candidate) => candidate.id === item.userId);
-    if (!item || !user || user.status !== "active") throw new ApiError(401, "session_invalid", "Your session has expired");
+    if (!item || !user || (!this.developmentAdmin && user.id === DEVELOPMENT_ADMIN_ID) || user.status !== "active") throw new ApiError(401, "session_invalid", "Your session has expired");
     return { user, sessionId: item.id, idpGroups: item.idpGroups ?? [] };
   }
 
@@ -205,7 +226,7 @@ export class AuthService {
     try { grant = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as CollaborationRoomGrant; } catch { throw new ApiError(401, "collaboration_room_invalid", "Collaboration room token is invalid"); }
     if (!grant.userId || !grant.sessionId || !grant.projectId || !grant.path || (grant.scope !== "read" && grant.scope !== "write") || !Number.isInteger(grant.authzVersion) || !grant.expiresAt || Date.parse(grant.expiresAt) <= Date.now()) throw new ApiError(401, "collaboration_room_expired", "Collaboration room token has expired");
     const state = this.database.snapshot(); const session = state.sessions.find((item) => item.id === grant.sessionId && item.userId === grant.userId && !item.revokedAt && item.expiresAt > new Date().toISOString()); const user = state.users.find((item) => item.id === grant.userId);
-    if (!session || !user || user.status !== "active" || user.authzVersion !== grant.authzVersion) throw new ApiError(401, "collaboration_room_revoked", "Collaboration room access has been revoked");
+    if (!session || !user || (!this.developmentAdmin && user.id === DEVELOPMENT_ADMIN_ID) || user.status !== "active" || user.authzVersion !== grant.authzVersion) throw new ApiError(401, "collaboration_room_revoked", "Collaboration room access has been revoked");
     return grant;
   }
 

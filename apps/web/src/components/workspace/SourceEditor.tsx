@@ -3,11 +3,10 @@ import type { NavigationRequest } from "../../lib/editor/navigationController";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type MutableRefObject } from "react";
 import * as monaco from "../../lib/editor/monacoRuntime";
 import { configureMonaco } from "../../lib/editor/monaco";
-import { Button, Checkbox, Icon, icons } from "../ui";
+import { Icon, icons } from "../ui";
 import type { CompletionKind, CompletionResponse, FileContentResponse, SourceLocation, TextSelection } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
 import { type DocumentRegistry } from "../../lib/editor/documentRegistry";
-import { DocumentRecoveryDialog } from "../workbench/DocumentRecoveryDialog";
 import { completionSuffix } from "./completion";
 import { currentTheme, THEME_CHANGE_EVENT } from "../../lib/theme";
 type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict" | "offline";
@@ -30,6 +29,7 @@ function recordCompletionMetric(event: CompletionMetricEvent, kind: CompletionKi
 
 interface SourceEditorProps {
   references?: ReferenceSelection[];
+  completionEnabled: boolean;
   registry: DocumentRegistry;
   projectId: string;
   document: FileContentResponse;
@@ -45,7 +45,7 @@ export interface SourceEditorHandle {
   flush: () => Promise<void>;
 }
 
-export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ references, registry, projectId, document, targetLine, targetSelection, onSelection, onCursor, onDirtyChange, onDocumentState }, ref) {
+export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ references, completionEnabled, registry, projectId, document, targetLine, targetSelection, onSelection, onCursor, onDirtyChange, onDocumentState }, ref) {
   const referenceKey = JSON.stringify(references ?? []);
   const referenceKeyRef = useRef(referenceKey);
   referenceKeyRef.current = referenceKey;
@@ -80,17 +80,12 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   const suppressNextCompletionRef = useRef(false);
   const versionRef = useRef(document.file.version);
   const [editorReady, setEditorReady] = useState(false);
-  const [recoveryOpen, setRecoveryOpen] = useState(false);
-  const [recoveryCount, setRecoveryCount] = useState(0);
   const [status, setStatus] = useState<SaveStatus>("saved");
   const [message, setMessage] = useState("");
   const [completion, setCompletionState] = useState<CompletionResponse | null>(null);
   const [completionLoading, setCompletionLoading] = useState(false);
   const [completionError, setCompletionError] = useState("");
-  const [acceptedCompletion, setAcceptedCompletion] = useState<{ from: number; text: string } | null>(null);
-  const [completionEnabled, setCompletionEnabled] = useState(() => localStorage.getItem("fastwrite.completion.enabled") !== "false");
   const [collaborationEnabled, setCollaborationEnabled] = useState(() => localStorage.getItem("fastwrite.collaboration.enabled") === "true");
-  const [collaborationStatus, setCollaborationStatus] = useState("正在初始化协作");
   const [collaborators, setCollaborators] = useState<Array<{ clientId: string; name: string; color?: string; path: string; line?: number }>>([]);
   const completionKind: CompletionKind = "auto";
 
@@ -202,12 +197,10 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     if (versionRef.current !== session.serverVersion) setSaveEpoch(value => value + 1);
     versionRef.current = session.serverVersion;
     setCollaborators(entry.collaboration?.peers() ?? []);
-    const provider = entry.collaboration;
-    if (provider) setCollaborationStatus(provider.error ? "协作状态需要处理" : provider.state === "initializing" ? "正在初始化协作" : provider.state === "offline" ? "离线 · 已保留本地更改" : registry.dirtyEntry(entry) ? "本地更改 · 等待保存" : provider.state === "persisted" ? "已写入文件" : provider.state === "connecting" ? "连接中" : "已连接");
-    setRecoveryCount(entry.recoveries.length);
+    setCollaborationEnabled(entry.mode === "collaboration");
     const error = session.error ?? entry.collaboration?.error ?? entry.draftError;
     setStatus(error ? error instanceof ApiClientError && error.status === 409 ? "conflict" : !navigator.onLine || error instanceof TypeError ? "offline" : "error" : session.saving ? "saving" : registry.dirtyEntry(entry) ? "dirty" : "saved");
-    setMessage(error instanceof Error ? error.message : entry.recoveries.length ? "可比较已保存的本地草稿。" : "");
+    setMessage(error instanceof Error ? error.message : "");
   }), [registry]);
 
   useEffect(() => {
@@ -217,7 +210,6 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     const pathChanged = activeKeyRef.current !== key;
     const entry = registry.open(document);
     setCollaborationEnabled(entry.mode === "collaboration");
-    setRecoveryCount(entry.recoveries.length);
     if (pathChanged) {
       const previous = sessionsRef.current.get(activeKeyRef.current);
       if (previous) previous.viewState = editor.saveViewState();
@@ -234,7 +226,6 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       if (entry.viewState) editor.restoreViewState(entry.viewState);
       decorationsRef.current?.clear();
       completionDecorationsRef.current?.clear();
-      setAcceptedCompletion(null);
     }
     editor.updateOptions({ ariaLabel: `源文件编辑器： ${document.file.path}` });
     versionRef.current = entry.session.serverVersion;
@@ -308,6 +299,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
       options: {
         after: { content: suffix, inlineClassName: "fastwrite-monaco-completion" },
+        showIfCollapsed: true,
         stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
       }
     }]);
@@ -346,7 +338,6 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     suppressNextCompletionRef.current = true;
     const suffix = completionSuffix(next.suggestion, model.getValueInRange(new monaco.Range(1, 1, model.getPositionAt(next.cursor).lineNumber, model.getPositionAt(next.cursor).column)));
     if (!suffix) { ignoreCompletion(); return; }
-    setAcceptedCompletion({ from: next.cursor, text: suffix });
     recordCompletionMetric("accepted", next.kind);
     setCompletion(null);
     const position = model.getPositionAt(next.cursor);
@@ -357,36 +348,20 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     editor.focus();
   };
 
-  const undoCompletion = () => {
-    const accepted = acceptedCompletion;
-    const editor = editorRef.current;
-    const model = modelRef.current;
-    if (!accepted || !editor || !model) return;
-    const range = rangeFromOffsets(model, accepted.from, accepted.from + accepted.text.length);
-    if (model.getValueInRange(range) !== accepted.text) return;
-    suppressNextCompletionRef.current = true;
-    editor.executeEdits("fastwrite-completion-undo", [{ range, text: "", forceMoveMarkers: true }]);
-    editor.pushUndoStop();
-    editor.setPosition(model.getPositionAt(accepted.from));
-    setAcceptedCompletion(null);
-    editor.focus();
-  };
-
   const ignoreCompletion = () => {
     const ignored = completionRef.current;
     if (ignored) recordCompletionMetric("ignored", ignored.kind);
     setCompletion(null);
   };
 
-  const changeCompletionEnabled = (enabled: boolean) => {
-    setCompletionEnabled(enabled);
-    localStorage.setItem("fastwrite.completion.enabled", String(enabled));
-    if (!enabled) {
+  useEffect(() => {
+    if (!completionEnabled) {
       shouldCompleteRef.current = false;
       cancelCompletion();
       setCompletion(null);
+      setCompletionError("");
     }
-  };
+  }, [completionEnabled]);
 
   return (
     <div className="source-editor" onKeyDownCapture={(event) => {
@@ -395,24 +370,9 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       if (event.key === "Escape" && completionRef.current) { event.preventDefault(); event.stopPropagation(); ignoreCompletion(); }
 
     }}>
-      <div className="editor-toolbar">
-        <div className="editor-toolbar__file"><span>{document.file.name}</span><code>{document.file.path}</code></div>
-        <div className="editor-toolbar__actions">
-          <Checkbox id="completion-enabled" name="completion-enabled" variant="pill" icon={completionLoading ? <Icon name={icons.loading} spin /> : <Icon name={icons.sparkle} />} checked={completionEnabled} onChange={changeCompletionEnabled} title={completionError || "技能指导的写作补全"}>
-            补全
-          </Checkbox>
-        <Checkbox id="collaboration-enabled" name="collaboration-enabled" variant="pill" checked={collaborationEnabled} onChange={(enabled) => {
-          const entry = registry.get(document.file.path);
-          if (entry) void registry.setCollaboration(entry, enabled).then(() => { setCollaborationEnabled(enabled); localStorage.setItem("fastwrite.collaboration.enabled", String(enabled)); }).catch(error => { setStatus("error"); setMessage(error instanceof Error ? error.message : "无法切换同步模式"); });
-        }} title="通过 Yjs 协作同步此文件">启用协作{collaborators.length ? ` · ${collaborators.length}` : ""}</Checkbox>
-          {acceptedCompletion ? <Button variant="ghost" className="editor-undo-completion" type="button" onClick={undoCompletion} icon={<Icon name={icons.discard} />}>撤销补全</Button> : null}
-          {collaborationEnabled ? <span className="collaboration-status" role="status">{collaborationStatus}</span> : null}
-          <Button variant="secondary" type="button" onClick={() => { cancelCompletion(); setCompletion(null); setRecoveryOpen(true); }}>比较与恢复{recoveryCount ? ` (${recoveryCount})` : ""}</Button>
-          <SaveIndicator status={status} />
-        </div>
-      </div>
       <div ref={hostRef} className="monaco-editor-host" />
-      {recoveryOpen && registry.get(document.file.path) ? <DocumentRecoveryDialog registry={registry} entry={registry.get(document.file.path)!} onClose={() => setRecoveryOpen(false)} /> : null}
+      {completionLoading ? <span className="sr-only" role="status">正在生成写作补全…</span> : null}
+      {completionError ? <div className="editor-message editor-message--error" role="alert">{completionError}</div> : null}
       {completion ? <span className="sr-only" role="status">有可用的写作建议，按 Tab 接受，按 Esc 忽略。</span> : null}
       {message ? <div className={`editor-message editor-message--${status}`} role="alert"><Icon name={icons.info} /> {message}</div> : null}
     </div>
@@ -461,11 +421,4 @@ function rangeFromOffsets(model: monaco.editor.ITextModel, from: number, to: num
   const start = model.getPositionAt(Math.max(0, Math.min(from, model.getValueLength())));
   const end = model.getPositionAt(Math.max(0, Math.min(to, model.getValueLength())));
   return new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column);
-}
-
-function SaveIndicator({ status }: { status: SaveStatus }) {
-  const content = {
-    saved: [<Icon key="icon" name={icons.check} />, "已保存"], dirty: [<Icon key="icon" name={icons.circleFilled} />, "未保存"], saving: [<Icon key="icon" name={icons.loading} spin />, "正在保存"], error: [<Icon key="icon" name={icons.info} />, "保存失败"], conflict: [<Icon key="icon" name={icons.info} />, "冲突"], offline: [<Icon key="icon" name={icons.circleFilled} />, "离线 · 已加入队列"]
-  }[status];
-  return <span className={`save-indicator save-indicator--${status}`}>{content}</span>;
 }

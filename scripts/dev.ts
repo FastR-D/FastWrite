@@ -1,5 +1,11 @@
 import { createServer } from "node:net";
 
+const normalLogin = process.argv.includes("--main");
+// Explicit values override .env and inherited flags in both launch modes.
+process.env.FASTWRITE_SERVER_AUTH = "true";
+process.env.FASTWRITE_DEVELOPMENT_ADMIN = String(!normalLogin);
+process.env.VITE_FASTWRITE_DEVELOPMENT_ADMIN = String(!normalLogin);
+
 const apiPort = numberEnvironment("FASTWRITE_PORT", 3003);
 const children: Bun.Subprocess[] = [];
 let shuttingDown = false;
@@ -19,7 +25,7 @@ for (const child of children) void child.exited.then((code) => {
 
 try {
   await waitFor(`http://127.0.0.1:${apiPort}/api/health`);
-  console.log(`\nFastWrite Dev: http://localhost:3002`);
+  console.log(`\nFastWrite ${normalLogin ? "Main (login required)" : "Dev (administrator)"}: http://localhost:3002`);
   console.log(`FastWrite API: http://localhost:${apiPort}\n`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Development services did not become ready.");
