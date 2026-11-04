@@ -92,7 +92,9 @@ export class SkillRegistry {
     const result: AgentTaskSkillDescriptor[] = [];
     for (const entry of entries.filter((item) => item.isDirectory() && item.name.startsWith("task-"))) {
       const content = await readFile(join(this.skillsDirectory, entry.name, "SKILL.md"), "utf8").catch(() => "");
-      const field = (name: string) => new RegExp(`^\\s*${name}:\\s*(.+)$`, "m").exec(content)?.[1]?.trim() ?? "";
+      if (!content) continue;
+      const metadata = await readFile(join(this.skillsDirectory, entry.name, "TASK.md"), "utf8").catch(() => content);
+      const field = (name: string) => new RegExp(`^\\s*${name}:\\s*(.+)$`, "m").exec(metadata)?.[1]?.trim() ?? "";
       const list = (name: string) => field(name).split(",").map((item) => item.trim()).filter(Boolean);
       const intents = list("supportedIntents").filter((item): item is AgentTaskIntent => ["draft", "continue", "revise"].includes(item));
       if (!intents.length) continue;
