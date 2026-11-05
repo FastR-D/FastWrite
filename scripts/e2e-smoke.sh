@@ -202,7 +202,7 @@ run_code 'async (page) => {
   await editor.focus({ force: true });
   await editor.press("ControlOrMeta+A");
   await page.keyboard.insertText(content);
-  const agentButton = page.getByRole("button", { name: "智能助手", exact: true });
+  const agentButton = page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "智能助手", exact: true });
   await agentButton.focus();
   if (await page.evaluate(() => document.activeElement?.textContent?.trim()) !== "智能助手") {
     throw new Error("Could not move focus outside the editor before testing the global save shortcut");
@@ -538,7 +538,7 @@ run_code 'async (page) => {
   await page.route("**/api/projects/*/agent-runs", async route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([agentRun]) }));
   await page.route("**/api/projects/*/issue-resolutions", async route => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
 
-  await page.getByRole("button", { name: "智能助手", exact: true }).click();
+  await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "智能助手", exact: true }).click();
   const agentPanel = page.getByRole("region", { name: "智能助手工作区" });
   await agentPanel.waitFor();
   const objective = agentPanel.getByLabel("希望智能助手做什么？");
@@ -584,7 +584,7 @@ run_code 'async (page) => {
   await agentPanel.getByRole("button", { name: "拒绝此文件的待审核修改块", exact: true }).click();
   await agentPanel.getByRole("button", { name: "完成审核", exact: true }).waitFor();
   await agentPanel.getByRole("button", { name: "退出审核", exact: true }).click();
-  await page.getByRole("button", { name: "智能助手", exact: true }).click();
+  await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "智能助手", exact: true }).click();
   await agentPanel.getByRole("button", { name: "完成审核", exact: true }).click();
   const composerAfterRestoredComplete = agentPanel.getByLabel("希望智能助手做什么？");
   await composerAfterRestoredComplete.waitFor();
@@ -620,7 +620,7 @@ run_code 'async (page) => {
   await agentPanel.getByRole("button", { name: "保存修改块", exact: true }).click();
   await agentPanel.locator(".hunk-review").getByText("unmanaged", { exact: true }).waitFor();
   await agentPanel.getByRole("button", { name: "退出审核", exact: true }).click();
-  await page.getByRole("button", { name: "智能助手", exact: true }).click();
+  await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "智能助手", exact: true }).click();
   await agentPanel.getByRole("button", { name: "sections/method.tex: 1 项待审核，0 项已接受，0 项已拒绝", exact: true }).waitFor();
   for (const viewport of [{ width: 1440, height: 900, name: "1440x900" }, { width: 720, height: 800, name: "720x800" }]) {
     await page.setViewportSize(viewport);
@@ -670,7 +670,7 @@ run_code 'async (page) => {
     throw new Error("Confirmed Agent overwrite did not apply the reviewed hunk result");
   }
   await page.screenshot({ path: "output/playwright/workspace-agent-composer.png", fullPage: true });
-  await page.getByRole("button", { name: "修改", exact: true }).click();
+  await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "修改", exact: true }).click();
   await page.unroute("**/api/projects/*/agent-tasks");
   await page.unroute("**/api/projects/*/agent-tasks/agent-plan-review-e2e/confirm");
   await page.unroute("**/api/projects/*/change-sets/agent-change-review-e2e");
@@ -684,11 +684,11 @@ run_code 'async (page) => {
 }'
 
 run_code 'async (page) => {
-  await page.getByRole("button", { name: "智能助手", exact: true }).click();
+  await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "智能助手", exact: true }).click();
   const agentPanel = page.getByRole("region", { name: "智能助手工作区" });
   await agentPanel.waitFor();
   await agentPanel.getByLabel("希望智能助手做什么？").fill("Inspect cancellation behavior without creating changes");
-  await page.getByRole("button", { name: "修改", exact: true }).click();
+  await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "修改", exact: true }).click();
 }'
 
 run_code 'async (page) => {
@@ -1040,7 +1040,7 @@ run_code 'async (page) => {
   await page.screenshot({ path: "output/playwright/workspace-compile-repair-agent-720x800" + browserSuffix + ".png", fullPage: true });
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.getByRole("button", { name: "修改", exact: true }).click();
+  await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "修改", exact: true }).click();
   await editor.focus();
   await editor.press("ControlOrMeta+A");
   const repairedContent = "\\documentclass{article}\n\\begin{document}\nCompilation repaired.\n\\end{document}";
