@@ -18,7 +18,7 @@
     "@fastwrite/shared": "workspace:*",
     "fast-xml-parser": "^5.11.1",
     "fflate": "^0.8.2",
-    "nodemailer": "^10.0.10",
+    "nodemailer": "^10.1.4",
     "openai": "^7.3.0",
     "pdfjs-dist": "^5.4.296"
   },
