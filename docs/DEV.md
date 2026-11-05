@@ -49,6 +49,8 @@ AgentTaskWorkspace
 
 `AgentTaskService` 将任务归类为 `draft | continue | revise`。它读取项目文本文件（排除 `memory.md`，总上下文最多 500 KB）、完整已审核 Memory、User Instructions、Skill，以及可选的用户所选审稿意见。计划输出 `steps / affectedFiles / risks / validation`；只有 `draft` 和 `continue` 可在项目级 Scope 新建 `.tex` 或 `.bib`。
 
+在 Agent 的「任务技能」中可勾选中文 `anti-defensive-writing` 或英文 `anti-defensive-writing-en`，规划和确认后的生成都会使用所选版本。FastWrite 的目录信息放在相邻的 `TASK.md`。两份 `SKILL.md` 和 MIT 许可证取自 [Adkid-Zephyr 的上游版本](https://github.com/Adkid-Zephyr/anti-defensive-writing-Skill/tree/82d31402caa0db1790026824399044538483171b/skills)。
+
 执行阶段只接受计划内文件，生成整文件候选，再拆为文本 hunk。Agent UI 只编辑单个 pending/rejected hunk；accepted hunk 必须先切换为 rejected，且编辑不得重建其他 hunk 或清除既有决定。逐 hunk 决策复用 `ReviseService` 的 ChangeSet 写入、冲突检查与回滚逻辑。`Leave review` 只切回 Revise，任务可恢复；全局 pending 决策会自动 finish；没有 pending 时 `Complete review` 只终结审核状态。由 Review 发起时同时维护 `IssueResolution` 状态和证据关联。
 
 `DraftService` 与 `/drafts` API 保留兼容，但当前主界面统一使用 `AgentTaskService`，避免初稿和后期修改形成两套产品入口。

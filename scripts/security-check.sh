@@ -14,6 +14,7 @@ if ! bun audit --production > "$audit_file"; then
 fi
 
 echo "[security] source secret patterns"
+bun test scripts/check-source-secrets.test.ts
 bun scripts/check-source-secrets.ts
 
 echo "[security] TypeScript verification"

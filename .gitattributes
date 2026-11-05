@@ -1,0 +1,5 @@
+# Keep vendored originals byte-identical on Windows checkouts.
+/apps/server/src/skills/task-anti-defensive-writing/SKILL.md text eol=lf
+/apps/server/src/skills/task-anti-defensive-writing/LICENSE text eol=lf
+/apps/server/src/skills/task-anti-defensive-writing-en/SKILL.md text eol=lf
+/apps/server/src/skills/task-anti-defensive-writing-en/LICENSE text eol=lf

@@ -403,7 +403,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .ai-workspace__controls { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
 .ai-workspace__mode { flex: 0 0 auto; }
 .ai-workspace__mode button { height: 30px; font-size: 12px; }
-.ai-workspace__mode button[aria-pressed="true"] { color: var(--accent); background: var(--vscode-active); }
+.ai-workspace__mode button[aria-pressed="true"] { color: var(--vscode-foreground); background: var(--vscode-active); }
 .ai-workspace__harness { display: flex; align-items: center; gap: 8px; }
 .ai-workspace__harness > div { width: 112px; }
 .ai-workspace__harness [role="combobox"] { height: 30px; }

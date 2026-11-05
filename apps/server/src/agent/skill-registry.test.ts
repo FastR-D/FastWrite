@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { WRITING_PROFILES, paperSkillForProfile } from "@fastwrite/shared";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSkillManifest, SkillRegistry } from "./skill-registry";
 
@@ -62,4 +63,15 @@ describe("published Skill manifests", () => {
     expect(manifest).toMatchObject({ fixtures: [{ id: "basic" }], eval: { status: "passed", score: 0.9 }, revoked: true, revokedReason: "Superseded" });
     expect(() => parseSkillManifest(JSON.stringify({ id: "review", version: "1.0.0", scope: "system", owner: "FastWrite", license: "Apache-2.0", workflows: [], requiredEvidence: [], capabilities: [], maxContextChars: 1000, riskLevel: "medium", requiresReview: true, eval: { status: "passed", score: 2 }, references: [] }), "review")).toThrow();
   });
+});
+
+test("reads task metadata separately from the skill instructions", async () => {
+  const directory = join(import.meta.dir, "..", "skills");
+  const registry = new SkillRegistry(directory);
+  for (const [id, language] of [["anti-defensive-writing", "中文"], ["anti-defensive-writing-en", "English"]] as const) {
+    const { descriptor, instructions } = await registry.loadTask(id);
+    expect(descriptor.description).toContain(language);
+    expect(instructions).toBe(await readFile(join(directory, `task-${id}`, "SKILL.md"), "utf8"));
+  }
+  expect((await registry.loadTask("claim-audit")).descriptor.riskLevel).toBe("high");
 });
