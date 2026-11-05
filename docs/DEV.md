@@ -149,4 +149,4 @@ GitHub Sync 是一个服务端编排流程和一个顶层 `Sync` 按钮，不拆
 
 Completion、Agent、Revise、GitHub Sync 和 Git-based history checkpoint 主流程已实现。Review 使用当前源码及可选的请求期有界 pageText；PDF artifact 持久化和视觉 Provider 仍是延期能力。
 
-最近一次回归记录见 [BUG-done.md](./BUG-done.md)：2026-08-04 通过 `bun run typecheck`、102 项 `bun test`、`bun run build`、源码服务器完整 Chromium smoke，以及同一套直接运行在 `app-bin/fastwrite` 上的 release smoke。这些测试未覆盖 PDF 作为 Review Provider 输入；下一步应先完成 PDF 审稿纵向链路，再做真实安全/AI 论文验收。Tauri 仍属于独立后续范围。
+历史回归记录见 [BUG-done.md](./BUG-done.md)。当前使用 Bun 运行源码服务器，完整 CI 校验入口为 `bun run ci:check`，包含类型检查、构建、单元测试、写作评测、安全检查和浏览器 smoke。

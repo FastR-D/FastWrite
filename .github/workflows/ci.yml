@@ -46,8 +46,8 @@ jobs:
           fi
           bun scripts/compiler-sandbox-smoke.ts
 
-      - name: Run release checks
-        run: bun run release:check
+      - name: Run CI checks
+        run: bun run ci:check
 
       - name: Upload E2E diagnostics on failure
         if: failure()

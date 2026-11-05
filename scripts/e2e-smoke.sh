@@ -5,7 +5,6 @@ PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 QA_DATA=$(mktemp -d "${TMPDIR:-/tmp}/fastwrite-e2e.XXXXXX")
 E2E_BROWSER=${FASTWRITE_E2E_BROWSER:-chrome}
 E2E_PORT=${FASTWRITE_E2E_PORT:-3213}
-E2E_SERVER_BIN=${FASTWRITE_E2E_SERVER_BIN:-}
 E2E_PLAYWRIGHT_CLI_VERSION=${FASTWRITE_E2E_PLAYWRIGHT_CLI_VERSION:-0.1.18}
 E2E_PLAYWRIGHT_CLI_JS=${FASTWRITE_E2E_PLAYWRIGHT_CLI_JS:-}
 QA_SESSION="fastwrite-e2e-${E2E_BROWSER}-$$"
@@ -71,11 +70,7 @@ export FASTWRITE_SERVER_AUTH=true
 export FASTWRITE_BOOTSTRAP_ADMIN_EMAIL=e2e-admin@example.test
 export FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD=fastwrite-e2e-only-password
 if [ "${FASTWRITE_E2E_SKIP_BUILD:-0}" != "1" ]; then bun run build >/dev/null; fi
-if [ -n "$E2E_SERVER_BIN" ]; then
-  FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" "$E2E_SERVER_BIN" >"$QA_DATA/server.log" 2>&1 &
-else
-  FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" bun apps/server/src/server.ts >"$QA_DATA/server.log" 2>&1 &
-fi
+FASTWRITE_DATA_DIR="$QA_DATA" FASTWRITE_PORT="$E2E_PORT" bun apps/server/src/server.ts >"$QA_DATA/server.log" 2>&1 &
 SERVER_PID=$!
 
 attempt=0

@@ -4,7 +4,7 @@ FastWrite 保留本地账号、密码、项目权限和用户 ID。部署方未�
 
 ## 本地开发配置
 
-当前 SDK 尚未发布，依赖相邻目录 `../FastCAS/sdk/typescript`。先在该目录运行 `npm ci && npm run build`，再在 FastWrite 运行 `bun install`。构建时需要 SDK 的 dist，浏览器代码不会导入服务端 SDK 或客户端密钥。
+SDK 使用 npm 发布的 [`@fastrd/fastcas`](https://www.npmjs.com/package/@fastrd/fastcas)，在 FastWrite 根目录运行 `bun install` 即可安装。版本由 `apps/server/package.json` 声明、`bun.lock` 锁定，无需克隆或构建相邻的 FastCAS 仓库。服务端通过 `@fastrd/fastcas/server` 导入；浏览器代码不会导入服务端 SDK 或客户端密钥。
 
 同时设置以下四项（缺任一项会拒绝启动，避免误以为已启用）：
 
@@ -45,7 +45,7 @@ FASTCAS_PROJECT_CONTRACT=1 go test ./internal/httpapi -run TestFastWrite -count=
 
 ## 尚未完成的接入项
 
-旧 OIDC/CAS 无密码账号的近期原提供方证明路径已实现，并通过真实 FastCAS → FastWrite 联调：同邮箱本地账号不合并、旧项目归属不变、FastCAS 登录回到原旧账号、原提供方会话可解除绑定。FastCAS 新开户账号添加本地密码也已通过真实提供方联调：未添加前拒绝解除最后登录方式，添加后可解绑、用本地登录 ID 回到同一用户；同邮箱原账号仍能用自己的密码登录，跨站 Origin 被拒绝。联调在模拟 FastCAS 不可用时再次完成本地登录，证明备用入口不发中心请求。真实 Chrome/Bun FastWrite/Go FastCAS/PostgreSQL 浏览器契约覆盖本地登录、绑定、独立浏览器 CAS 登录、原用户/项目保持和解绑来源隔离；故意延迟回调刷新暴露的未登录页面时序已修复。跨进程协作撤销、完整 PostgreSQL 真实接入测试、生产域名视觉验收及可独立分发的 SDK 包仍在实施，不将当前试点视为完整规划交付。
+旧 OIDC/CAS 无密码账号的近期原提供方证明路径已实现，并通过真实 FastCAS → FastWrite 联调：同邮箱本地账号不合并、旧项目归属不变、FastCAS 登录回到原旧账号、原提供方会话可解除绑定。FastCAS 新开户账号添加本地密码也已通过真实提供方联调：未添加前拒绝解除最后登录方式，添加后可解绑、用本地登录 ID 回到同一用户；同邮箱原账号仍能用自己的密码登录，跨站 Origin 被拒绝。联调在模拟 FastCAS 不可用时再次完成本地登录，证明备用入口不发中心请求。真实 Chrome/Bun FastWrite/Go FastCAS/PostgreSQL 浏览器契约覆盖本地登录、绑定、独立浏览器 CAS 登录、原用户/项目保持和解绑来源隔离；故意延迟回调刷新暴露的未登录页面时序已修复。跨进程协作撤销、完整 PostgreSQL 真实接入测试及生产域名视觉验收仍在实施，不将当前试点视为完整规划交付。
 
 FastCAS 应用登记还需设置 `backchannel_logout_uri` 为 `https://write.example.org/api/auth/fastcas/backchannel-logout`。接收端验证标准签名 `logout_token`，按身份及可选 sid 原子去重，只撤销 FastCAS 来源会话；项目本地登录、账号、内容和权限保持独立。
 

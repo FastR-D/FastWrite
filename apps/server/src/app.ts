@@ -42,7 +42,6 @@ import { SkillRegistry } from "./agent/skill-registry";
 import { TexPackageService, type TexPackageProvider } from "./compiler/tex-package-service";
 import { LatexCompileService } from "./compiler/latex-compile-service";
 import { ComplianceService } from "./compliance/compliance-service";
-import { embeddedWebFile } from "./embedded-web";
 import { config, discoverHarnessConfiguration, type AgentProviderConfiguration } from "./config";
 import { GithubService } from "./imports/github-service";
 import { UploadService } from "./imports/upload-service";
@@ -1624,19 +1623,9 @@ async function serveWeb(pathname: string): Promise<Response> {
     if (/^bundles\//.test(requested) || /^(?:busytex\.wasm|worker\.js)$/.test(requested)) headers["cache-control"] = "public, max-age=3600";
     return new Response(Bun.file(candidate), { headers });
   }
-  const embedded = embeddedWebFile(requested);
-  if (embedded) return new Response(embedded, { headers: webHeaders(requested) });
   const index = join(config.webDirectory, "index.html");
   if (existsSync(index)) return new Response(Bun.file(index), { headers: { "content-type": "text/html; charset=utf-8" } });
-  const embeddedIndex = embeddedWebFile("index.html");
-  if (embeddedIndex) return new Response(embeddedIndex, { headers: { "content-type": "text/html; charset=utf-8" } });
   return json({ error: { code: "web_not_built", message: "Web client is not built. Run the development server or build the project." } }, 404);
-}
-
-function webHeaders(path: string): Record<string, string> {
-  const headers: Record<string, string> = { "content-type": mimeType(extname(path)) };
-  if (/^bundles\//.test(path) || /^(?:busytex\.wasm|worker\.js)$/.test(path)) headers["cache-control"] = "public, max-age=3600";
-  return headers;
 }
 
 export function mimeType(extension: string): string {

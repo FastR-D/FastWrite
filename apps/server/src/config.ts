@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { loadProjectEnvironment } from "./environment";
 import type { AgentWireApi } from "@fastwrite/shared";
 
@@ -31,13 +31,9 @@ const objectStoreEndpoint = process.env.FASTWRITE_OBJECT_STORE_ENDPOINT?.trim();
 const objectStoreRegion = process.env.FASTWRITE_OBJECT_STORE_REGION?.trim() || "us-east-1";
 const objectStoreAccessKey = process.env.FASTWRITE_OBJECT_STORE_ACCESS_KEY?.trim();
 const objectStoreSecretKey = process.env.FASTWRITE_OBJECT_STORE_SECRET_KEY?.trim();
-const packagedWebDirectory = resolve(import.meta.dir, "web");
-const embeddedWebDirectory = resolve(import.meta.dir, "../../web/dist");
-const releaseDirectory = dirname(process.execPath);
-const isStandaloneExecutable = (Bun as unknown as { isStandaloneExecutable?: boolean }).isStandaloneExecutable === true || import.meta.dir.startsWith("/$bunfs/");
-const defaultDataDirectory = isStandaloneExecutable ? join(releaseDirectory, "paperdata") : ".fastwrite-data";
-const defaultSkillsDirectory = isStandaloneExecutable ? join(releaseDirectory, "skills") : resolve(import.meta.dir, "skills");
-const defaultTemplateDirectory = isStandaloneExecutable ? join(releaseDirectory, "bundled") : resolve(import.meta.dir, "templates", "bundled");
+const defaultWebDirectory = resolve(import.meta.dir, "../../web/dist");
+const defaultSkillsDirectory = resolve(import.meta.dir, "skills");
+const defaultTemplateDirectory = resolve(import.meta.dir, "templates", "bundled");
 
 export type AgentWorkflow = "completion" | "agent" | "revise" | "review" | "memory" | "research";
 export interface AgentProviderConfiguration {
@@ -121,8 +117,8 @@ export function discoverHarnessConfiguration(harness: "claude" | "codex"): Harne
 export const config = {
   harness: configuredHarness(process.env.FASTWRITE_HARNESS),
   port: Number.parseInt(process.env.FASTWRITE_PORT ?? "3003", 10),
-  dataDirectory: resolve(configuredDataDirectory || defaultDataDirectory),
-  webDirectory: resolve(process.env.FASTWRITE_WEB_DIR || (existsSync(packagedWebDirectory) ? packagedWebDirectory : embeddedWebDirectory)),
+  dataDirectory: resolve(configuredDataDirectory || ".fastwrite-data"),
+  webDirectory: resolve(process.env.FASTWRITE_WEB_DIR || defaultWebDirectory),
   maxFileBytes: 200 * 1024 * 1024,
   maxUploadBytes: 1024 * 1024 * 1024,
   maxEntries: 10_000,

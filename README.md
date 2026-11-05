@@ -2,18 +2,18 @@
 
 需要 [Bun](https://bun.sh/) 1.3+ 和 Git。
 
-FastCAS SDK 固定在仓库内的 `packages/fastcas-sdk`，来源为 [FastR-D/FastCAS 的 sdk/typescript](https://github.com/FastR-D/FastCAS/tree/676d49b18f700c009f1f491280a93de7da294836/sdk/typescript)，版本提交 `676d49b18f700c009f1f491280a93de7da294836`。本地使用 TypeScript 源码导出并适配严格可选属性检查；无需克隆相邻的 FastCAS 仓库或预先构建 SDK。更新 SDK 时应同步检查上游接口和身份认证契约测试。
+FastCAS SDK 使用 npm 包 [`@fastrd/fastcas`](https://www.npmjs.com/package/@fastrd/fastcas)，随 `bun install` 安装。可选的 FastCAS 登录配置见 [FastCAS 接入说明](docs/FASTCAS.md)。
 
 ## 开发运行
 
 ```bash
 bun install
-pnpm run dev
+bun run dev
 ```
 
-打开 <http://localhost:3002>（Vite 前端代理 API）。`pnpm run dev` 自动进入专用开发管理员 `Admin (开发)`，可查看全部项目，并通过 `/admin` 查看平台全局信息。
+打开 <http://localhost:3002>（Vite 前端代理 API）。`bun run dev` 自动进入专用开发管理员 `Admin (开发)`，可查看全部项目，并通过 `/admin` 查看平台全局信息。
 
-`pnpm run main` 启动相同的前后端开发服务，但使用正常登录流程并强制开启服务端认证；开发管理员的令牌在此模式下无效。两个命令使用相同的数据目录。首次运行 `main` 且没有正式管理员时，需要设置 `FASTWRITE_BOOTSTRAP_ADMIN_EMAIL` 和 `FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD`（至少 12 位），之后使用该账号登录；开发管理员不计作正式管理员，也没有可用于正常登录的默认密码。
+`bun run main` 启动相同的前后端开发服务，但使用正常登录流程并强制开启服务端认证；开发管理员的令牌在此模式下无效。两个命令使用相同的数据目录。首次运行 `main` 且没有正式管理员时，需要设置 `FASTWRITE_BOOTSTRAP_ADMIN_EMAIL` 和 `FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD`（至少 12 位），之后使用该账号登录；开发管理员不计作正式管理员，也没有可用于正常登录的默认密码。
 
 工作区 PDF 预览使用服务器 LaTeX 编译，需要安装 `latexmk` 或 `pdflatex` 以及论文使用的 TeX 包。启用 `FASTWRITE_SERVER_AUTH=true` 时强制使用 Linux `bubblewrap` 沙箱，宿主机必须允许其创建隔离命名空间；缺少沙箱会拒绝编译。Windows 本地开发如需在开启鉴权的情况下编译，应把服务部署到具备这些依赖的 Linux/WSL 环境。单人、受信任的本地模式可使用宿主编译，但不会加载项目的 latexmk 配置或启用 shell escape。
 
@@ -47,10 +47,7 @@ IDE 的“参考论文”侧栏支持添加或拖放 PDF、包含 TeX/PDF 的 ZI
 
 参考材料保存在 `FASTWRITE_DATA_DIR/projects/<projectId>/reference-papers/`，与正文 `workspace/` 分开，避免进入正文编译、GitHub 同步、Paper Memory 或事实证据。备份项目文件时需复制整个项目目录，包括参考材料；现有 JSON 数据库备份不包含原始文件或解析文件。普通论文 ZIP 导出仍只包含正文工作区。验证参考功能可运行 `bun test apps/server/src/references`、`bun run references:eval` 和构建后的 `bun run e2e:references`。配置真实模型后，`bun run references:eval -- --live` 会使用合成论文验证真实模型的参考写作链路。
 
-先让Agent解决 BUG.md中问题，解决了的移到BUG-done.md。
-等待期间，去测试功能，将Bug记录到BUG-new，等完成再继续下一轮Bug修改。
-
-## 可运行发布包
+## 备份恢复
 
 数据库备份恢复必须停服执行，在线恢复接口返回 `409 offline_restore_required`。源码目录中运行：
 
@@ -60,14 +57,9 @@ bun run backup:restore -- --data-dir /absolute/path/to/paperdata --file /absolut
 
 对象存储备份可把 `--file` 换成 `--object-key backups/backup-name.json`，并提供部署时相同的 `FASTWRITE_OBJECT_STORE_*` 配置。命令校验备份格式和当前 schema，保存恢复前的安全副本，再替换数据库；完成后重新启动服务。JSON 备份仅包含数据库，项目文件需另外备份并放回匹配的数据目录。服务和恢复命令使用 `.fastwrite-process.lock` 互斥；若被强制终止留下锁文件，须确认该目录的全部进程已停止后再移除。旧版本备份应先使用匹配版本恢复，再按升级流程迁移。
 
-```bash
-bun run package:app
-./app-bin/fastwrite
-```
+## 检查与模型配置
 
-该命令生成可直接发布的单个 `app-bin/fastwrite`。Web 静态资源嵌入该二进制；外置的 `app-bin/skills/` 和 `app-bin/paperdata/` 与二进制并列，后者保存 Workspace、导入和编译缓存，重新打包不会删除它。根目录存在 `.env` 时会在首次打包时复制至 `app-bin/.env`，否则生成 `.env.example`；二进制会自动加载同级 `.env`。浏览器打开二进制输出的地址即可正常测试和编辑 Paper。
-
-`.github/workflows/ci.yml` 会在 push 和 pull request 时自动运行类型检查、单元测试、构建和浏览器 E2E。推送与根 `package.json` 版本一致的标签（例如 `v0.1.0`）会触发 `.github/workflows/release.yml`，在完整测试通过后创建 GitHub Release，并发布 Linux x64、Windows x64、macOS Intel 和 macOS Apple Silicon 安装包。macOS 包当前未进行 Apple Developer 签名或 notarization，首次运行可能出现 Gatekeeper 提示。
+`.github/workflows/ci.yml` 会在 push 和 pull request 时自动运行类型检查、单元测试、构建和浏览器 E2E。本地可运行 `bun run ci:check` 执行同一组校验。
 
 在 `.env` 设置 `FASTWRITE_HARNESS=codex` 或 `claude`，并配置 `FASTWRITE_HARNESS_API_KEY`、可选的 `FASTWRITE_HARNESS_BASE_URL`、`FASTWRITE_HARNESS_MODEL`、`FASTWRITE_HARNESS_WIRE_API` 和 `FASTWRITE_HARNESS_TIMEOUT_MS`，即可为全部 AI 工作流配置统一 Harness。Project Settings 也可运行时配置这些 Harness 参数；API key 只保存在内存中且不会回传。Agent 规划、普通 AI 操作以及 `/draft`、`/continue`、`/revise` 的完整文件生成默认超时均为 300 秒，可用 `FASTWRITE_HARNESS_TIMEOUT_MS` 覆盖（最大 600 秒）。导入私有 GitHub Repository 时设置 `FASTWRITE_GITHUB_TOKEN`。
 

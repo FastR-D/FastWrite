@@ -12,4 +12,4 @@ bun run security:check
 node scripts/e2e-authenticated-smoke.mjs
 FASTWRITE_E2E_SKIP_BUILD=1 bun run e2e:smoke
 
-echo "FastWrite release checks passed"
+echo "FastWrite CI checks passed"
