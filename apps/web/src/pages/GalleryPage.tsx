@@ -38,7 +38,6 @@ export function GalleryPage() {
   const [size, setSize] = useState<number | undefined>(120);
   const [agree, setAgree] = useState(false);
   const [name, setName] = useState("安全系统论文");
-  const [outlineMode, setOutlineMode] = useState<"current" | "project">("current");
   const [sizeMode, setSizeMode] = useState<"small" | "medium" | "wide">("medium");
 
   return (
@@ -265,15 +264,6 @@ export function GalleryPage() {
         </div>
 
         <div className={styles.row}>
-          <SegmentedControl
-            label="大纲来源"
-            value={outlineMode}
-            onChange={setOutlineMode}
-            options={[
-              { value: "current", label: "当前文档" },
-              { value: "project", label: "项目结构" }
-            ]}
-          />
           <SegmentedControl
             label="对话框尺寸"
             bordered

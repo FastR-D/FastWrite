@@ -51,6 +51,8 @@ AgentTaskWorkspace
 
 在 Agent 的「任务技能」中可勾选中文 `anti-defensive-writing` 或英文 `anti-defensive-writing-en`，规划和确认后的生成都会使用所选版本。FastWrite 的目录信息放在相邻的 `TASK.md`。两份 `SKILL.md` 和 MIT 许可证取自 [Adkid-Zephyr 的上游版本](https://github.com/Adkid-Zephyr/anti-defensive-writing-Skill/tree/82d31402caa0db1790026824399044538483171b/skills)。
 
+工作区侧边栏的 `Skill` 标签页列出内置任务技能，可查看用途并勾选最多 5 个。选择按项目保存在当前浏览器，与 Agent 的任务技能选择同步；点击「用于智能助手」后填写任务并创建计划。章节技能需要先在编辑器中定位章节，任务会限定在该章节内。选择只用于新建计划，已确认计划继续使用原来的技能快照。构建前端后可运行 `bun run e2e:skills` 验证选择持久化、项目隔离、规划/生成指令注入和章节范围；测试使用隔离数据库与固定 Provider，不调用真实模型。
+
 执行阶段只接受计划内文件，生成整文件候选，再拆为文本 hunk。Agent UI 只编辑单个 pending/rejected hunk；accepted hunk 必须先切换为 rejected，且编辑不得重建其他 hunk 或清除既有决定。逐 hunk 决策复用 `ReviseService` 的 ChangeSet 写入、冲突检查与回滚逻辑。`Leave review` 只切回 Revise，任务可恢复；全局 pending 决策会自动 finish；没有 pending 时 `Complete review` 只终结审核状态。由 Review 发起时同时维护 `IssueResolution` 状态和证据关联。
 
 `DraftService` 与 `/drafts` API 保留兼容，但当前主界面统一使用 `AgentTaskService`，避免初稿和后期修改形成两套产品入口。

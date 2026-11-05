@@ -4,6 +4,8 @@ import type { ReferenceWriteAction } from "../components/workspace/ReferenceStyl
 import { useFileDropTarget } from "../lib/uploads/use-file-drop-target";
 import { readDroppedFiles, type DroppedFile } from "../lib/uploads/drop-files";
 import { ReferenceStylePanel } from "../components/workspace/ReferenceStylePanel";
+import { SkillPanel } from "../components/workspace/SkillPanel";
+import { useTaskSkills } from "../lib/useTaskSkills";
 import { projectDocumentRegistry } from "../lib/editor/documentRegistry";
 import { QuickOpenDialog } from "../components/workbench/QuickOpenDialog";
 import { EditorTabs, diffRequestKey, type ComparisonTab } from "../components/workbench/EditorTabs";
@@ -32,7 +34,7 @@ import type {
   EvidenceCockpit,
 } from "@fastwrite/shared";
 import { api, ApiClientError } from "../api/client";
-import { Button, Dialog, Field, Icon, IconButton, Link, SegmentedControl, Select, TabBar, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
+import { Button, Dialog, Field, Icon, IconButton, Link, Select, TabBar, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { FileTree } from "../components/workspace/FileTree";
 import { AddFileDialog } from "../components/workspace/AddFileDialog";
 import { OutlineTree } from "../components/workspace/OutlineTree";
@@ -55,7 +57,6 @@ import {
 } from "../lib/sectionSelection";
 import { FASTWRITE_SAVE_EVENT } from "../lib/keyboard";
 import { publicationTargetAbbreviation } from "../lib/labels";
-import { ProjectSearchDialog } from "../components/workspace/ProjectSearchDialog";
 import { ProvenanceDialog } from "../components/workspace/ProvenanceDialog";
 import { canUseOfflineCache, loadWorkspaceFile, loadWorkspaceSnapshot, saveWorkspaceFile, saveWorkspaceSnapshot } from "../lib/offlineWorkspace";
 
@@ -104,6 +105,8 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const rootDrop = useFileDropTarget((transfer) => receiveDrop(transfer, ""));
   const [sidebarView, setSidebarView] = useStoredString(`fastwrite.workbench-layout:${projectId}:sidebar-view`, "files", ["files", "git", "evidence", "outline", "reference-style", "skills"] as const);
   const [skillRevision, setSkillRevision] = useState(0);
+  const taskSkills = useTaskSkills(projectId, skillRevision);
+  const [skillTaskRequest, setSkillTaskRequest] = useState(0);
   const [historyDiff, setHistoryDiff] = useState<DiffRequest | null>(null);
   const [comparisonTabs, setComparisonTabs] = useState<ComparisonTab[]>([]);
   const comparisonTabsRef = useRef(comparisonTabs); comparisonTabsRef.current = comparisonTabs;
@@ -114,7 +117,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [project, setProject] = useState<PaperProject | null>(null);
   const [tree, setTree] = useState<WorkspaceTreeNode[]>([]);
   const [outline, setOutline] = useState<OutlineItem[]>([]);
-  const [outlineMode, setOutlineMode] = useStoredString(`fastwrite.workbench-layout:${projectId}:outline-mode`, "project", ["project", "current"] as const);
   const [claims, setClaims] = useState<PaperClaim[]>([]);
   const [evidenceCockpit, setEvidenceCockpit] = useState<EvidenceCockpit | null>(null);
   const [claimStatusFilter, setClaimStatusFilter] = useState<"all" | PaperClaim["reviewStatus"] | "stale" | "orphaned">("all");
@@ -125,7 +127,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [quickOpen, setQuickOpen] = useState(false);
   const tabsStateRef = useRef({ projectId, selectedPath, sourceTabs });
   tabsStateRef.current = { projectId, selectedPath, sourceTabs };
-  const [searchOpen, setSearchOpen] = useState(false);
   const [fileDocument, setFileDocument] = useState<FileContentResponse | null>(
     null,
   );
@@ -555,9 +556,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     () => currentParagraphSelection(fileDocument ? registry.document(fileDocument.file.path) ?? fileDocument : null, cursorLocation),
     [cursorLocation, fileDocument, registry],
   );
-  const currentOutline = useMemo(() => { const document = fileDocument ? registry.document(fileDocument.file.path) ?? fileDocument : null; return document ? localOutline(document.file.path, document.content) : []; }, [fileDocument, registry, dirtyFiles]);
-  const visibleOutline = outlineMode === "current" ? currentOutline : outline;
-  const activeOutlineId = useMemo(() => activeOutline(visibleOutline, cursorLocation), [visibleOutline, cursorLocation]);
+  const activeOutlineId = useMemo(() => activeOutline(outline, cursorLocation), [outline, cursorLocation]);
 
   const prepareLocalRevision = useCallback(
     async (issue: ReviewIssue): Promise<TextSelection | null> => {
@@ -722,14 +721,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <Button
             size="small"
             variant="secondary"
-            icon={<Icon name={icons.search} />}
-            onClick={() => setSearchOpen(true)}
-          >
-            查找
-          </Button>
-          <Button
-            size="small"
-            variant="secondary"
             icon={<Icon name={icons.verified} />}
             onClick={() => setComplianceOpen(true)}
           >
@@ -876,6 +867,9 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 {sidebarView === "reference-style" ? <ReferenceStylePanel projectId={projectId} {...(selectedPath ? { path: selectedPath } : {})} hasSelection={!!selection} hasSection={!!sectionSelection} refreshVersion={referenceSettings?.revision ?? 0} onSettingsChanged={(settings, papers) => { setReferenceSettings(settings); setReferencePapers(papers); }} onWrite={(target, instruction) => { setReferenceAction({ id: crypto.randomUUID(), target, instruction, ...(selectedPath ? { path: selectedPath } : {}) }); setBottomPanelTab("ai"); setPanelCollapsed(false); }} /> : null}
               </div>
             </section>
+            <section id="sidebar-skills" hidden={sidebarView !== "skills"} className="sidebar-section">
+              <SkillPanel skills={taskSkills.skills} selectedIds={taskSkills.selectedIds} loading={taskSkills.loading} error={taskSkills.error} hasSection={Boolean(sectionSelection)} onChange={taskSkills.setSelectedIds} onReload={() => setSkillRevision(value => value + 1)} onUse={() => { setSkillTaskRequest(value => value + 1); setBottomPanelTab("ai"); setPanelCollapsed(false); setAiHeight(Math.max(aiHeight, 380)); }} />
+            </section>
             <section id="sidebar-outline" hidden={sidebarView !== "outline"} className="sidebar-section workbench-outline">
               <header className="panel-heading panel-heading--plain">
                 <span>文档大纲</span>
@@ -889,20 +883,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                   onClick={() => setOutlineCollapsed(!outlineCollapsed)}
                 />
               </header>
-              {!outlineCollapsed ? <>
-                <SegmentedControl
-                  className="outline-mode"
-                  label="大纲来源"
-                  value={outlineMode}
-                  onChange={setOutlineMode}
-                  options={[
-                    { value: "current", label: "当前文档" },
-                    { value: "project", label: "项目结构" }
-                  ]}
-                />
-                <p className="outline-version-note">{outlineMode === "current" ? "当前编辑内容 · 本地解析" : "已保存的工作区版本"}</p>
-                <OutlineTree items={visibleOutline} activeId={activeOutlineId} onSelect={selectOutline} />
-              </> : null}
+              {!outlineCollapsed ? <OutlineTree items={outline} activeId={activeOutlineId} onSelect={selectOutline} /> : null}
             </section>
             <section id="sidebar-evidence" hidden={sidebarView !== "evidence"} className="sidebar-section sidebar-section--claims">
               <header className="panel-heading panel-heading--plain">
@@ -1135,6 +1116,11 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <div className="bottom-panel-content" role="tabpanel" hidden={bottomPanelTab !== "ai"}>
           <AiWorkspace
             project={project}
+            taskSkills={taskSkills.skills}
+            taskSkillsLoading={taskSkills.loading}
+            taskSkillIds={taskSkills.selectedIds}
+            onTaskSkillIdsChange={taskSkills.setSelectedIds}
+            skillTaskRequest={skillTaskRequest}
             referenceSettings={referenceSettings}
             referencePapers={referencePapers}
             referenceAction={referenceAction}
@@ -1288,7 +1274,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           </Button>
         ) : null}
       </div>
-      <ProjectSearchDialog open={searchOpen} project={project} onClose={() => setSearchOpen(false)} onNavigate={(path, line) => { void navigateToPath(path, line); }} />
 
       <NewFileDialog
         open={newFileOpen}
@@ -2375,18 +2360,6 @@ function WorkspaceError({ message }: { message: string }) {
   );
 }
 
-function localOutline(path: string, content: string): OutlineItem[] {
-  const items: OutlineItem[] = []; const stack: OutlineItem[] = [];
-  for (const [index, line] of content.split(/\r?\n/).entries()) {
-    const match = line.match(/^\s*\\(part|chapter|section|subsection|subsubsection)\*?\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}/);
-    if (!match) continue;
-    const level = ["part", "chapter", "section", "subsection", "subsubsection"].indexOf(match[1]!);
-    const item: OutlineItem = { id: `local:${path}:${index + 1}:${match[1]}`, title: match[2]!.replace(/\\[a-zA-Z]+/g, "").trim() || match[1]!, level, path, line: index + 1, children: [] };
-    while (stack.length && stack.at(-1)!.level >= level) stack.pop();
-    if (stack.length) stack.at(-1)!.children.push(item); else items.push(item); stack.push(item);
-  }
-  return items;
-}
 function activeOutline(items: OutlineItem[], cursor: SourceLocation): string | null {
   const all: OutlineItem[] = [];
   const visit = (nodes: OutlineItem[]) => nodes.forEach(item => { all.push(item); visit(item.children); });

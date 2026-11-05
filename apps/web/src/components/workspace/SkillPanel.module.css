@@ -1,0 +1,10 @@
+.content { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px; display: flex; flex-direction: column; gap: 12px; overflow-wrap: anywhere; }
+.content > * { flex-shrink: 0; }
+.hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.list { display: flex; flex-direction: column; gap: 8px; }
+.item { padding: 10px 8px; border: 1px solid var(--border); border-radius: 4px; }
+.item > label { align-items: flex-start; width: 100%; }
+.details { min-width: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; line-height: 1.5; }
+.details strong { color: var(--vscode-foreground); font-size: 13px; }
+.details small { color: var(--text-muted); }
+.actions { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }

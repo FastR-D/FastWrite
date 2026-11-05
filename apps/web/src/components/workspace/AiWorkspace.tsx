@@ -1,5 +1,5 @@
 import { statusLabel } from "../../lib/labels";
-import type { ReferencePaper, ReferenceSettings } from "@fastwrite/shared";
+import type { AgentTaskRequest, AgentTaskSkillDescriptor, ReferencePaper, ReferenceSettings } from "@fastwrite/shared";
 import type { ReferenceWriteAction } from "./ReferenceStylePanel";
 import { ReferenceTags } from "./ReferenceTags";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -16,6 +16,11 @@ import { compileRepairObjective, compileRepairPath, type CompileRepairRequest } 
 import { responseLanguage } from "../../lib/responseLanguage";
 
 interface AiWorkspaceProps {
+  taskSkills: AgentTaskSkillDescriptor[];
+  taskSkillsLoading: boolean;
+  taskSkillIds: string[];
+  onTaskSkillIdsChange: (ids: string[]) => void;
+  skillTaskRequest: number;
   referenceSettings?: ReferenceSettings | null;
   referencePapers?: ReferencePaper[];
   referenceAction?: ReferenceWriteAction | null;
@@ -58,7 +63,7 @@ const SHORTCUTS: ReadonlyArray<{ id: ReviseCommandId; label: string }> = [
 type PanelState = "idle" | "running" | "applying" | "accepted" | "error";
 interface ChatMessage { id: string; role: "user" | "assistant"; content: string; rationale?: string }
 
-export function AiWorkspace({ referenceSettings = null, referencePapers = [], referenceAction, onRemoveReference = () => {}, project, selection, paragraphSelection, sectionSelection, completionEnabled, onCompletionEnabledChange, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onWorkspaceChanged, onPrepareLocalRevision, compileState, compileRepairRequest, onRequestCompile }: AiWorkspaceProps) {
+export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTaskSkillIdsChange, skillTaskRequest, referenceSettings = null, referencePapers = [], referenceAction, onRemoveReference = () => {}, project, selection, paragraphSelection, sectionSelection, completionEnabled, onCompletionEnabledChange, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onWorkspaceChanged, onPrepareLocalRevision, compileState, compileRepairRequest, onRequestCompile }: AiWorkspaceProps) {
   const [instruction, setInstruction] = useState("");
   const [state, setState] = useState<PanelState>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -93,6 +98,14 @@ export function AiWorkspace({ referenceSettings = null, referencePapers = [], re
   const recoveryAttemptedRef = useRef("");
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const appliedCompileRepairRef = useRef<number | null>(null);
+  const appliedSkillTaskRef = useRef(0);
+
+  useEffect(() => {
+    if (!skillTaskRequest || skillTaskRequest === appliedSkillTaskRef.current) return;
+    appliedSkillTaskRef.current = skillTaskRequest;
+    setAgentSeed({});
+    setActiveTab("agent");
+  }, [skillTaskRequest]);
 
   useEffect(() => () => { requestRef.current?.abort(); resizeCleanupRef.current?.(); }, []);
   useEffect(() => { const controller = new AbortController(); void api.harness.list(controller.signal).then(setHarnesses).catch(() => setHarnesses([])).finally(() => { if (!controller.signal.aborted) setHarnessLoading(false); }); return () => controller.abort(); }, []);
@@ -324,6 +337,8 @@ export function AiWorkspace({ referenceSettings = null, referencePapers = [], re
 
   const harnessStatus = harnesses.find(item => item.status.kind === selectedHarness)?.status;
   const harnessState = harnessStatus?.state;
+  const needsSection = taskSkills.some(skill => taskSkillIds.includes(skill.id) && skill.allowedScope === "section");
+  const taskScope: AgentTaskRequest["scope"] = agentSeed.scope ?? (needsSection && sectionSelection ? { type: "section", path: sectionSelection.path, section: { heading: sectionSelection.text.split("\n")[0] ?? "当前章节", startLine: sectionSelection.startLine, endLine: sectionSelection.endLine } } : { type: "project" });
 
   return (<>
     <section className={`ai-workspace${activeTab === "agent" ? " ai-workspace--agent" : ""}${fullscreen ? " ai-workspace--fullscreen" : ""}`} aria-label="AI 写作工作区">
@@ -382,7 +397,7 @@ export function AiWorkspace({ referenceSettings = null, referencePapers = [], re
           <small>每轮回复都会优化当前候选内容，接受后才会修改文件。</small>
         </form>
       </div>
-      <div hidden={activeTab !== "agent"} className="agent-workspace-slot"><AgentTaskWorkspace key={agentSeed.planId ?? "default"} open={activeTab === "agent"} project={project} references={referenceSettings?.selections ?? []} seed={{ ...agentSeed, harness: selectedHarness }} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onAccepted={onFileChanged} onNavigate={onNavigate} /></div>
+      <div hidden={activeTab !== "agent"} className="agent-workspace-slot"><AgentTaskWorkspace key={agentSeed.planId ?? "default"} open={activeTab === "agent"} project={project} taskSkills={taskSkills} taskSkillsLoading={taskSkillsLoading} taskSkillIds={taskSkillIds} onTaskSkillIdsChange={onTaskSkillIdsChange} references={referenceSettings?.selections ?? []} seed={{ ...agentSeed, harness: selectedHarness, scope: taskScope }} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onAccepted={onFileChanged} onNavigate={onNavigate} /></div>
       {fullscreen ? <div className="ai-workspace__width-handle" role="separator" aria-label="调整最大化 AI 工作区大小" aria-orientation="vertical" aria-valuemin={Math.min(560, window.innerWidth)} aria-valuemax={window.innerWidth} aria-valuenow={Math.min(fullscreenWidth, window.innerWidth)} tabIndex={0} onPointerDown={startWidthResize} onKeyDown={(event) => {
         if (event.key === "ArrowLeft") { event.preventDefault(); updateFullscreenWidth(fullscreenWidth - 40); }
         else if (event.key === "ArrowRight") { event.preventDefault(); updateFullscreenWidth(fullscreenWidth + 40); }

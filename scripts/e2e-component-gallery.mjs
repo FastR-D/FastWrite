@@ -296,9 +296,9 @@ try {
   cases.push('disclosure toggles');
 
   // Segmented controls keep button semantics with aria-pressed.
-  const outline = page.getByRole('group', { name: "大纲来源" });
-  await outline.getByRole('button', { name: "项目结构" }).click();
-  assert.equal(await outline.getByRole('button', { name: "项目结构" }).getAttribute('aria-pressed'), 'true', 'pressed state follows the click');
+  const sizes = page.getByRole('group', { name: "对话框尺寸" });
+  await sizes.getByRole('button', { name: "L", exact: true }).click();
+  assert.equal(await sizes.getByRole('button', { name: "L", exact: true }).getAttribute('aria-pressed'), 'true', 'pressed state follows the click');
   cases.push('segmented control toggles aria-pressed');
 
   // The list renders real list semantics.

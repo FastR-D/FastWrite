@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 const base = process.env.FASTWRITE_E2E_URL ?? 'http://127.0.0.1:3223';
 const browser = await chromium.launch({ channel: process.env.FASTWRITE_E2E_CHANNEL ?? 'chrome', headless: true });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-await context.addInitScript(() => { localStorage.setItem('fastwrite.completion.enabled', 'false'); localStorage.setItem('fastwrite.collaboration.enabled', 'false'); localStorage.setItem('fastwrite.outline-mode', 'project'); });
+await context.addInitScript(() => { localStorage.setItem('fastwrite.completion.enabled', 'false'); localStorage.setItem('fastwrite.collaboration.enabled', 'false'); });
 const page = await context.newPage(), errors = [];
 page.on('pageerror', error => errors.push(error.stack));
 const until = async (predicate, label) => { const end = Date.now() + 15000; while (!(await predicate())) { assert.ok(Date.now() < end, label); await page.waitForTimeout(40); } };
@@ -40,15 +40,8 @@ try {
   await choose(evidence, 'Evidence source', 'All files');
   await evidence.locator('.claim-ledger-item').filter({ hasText: 'improves accuracy' }).waitFor();
   await nav.getByRole('button', { name: "大纲", exact: true }).click();
-  await page.getByText("已保存的工作区版本", { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Results', exact: true }).click();
   await until(async () => (await page.locator('.source-editor .line-numbers.active-line-number').innerText()).trim() === '5', 'saved outline uses exact heading line');
-  await page.getByRole('button', { name: "当前文档", exact: true }).click();
-  await page.getByText("当前编辑内容 · 本地解析", { exact: true }).waitFor();
-  await source.focus(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('\\section{Local unsaved}\n');
-  await page.getByRole('button', { name: 'Local unsaved', exact: true }).waitFor();
-  await page.getByRole('button', { name: "项目结构", exact: true }).click();
-  await page.locator('.outline-tree').getByRole('button', { name: 'Local unsaved', exact: true }).waitFor({ state: 'detached' });
   await nav.getByRole('button', { name: "证据", exact: true }).click();
   const claimButton = page.locator('.claim-ledger-item').filter({ hasText: 'improves accuracy' }); await claimButton.waitFor();
   const shifted = `% SERVER_PREFIX\n${content}`;
@@ -63,5 +56,5 @@ try {
   assert.equal(updated.anchorStatus, 'reanchored');
   assert.equal(updated.anchor.fileVersion, (await (await context.request.get(`${root}/file?path=main.tex`)).json()).file.version);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ result: 'pass', projectId: project.id, claimId: claim.id, cases: ['project outline saved semantics', 'current buffer outline', 'outline cursor navigation', 'versioned claim reanchor and selection'] }));
+  console.log(JSON.stringify({ result: 'pass', projectId: project.id, claimId: claim.id, cases: ['project outline saved semantics', 'outline cursor navigation', 'versioned claim reanchor and selection'] }));
 } finally { await browser.close(); }
