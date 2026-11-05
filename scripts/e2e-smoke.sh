@@ -613,7 +613,7 @@ run_code 'async (page) => {
   await agentPanel.getByRole("button", { name: "改为接受", exact: true }).first().click();
   await agentPanel.getByRole("button", { name: "main.tex: 0 项待审核，1 项已接受，1 项已拒绝", exact: true }).waitFor();
   await agentPanel.getByRole("button", { name: "sections/method.tex: 1 项待审核，0 项已接受，0 项已拒绝", exact: true }).click();
-  if (await agentPanel.getByRole("button", { name: "Edit proposal", exact: true }).count()) throw new Error("Agent review still exposes whole-file proposal editing");
+  if (await agentPanel.getByRole("button", { name: "编辑建议内容", exact: true }).count()) throw new Error("Agent review still exposes whole-file proposal editing");
   await agentPanel.getByRole("button", { name: "编辑修改块", exact: true }).click();
   const hunkEditor = agentPanel.getByLabel("编辑修改块 1 for sections/method.tex");
   await hunkEditor.fill("This sentence is grounded in bounded and unmanaged evidence.");
