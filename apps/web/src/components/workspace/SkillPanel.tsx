@@ -1,6 +1,6 @@
 import type { AgentTaskSkillDescriptor } from "@fastwrite/shared";
 import { Button, Checkbox, Icon, IconButton, icons } from "../ui";
-import { MAX_TASK_SKILLS, taskSkillLabel } from "../../lib/useTaskSkills";
+import { MAX_TASK_SKILLS, WRITING_STAGE_PRESETS, taskSkillLabel } from "../../lib/useTaskSkills";
 import styles from "./SkillPanel.module.css";
 
 interface SkillPanelProps {
@@ -23,6 +23,10 @@ export function SkillPanel({ skills, selectedIds, loading, error, hasSection, on
     </header>
     <div className={styles.content} role="region" aria-label="Skill 列表" tabIndex={0}>
       <p className={styles.hint}>勾选用于接下来智能助手任务的 Skill，最多 {MAX_TASK_SKILLS} 个。</p>
+      {!loading && !error && skills.length ? <div className={styles.stages} role="group" aria-label="按写作阶段选择 Skill">
+        <p className={styles.hint}>按写作阶段替换当前选择：</p>
+        <div className={styles.stageButtons}>{WRITING_STAGE_PRESETS.filter(preset => preset.ids.every(id => skills.some(skill => skill.id === id))).map(preset => <Button key={preset.label} size="small" variant="secondary" aria-pressed={preset.ids.length === selectedIds.length && preset.ids.every(id => selectedIds.includes(id))} onClick={() => onChange([...preset.ids])}>{preset.label}</Button>)}</div>
+      </div> : null}
       {loading ? <p role="status">正在加载 Skill…</p> : error ? <div role="alert"><p>{error}</p><Button size="small" onClick={onReload}>重试</Button></div> : skills.length ? <div className={styles.list} role="group" aria-label="内置 Skill">
         {skills.map(skill => {
           const checked = selectedIds.includes(skill.id);

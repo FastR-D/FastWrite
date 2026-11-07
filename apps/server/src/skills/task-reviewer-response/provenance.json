@@ -1,0 +1,20 @@
+{
+  "id": "reviewer-response",
+  "version": "1.0.0",
+  "adaptedAt": "2026-11-07",
+  "maintainer": "FastWrite",
+  "adaptation": "Self-contained editorial adaptation for FastWrite task selection. Upstream executables and companion dependencies are not imported. Changes are proposed through the existing ChangeSet flow.",
+  "sources": [
+    {
+      "id": "reviewer-response",
+      "repo": "KalarisLabs/research-agent-skills",
+      "commit": "29fe36d26127205057d5e0ed8425f6b0e9a8c13a",
+      "path": "skills/rebuttal-and-response-to-reviewers/SKILL.md",
+      "url": "https://github.com/KalarisLabs/research-agent-skills/blob/29fe36d26127205057d5e0ed8425f6b0e9a8c13a/skills/rebuttal-and-response-to-reviewers/SKILL.md",
+      "sha256": "8fb3ff7b2100f59b509c69ee540e391e828a2697756ed090944fee22388c2998",
+      "license": "MIT",
+      "verifiedAt": "2026-11-07",
+      "licenseFile": "LICENSE.KalarisLabs"
+    }
+  ]
+}

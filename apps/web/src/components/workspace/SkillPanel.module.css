@@ -8,3 +8,5 @@
 .details strong { color: var(--vscode-foreground); font-size: 13px; }
 .details small { color: var(--text-muted); }
 .actions { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.stages { display: flex; flex-direction: column; gap: 8px; }
+.stageButtons { display: flex; flex-wrap: wrap; gap: 6px; }

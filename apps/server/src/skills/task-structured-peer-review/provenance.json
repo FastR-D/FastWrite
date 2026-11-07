@@ -1,0 +1,31 @@
+{
+  "id": "structured-peer-review",
+  "version": "1.0.0",
+  "adaptedAt": "2026-11-07",
+  "maintainer": "FastWrite",
+  "adaptation": "Self-contained editorial adaptation for FastWrite task selection. Upstream executables and companion dependencies are not imported. Changes are proposed through the existing ChangeSet flow.",
+  "sources": [
+    {
+      "id": "peer-review",
+      "repo": "K-Dense-AI/scientific-agent-skills",
+      "commit": "a25cf9ec00e2745d03f8704acf6f6919694ccd9a",
+      "path": "skills/peer-review/SKILL.md",
+      "url": "https://github.com/K-Dense-AI/scientific-agent-skills/blob/a25cf9ec00e2745d03f8704acf6f6919694ccd9a/skills/peer-review/SKILL.md",
+      "sha256": "a042ccdc76d3399431b9a6c4cd4f98968eab964b1c14baeea4d9e73de82c7d19",
+      "license": "MIT",
+      "verifiedAt": "2026-11-07",
+      "licenseFile": "LICENSE.K-Dense-AI"
+    },
+    {
+      "id": "scientific-critical-thinking",
+      "repo": "K-Dense-AI/scientific-agent-skills",
+      "commit": "a25cf9ec00e2745d03f8704acf6f6919694ccd9a",
+      "path": "skills/scientific-critical-thinking/SKILL.md",
+      "url": "https://github.com/K-Dense-AI/scientific-agent-skills/blob/a25cf9ec00e2745d03f8704acf6f6919694ccd9a/skills/scientific-critical-thinking/SKILL.md",
+      "sha256": "563af70571b7dcd6a96bf2e303bedfdcba623b4e9f082d58f04aacbc961fdae4",
+      "license": "MIT",
+      "verifiedAt": "2026-11-07",
+      "licenseFile": "LICENSE.K-Dense-AI"
+    }
+  ]
+}

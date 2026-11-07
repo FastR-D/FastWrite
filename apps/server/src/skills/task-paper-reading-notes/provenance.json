@@ -1,0 +1,51 @@
+{
+  "id": "paper-reading-notes",
+  "version": "1.0.0",
+  "synthesizedAt": "2026-11-08",
+  "maintainer": "FastWrite",
+  "authorship": "Original FastWrite synthesis of methods and counterexamples; no third-party Skill or post text imported.",
+  "licensePolicy": "External posts remain copyrighted; source links and original paraphrases only. No grant of republication inferred.",
+  "sources": [
+    {
+      "id": "Z002",
+      "url": "https://www.zhihu.com/tardis/zm/art/35170379",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "Z004",
+      "url": "https://www.zhihu.com/tardis/sogou/qus/304334959",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "Z005",
+      "url": "https://www.zhihu.com/tardis/bd/art/114906646",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "Z021",
+      "url": "https://zhuanlan.zhihu.com/p/2056389763062576034",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "S003",
+      "url": "https://www.zhihu.com/question/2075682601503814283/answer/2088835206958657981",
+      "access": "body",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "S006",
+      "url": "https://www.zhihu.com/question/6050549444/answer/2064719713230496160",
+      "access": "body",
+      "observedAt": "2026-11-08"
+    }
+  ],
+  "ruleIds": [
+    "R01",
+    "R02"
+  ]
+}
+

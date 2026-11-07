@@ -1,0 +1,63 @@
+{
+  "id": "evidence-storyline",
+  "version": "1.0.0",
+  "synthesizedAt": "2026-11-08",
+  "maintainer": "FastWrite",
+  "authorship": "Original FastWrite synthesis of methods and counterexamples; no third-party Skill or post text imported.",
+  "licensePolicy": "External posts remain copyrighted; source links and original paraphrases only. No grant of republication inferred.",
+  "sources": [
+    {
+      "id": "X002",
+      "url": "https://www.xiaohongshu.com/explore/6ad1bb0a000000001801b0b9",
+      "access": "body-selected-image-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "X004",
+      "url": "https://www.xiaohongshu.com/explore/6ac757fa0000000015002b34",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "X007",
+      "url": "https://www.xiaohongshu.com/explore/6a58fc7f000000001101299b",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "S001",
+      "url": "https://www.zhihu.com/question/506572911/answer/2020819526590153433",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "S005",
+      "url": "https://zhuanlan.zhihu.com/p/2096577424561529120",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "Z014",
+      "url": "https://www.zhihu.com/tardis/zm/art/1944353316600551215",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "Z026",
+      "url": "https://www.zhihu.com/tardis/bd/art/260529953",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "Z043",
+      "url": "https://www.zhihu.com/tardis/zm/art/593041037?source_id=1003",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    }
+  ],
+  "ruleIds": [
+    "R03",
+    "R04"
+  ]
+}
+

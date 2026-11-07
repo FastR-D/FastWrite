@@ -28,4 +28,5 @@ output/
 # Superpowers brainstorming mockups
 .superpowers/
 /docs/superpowers
-/evalution
+evalution/
+/evaluation/

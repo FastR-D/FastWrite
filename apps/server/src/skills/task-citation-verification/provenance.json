@@ -1,0 +1,20 @@
+{
+  "id": "citation-verification",
+  "version": "1.0.0",
+  "adaptedAt": "2026-11-07",
+  "maintainer": "FastWrite",
+  "adaptation": "Self-contained editorial adaptation for FastWrite task selection. Upstream executables and companion dependencies are not imported. Changes are proposed through the existing ChangeSet flow.",
+  "sources": [
+    {
+      "id": "citation-management",
+      "repo": "K-Dense-AI/scientific-agent-skills",
+      "commit": "a25cf9ec00e2745d03f8704acf6f6919694ccd9a",
+      "path": "skills/citation-management/SKILL.md",
+      "url": "https://github.com/K-Dense-AI/scientific-agent-skills/blob/a25cf9ec00e2745d03f8704acf6f6919694ccd9a/skills/citation-management/SKILL.md",
+      "sha256": "dc79fe1e8438dcf598040615d5323360c6a7ed0b868fc3ffc82512c871a1e3ff",
+      "license": "MIT",
+      "verifiedAt": "2026-11-07",
+      "licenseFile": "LICENSE.K-Dense-AI"
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "id": "experiment-reporting",
+  "version": "1.0.0",
+  "synthesizedAt": "2026-11-08",
+  "maintainer": "FastWrite",
+  "authorship": "Original FastWrite synthesis of methods and counterexamples; no third-party Skill or post text imported.",
+  "licensePolicy": "External posts remain copyrighted; source links and original paraphrases only. No grant of republication inferred.",
+  "sources": [
+    {
+      "id": "X001",
+      "url": "https://www.xiaohongshu.com/explore/6accb0420000000018013dc0",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "X002",
+      "url": "https://www.xiaohongshu.com/explore/6ad1bb0a000000001801b0b9",
+      "access": "body-selected-image-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "X003",
+      "url": "https://www.xiaohongshu.com/explore/6ac99005000000000a025c9f",
+      "access": "body-and-expanded-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "X005",
+      "url": "https://www.xiaohongshu.com/explore/6a83d7e3000000002c005508",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "S002",
+      "url": "https://www.zhihu.com/question/1949767673585054728/answer/2096305852961636737",
+      "access": "body",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "S005",
+      "url": "https://zhuanlan.zhihu.com/p/2096577424561529120",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "S007",
+      "url": "https://zhuanlan.zhihu.com/p/2092312200677417984",
+      "access": "body",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "P001",
+      "url": "https://neurips.cc/public/guides/PaperChecklist",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "P002",
+      "url": "https://karpathy.github.io/2019/04/25/recipe/",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "P003",
+      "url": "https://github.com/google-research/tuning_playbook",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    }
+  ],
+  "ruleIds": [
+    "R05",
+    "R06"
+  ]
+}
+

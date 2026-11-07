@@ -1,0 +1,45 @@
+{
+  "id": "manuscript-consistency",
+  "version": "1.0.0",
+  "synthesizedAt": "2026-11-08",
+  "maintainer": "FastWrite",
+  "authorship": "Original FastWrite synthesis of methods and counterexamples; no third-party Skill or post text imported.",
+  "licensePolicy": "External posts remain copyrighted; source links and original paraphrases only. No grant of republication inferred.",
+  "sources": [
+    {
+      "id": "X007",
+      "url": "https://www.xiaohongshu.com/explore/6a58fc7f000000001101299b",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "X011",
+      "url": "https://www.xiaohongshu.com/explore/69de3bc6000000001a03796f",
+      "access": "body",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "S005",
+      "url": "https://zhuanlan.zhihu.com/p/2096577424561529120",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "S007",
+      "url": "https://zhuanlan.zhihu.com/p/2092312200677417984",
+      "access": "body",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "P001",
+      "url": "https://neurips.cc/public/guides/PaperChecklist",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    }
+  ],
+  "ruleIds": [
+    "R11",
+    "R12"
+  ]
+}
+

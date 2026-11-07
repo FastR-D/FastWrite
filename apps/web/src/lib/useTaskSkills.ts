@@ -43,6 +43,19 @@ export function useTaskSkills(projectId: string, revision: number) {
 }
 
 const labels: Record<string, string> = {
+  "paper-reading-notes": "文献精读与写作卡片",
+  "evidence-storyline": "论文主线与引言构建",
+  "experiment-reporting": "实验章节证据化写作",
+  "results-discussion": "结果解读与讨论写作",
+  "figure-caption-audit": "图表证据与图注核查",
+  "manuscript-consistency": "全文主张与证据一致性",
+  "scientific-writing": "科学论文证据化写作",
+  "literature-synthesis": "文献证据综合",
+  "citation-verification": "引用与书目核验",
+  "structured-peer-review": "结构化同行评审",
+  "academic-prose-polish": "学术表达精修",
+  "reviewer-response": "审稿意见逐条回复",
+  "research-content-writing": "研究型内容写作",
   "anti-defensive-writing": "反防御性写作（中文）",
   "anti-defensive-writing-en": "反防御性写作（英文）",
   "claim-audit": "论断与证据核查",
@@ -53,3 +66,12 @@ const labels: Record<string, string> = {
 };
 
 export function taskSkillLabel(id: string) { return labels[id] ?? id; }
+
+export const WRITING_STAGE_PRESETS = [
+  { label: "文献入稿", ids: ["paper-reading-notes", "literature-synthesis"] },
+  { label: "搭建主线", ids: ["evidence-storyline", "scientific-writing"] },
+  { label: "撰写实验", ids: ["experiment-reporting"] },
+  { label: "解读结果", ids: ["results-discussion"] },
+  { label: "核对图注", ids: ["figure-caption-audit"] },
+  { label: "全文复核", ids: ["manuscript-consistency", "academic-prose-polish"] },
+];

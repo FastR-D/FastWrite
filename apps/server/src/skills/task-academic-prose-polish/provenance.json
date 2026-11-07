@@ -1,0 +1,20 @@
+{
+  "id": "academic-prose-polish",
+  "version": "1.0.0",
+  "adaptedAt": "2026-11-07",
+  "maintainer": "FastWrite",
+  "adaptation": "Self-contained editorial adaptation for FastWrite task selection. Upstream executables and companion dependencies are not imported. Changes are proposed through the existing ChangeSet flow.",
+  "sources": [
+    {
+      "id": "humanizer",
+      "repo": "blader/humanizer",
+      "commit": "0ef9fe5bc3572734fd3ae6c448fe00a30cd5dcf0",
+      "path": "SKILL.md",
+      "url": "https://github.com/blader/humanizer/blob/0ef9fe5bc3572734fd3ae6c448fe00a30cd5dcf0/SKILL.md",
+      "sha256": "0612f1dfb1672b0ea9b97e139bf1f06cabe98d8b27424fe8ff01e1fb4cc99cad",
+      "license": "MIT",
+      "verifiedAt": "2026-11-07",
+      "licenseFile": "LICENSE.blader"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "id": "figure-caption-audit",
+  "version": "1.0.1",
+  "synthesizedAt": "2026-11-08",
+  "maintainer": "FastWrite",
+  "authorship": "Original FastWrite synthesis of methods and counterexamples; no third-party Skill or post text imported.",
+  "licensePolicy": "External posts remain copyrighted; source links and original paraphrases only. No grant of republication inferred.",
+  "sources": [
+    {
+      "id": "X001",
+      "url": "https://www.xiaohongshu.com/explore/6accb0420000000018013dc0",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "X009",
+      "url": "https://www.xiaohongshu.com/explore/6a69c949000000001101d168",
+      "access": "body",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "S005",
+      "url": "https://zhuanlan.zhihu.com/p/2096577424561529120",
+      "access": "body-and-comments",
+      "observedAt": "2026-11-08"
+    },
+    {
+      "id": "P001",
+      "url": "https://neurips.cc/public/guides/PaperChecklist",
+      "access": "body-extract",
+      "observedAt": "2026-11-08"
+    }
+  ],
+  "ruleIds": [
+    "R09",
+    "R10"
+  ]
+}
+

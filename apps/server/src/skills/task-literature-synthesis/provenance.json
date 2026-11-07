@@ -1,0 +1,20 @@
+{
+  "id": "literature-synthesis",
+  "version": "1.0.0",
+  "adaptedAt": "2026-11-07",
+  "maintainer": "FastWrite",
+  "adaptation": "Self-contained editorial adaptation for FastWrite task selection. Upstream executables and companion dependencies are not imported. Changes are proposed through the existing ChangeSet flow.",
+  "sources": [
+    {
+      "id": "literature-review",
+      "repo": "K-Dense-AI/scientific-agent-skills",
+      "commit": "a25cf9ec00e2745d03f8704acf6f6919694ccd9a",
+      "path": "skills/literature-review/SKILL.md",
+      "url": "https://github.com/K-Dense-AI/scientific-agent-skills/blob/a25cf9ec00e2745d03f8704acf6f6919694ccd9a/skills/literature-review/SKILL.md",
+      "sha256": "16a9e85bcdcb9bb859e1646bf836e51b22900445ba2e367d8d75be05b5a5cba8",
+      "license": "MIT",
+      "verifiedAt": "2026-11-07",
+      "licenseFile": "LICENSE.K-Dense-AI"
+    }
+  ]
+}

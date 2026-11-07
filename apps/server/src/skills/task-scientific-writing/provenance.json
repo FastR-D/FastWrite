@@ -1,0 +1,42 @@
+{
+  "id": "scientific-writing",
+  "version": "1.0.0",
+  "adaptedAt": "2026-11-07",
+  "maintainer": "FastWrite",
+  "adaptation": "Self-contained editorial adaptation for FastWrite task selection. Upstream executables and companion dependencies are not imported. Changes are proposed through the existing ChangeSet flow.",
+  "sources": [
+    {
+      "id": "scientific-writing",
+      "repo": "K-Dense-AI/scientific-agent-skills",
+      "commit": "a25cf9ec00e2745d03f8704acf6f6919694ccd9a",
+      "path": "skills/scientific-writing/SKILL.md",
+      "url": "https://github.com/K-Dense-AI/scientific-agent-skills/blob/a25cf9ec00e2745d03f8704acf6f6919694ccd9a/skills/scientific-writing/SKILL.md",
+      "sha256": "511a2096bebecd8cf0f8212b9d262d37154ae1ba566eb385d93ac968682edbd1",
+      "license": "MIT",
+      "verifiedAt": "2026-11-07",
+      "licenseFile": "LICENSE.K-Dense-AI"
+    },
+    {
+      "id": "ml-paper-writing",
+      "repo": "KalarisLabs/research-agent-skills",
+      "commit": "29fe36d26127205057d5e0ed8425f6b0e9a8c13a",
+      "path": "skills/ml-paper-writing/SKILL.md",
+      "url": "https://github.com/KalarisLabs/research-agent-skills/blob/29fe36d26127205057d5e0ed8425f6b0e9a8c13a/skills/ml-paper-writing/SKILL.md",
+      "sha256": "dc9ee2c036860fb8699ef4c7558a9f12f14e42f91214dbc25c4b483aeb979857",
+      "license": "MIT",
+      "verifiedAt": "2026-11-07",
+      "licenseFile": "LICENSE.KalarisLabs"
+    },
+    {
+      "id": "chinese-research-writing",
+      "repo": "zLanqing/codex-claude-academic-skills",
+      "commit": "7ed6377f0efb6a38951b48ef03b19d996e454b1f",
+      "path": "research-writing-skill/SKILL.md",
+      "url": "https://github.com/zLanqing/codex-claude-academic-skills/blob/7ed6377f0efb6a38951b48ef03b19d996e454b1f/research-writing-skill/SKILL.md",
+      "sha256": "ce5f25f99ebb01e6d12624dbee1967226ed5b59aa914496bf7b998e9a31a6630",
+      "license": "MIT",
+      "verifiedAt": "2026-11-07",
+      "licenseFile": "LICENSE.zLanqing"
+    }
+  ]
+}

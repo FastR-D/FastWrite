@@ -1,0 +1,20 @@
+{
+  "id": "research-content-writing",
+  "version": "1.0.0",
+  "adaptedAt": "2026-11-07",
+  "maintainer": "FastWrite",
+  "adaptation": "Self-contained editorial adaptation for FastWrite task selection. Upstream executables and companion dependencies are not imported. Changes are proposed through the existing ChangeSet flow.",
+  "sources": [
+    {
+      "id": "content-research-writer",
+      "repo": "ComposioHQ/awesome-claude-skills",
+      "commit": "be2a406907dbc61b73e6827ded415c96139d13a2",
+      "path": "content-research-writer/SKILL.md",
+      "url": "https://github.com/ComposioHQ/awesome-claude-skills/blob/be2a406907dbc61b73e6827ded415c96139d13a2/content-research-writer/SKILL.md",
+      "sha256": "27eb5c1a0a88a9c1c64f6fcd9c28782e6a6e70d5da43233c4e99ade946f74825",
+      "license": "Apache-2.0",
+      "verifiedAt": "2026-11-07",
+      "licenseFile": "LICENSE.ComposioHQ"
+    }
+  ]
+}

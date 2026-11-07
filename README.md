@@ -43,6 +43,10 @@ bun start
 
 写作质量接口：`POST /api/projects/:projectId/writing-checks` 执行确定性检查；`GET /api/projects/:projectId/argument-graph` 获取论证关系；`POST /api/projects/:projectId/adversarial-memo` 生成仅供参考的对抗预检意见。Claim 侧栏支持 stale claim 的 reanchor；Agent 生成候选会校验 Writing Guard 与 evidence dependencies；Review 报告会显示各 pass 的完成、失败或跳过状态。评测可运行 `bun run writing:eval`。
 
+工作区 Skill 面板可选择科学论文写作、文献综合、引用核验、结构化评审、学术表达精修、审稿回复和研究型内容写作等任务 Skill，最多同时选择 5 个。新增 Skill 的上游来源、授权、逐项取舍和实测结果见 [Agent 写作 Skill 调研](docs/RESEARCH-AGENT-WRITING-SKILLS-2026-11.md)。已登录本机 Codex 后，可运行 `bun run skills:eval:codex --phase=adapted`，直接复用 Codex 配置验证中英文合成写作样例；复现方式与结果边界见 [评测说明](evaluation/agent-writing-skills/README.md)。
+
+科研帖子与收藏提炼的六个阶段入口已接入内置 Skill：文献入稿、搭建主线、撰写实验、解读结果、核对图注、全文复核。来源分析、适用边界和真实 Codex 验收见 [调研与集成记录](docs/RESEARCH-SOCIAL-WRITING-SKILLS-2026-11.md)；复测命令为 `bun run skills:eval:social`。
+
 IDE 的“参考论文”侧栏支持添加或拖放 PDF、包含 TeX/PDF 的 ZIP（上传上限 30 MB）。多入口压缩包需要选择主文件；解析后可按全文、章节、PDF 页码或原文选段设置参考范围，并选择借鉴结构、段落、论述或表达。保存后，写作区会显示参考标签；侧栏可指定当前选区、章节、文件或整篇论文作为写作目标。Draft/Continue/Agent 和 Revise 使用参考写法，超过局部精修长度限制的当前章节会交给限定章节范围的 Agent，结果继续通过原有 ChangeSet 审核；Completion 只读取已缓存的精简写法，可先点击“准备写作参考”。扫描 PDF 无文本时需要提供有文字层的 PDF 或 TeX 源码；首版不提供 OCR 或 TAR/RAR 导入。
 
 参考材料保存在 `FASTWRITE_DATA_DIR/projects/<projectId>/reference-papers/`，与正文 `workspace/` 分开，避免进入正文编译、GitHub 同步、Paper Memory 或事实证据。备份项目文件时需复制整个项目目录，包括参考材料；现有 JSON 数据库备份不包含原始文件或解析文件。普通论文 ZIP 导出仍只包含正文工作区。验证参考功能可运行 `bun test apps/server/src/references`、`bun run references:eval` 和构建后的 `bun run e2e:references`。配置真实模型后，`bun run references:eval -- --live` 会使用合成论文验证真实模型的参考写作链路。
