@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useMemo, useRef, useState } from "react";
 import type { PaperProject, PublicationTarget, TargetVenue, UploadManifestEntry } from "@fastwrite/shared";
 import { isIgnoredWorkspacePath, WRITING_PROFILES } from "@fastwrite/shared";
@@ -85,7 +86,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
         return;
       } catch (error) {
         if ((error as DOMException).name === "AbortError") return;
-        setMessage(error instanceof Error ? error.message : "无法读取所选目录");
+        setMessage(userFacingError(error, "无法读取所选目录"));
         return;
       }
     }
@@ -161,7 +162,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
       if ((error as DOMException).name === "AbortError") {
         setMessage("已取消导入");
       } else {
-        setMessage(error instanceof ApiClientError || error instanceof Error ? error.message : "导入失败");
+        setMessage(userFacingError(error, "导入失败"));
       }
       if (error instanceof ApiClientError && error.code === "upload_not_writable") {
         uploadSessionRef.current = null;

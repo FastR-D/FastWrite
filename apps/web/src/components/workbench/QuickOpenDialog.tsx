@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useEffect, useState } from "react";
 import type { WorkspaceTreeNode } from "@fastwrite/shared";
 import { api } from "../../api/client";
@@ -10,7 +11,7 @@ export function QuickOpenDialog({ open, projectId, onClose, onOpen }: { open: bo
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController(); setError(""); setFiles([]); setLoading(true);
-    api.projects.tree(projectId, controller.signal).then(tree => { if (!controller.signal.aborted) setFiles(paths(tree)); }).catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "无法加载文件"); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    api.projects.tree(projectId, controller.signal).then(tree => { if (!controller.signal.aborted) setFiles(paths(tree)); }).catch(failure => { if (!controller.signal.aborted) setError(userFacingError(failure, "无法加载文件")); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [open, projectId]);
   const choose = (path: string) => { onOpen(path); onClose(); };

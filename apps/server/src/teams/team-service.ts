@@ -215,10 +215,15 @@ export class TeamService {
       const project = state.projects.find((item) => item.id === projectId); if (!project) throw new ApiError(404, "project_not_found", "Project not found");
       if (input.personalOwnerUserId && !state.users.some((user) => user.id === input.personalOwnerUserId && user.status === "active")) throw new ApiError(404, "user_not_found", "New personal owner not found");
       if (input.teamId && !state.teams.some((team) => team.id === input.teamId && !team.personalUserId)) throw new ApiError(400, "team_invalid", "Projects can only be transferred to a non-personal team");
+      if (input.personalOwnerUserId && input.personalOwnerUserId !== principal.user.id && !state.projectMembers.some(member => member.projectId === projectId && member.userId === input.personalOwnerUserId)) throw new ApiError(400, "project_transfer_member_required", "请先邀请新所有者加入项目");
+      const previousOwnerId = project.personalOwnerUserId;
       delete project.teamId; delete project.personalOwnerUserId;
       if (input.teamId) { project.teamId = input.teamId; project.visibility = "team"; }
       else { project.personalOwnerUserId = input.personalOwnerUserId!; project.visibility = "private"; }
       const ownerId = input.personalOwnerUserId ?? principal.user.id;
+      for (const previous of state.projectMembers) if (previous.projectId === projectId && previous.role === "owner" && previous.userId !== ownerId) { previous.role = "editor"; previous.updatedAt = timestamp; }
+      if (previousOwnerId && previousOwnerId !== ownerId && !state.projectMembers.some(previous => previous.projectId === projectId && previous.userId === previousOwnerId)) state.projectMembers.push({ projectId, userId: previousOwnerId, role: "editor", createdAt: timestamp, updatedAt: timestamp });
+      project.updatedAt = timestamp; project.version++;
       const member = state.projectMembers.find((item) => item.projectId === projectId && item.userId === ownerId);
       if (member) { member.role = "owner"; member.updatedAt = timestamp; } else state.projectMembers.push({ projectId, userId: ownerId, role: "owner", createdAt: timestamp, updatedAt: timestamp });
       state.auditEvents.push(audit(principal.user.id, "project.transfer", "project", projectId));
@@ -243,7 +248,7 @@ function hash(value: string) { return createHash("sha256").update(value).digest(
 interface InvitationOptions { expiresAt?: string; message?: string; }
 function invitationExpiry(value?: string): string { if (!value) return new Date(Date.now() + 7 * 86400_000).toISOString(); const time = Date.parse(value); if (!Number.isFinite(time) || time < Date.now() + 3_600_000 || time > Date.now() + 30 * 86400_000) throw new ApiError(400, "invitation_expiry_invalid", "Invitation expiry must be between one hour and 30 days from now"); return new Date(time).toISOString(); }
 function audit(actorUserId: string, action: string, resourceType: string, resourceId: string) { return { id: `audit_${crypto.randomUUID()}`, actorUserId, action, resourceType, resourceId, createdAt: new Date().toISOString() }; }
-const NOTIFICATION_TYPES: UserNotificationType[] = ["access_request", "access_request_decision", "mention"];
+const NOTIFICATION_TYPES: UserNotificationType[] = ["access_request", "access_request_decision", "mention", "discussion"];
 const ACL_ACTIONS: ProjectAclAction[] = ["read", "comment", "edit", "manage", "run_ai", "manage_harness", "export", "sync_github"];
 const ACL_SUBJECT_TYPES: ProjectAclRule["subjectType"][] = ["user", "project_role", "team_role", "idp_group"];
 const PROJECT_ROLES: ProjectRole[] = ["owner", "maintainer", "editor", "commenter", "viewer"];

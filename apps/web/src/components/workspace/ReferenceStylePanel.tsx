@@ -1,8 +1,9 @@
 import { statusLabel } from "../../lib/labels";
+import { userFacingError } from "../../lib/notifications";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ParsedReference, ReferenceAspect, ReferencePaper, ReferenceProfileStatus, ReferenceSelection, ReferenceSettings, ReferenceScope } from "@fastwrite/shared";
 import { api } from "../../api/client";
-import { Button, Checkbox, Dialog, Disclosure, Field, FileField, MultiSelect, NumberField, Select, TextArea, TextField } from "../ui";
+import { Button, Checkbox, Dialog, Disclosure, Field, FileField, MultiSelect, NumberField, Select, SegmentedControl, TextArea, TextField } from "../ui";
 import { ReferencePdfViewer } from "./ReferencePdfViewer";
 import styles from "./ReferenceStylePanel.module.css";
 
@@ -28,6 +29,12 @@ export function ReferenceStylePanel({ projectId, path, hasSelection, hasSection,
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState("");
   const [error, setError] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
+  const [importMode, setImportMode] = useState<"file" | "identifier" | "latex">("file");
+  const [importSource, setImportSource] = useState("");
+  const [latexSource, setLatexSource] = useState("");
+  const [importTitle, setImportTitle] = useState("");
+  const [importError, setImportError] = useState("");
   const [preview, setPreview] = useState(false);
   const [original, setOriginal] = useState(false);
   const [target, setTarget] = useState<ReferenceWriteTarget>("section");
@@ -62,10 +69,18 @@ export function ReferenceStylePanel({ projectId, path, hasSelection, hasSection,
   const perform = async (action: () => Promise<unknown>) => { setBusy(true); setError(""); try { await action(); await reload(); } catch (failure) { setError(message(failure)); await reload().catch(() => {}); } finally { setBusy(false); } };
   const upload = async (files: File[]) => {
     if (!files.length || busy) return;
-    const controller = new AbortController(); abortRef.current = controller; setBusy(true); setError("");
-    try { for (const file of files) { if (file.size > 30 * 1024 * 1024) throw new Error("参考论文不能超过 30 MB"); setUploading(file.name); const paper = await api.referencePapers.upload(projectId, file, controller.signal); setSelectedId(paper.id); await reload(controller.signal); } }
-    catch (failure) { if (!controller.signal.aborted) setError(message(failure)); }
+    const controller = new AbortController(); abortRef.current = controller; setBusy(true); setError(""); setImportError("");
+    try { for (const file of files) { if (file.size > 30 * 1024 * 1024) throw new Error("参考论文不能超过 30 MB"); setUploading(file.name); const paper = await api.referencePapers.upload(projectId, file, controller.signal); setSelectedId(paper.id); await reload(controller.signal); } setImportOpen(false); }
+    catch (failure) { if (!controller.signal.aborted) { setError(message(failure)); setImportError(message(failure)); } }
     finally { setUploading(""); setBusy(false); if (abortRef.current === controller) abortRef.current = null; }
+  };
+  const importPaper = async () => {
+    if (busy) return;
+    if (importMode === "latex") { await upload([new File([latexSource], `${importTitle.trim() || "Reference"}.tex`, { type: "text/plain" })]); return; }
+    const controller = new AbortController(); abortRef.current = controller; setBusy(true); setImportError(""); setError("");
+    try { const paper = await api.referencePapers.import(projectId, importSource, controller.signal); setSelectedId(paper.id); await reload(controller.signal); setImportOpen(false); setImportSource(""); }
+    catch (failure) { if (!controller.signal.aborted) setImportError(message(failure)); }
+    finally { setBusy(false); if (abortRef.current === controller) abortRef.current = null; }
   };
   const save = async (enabled: boolean) => {
     if (!draft) return;
@@ -81,12 +96,12 @@ export function ReferenceStylePanel({ projectId, path, hasSelection, hasSection,
   const validScope = !!draft && !!draft.aspects.length && (draft.scope.type === "full" || draft.scope.type === "sections" && !!draft.scope.sectionIds.length || draft.scope.type === "pages" && draft.scope.from >= 1 && draft.scope.to >= draft.scope.from && draft.scope.to <= (selected?.pageCount ?? 0) || draft.scope.type === "excerpt" && draft.scope.to > draft.scope.from);
   const targetAvailable = target === "selection" ? hasSelection : target === "section" ? hasSection : target === "file" ? !!path : true;
   return <div className={styles.panel} onDragOver={event => { event.preventDefault(); }} onDrop={event => { event.preventDefault(); event.stopPropagation(); void upload(Array.from(event.dataTransfer.files)); }}>
-    <FileField hidden inputRef={inputRef} label="添加参考论文" accept=".pdf,.zip" multiple onSelect={files => void upload(files)} disabled={busy} />
-    <Button disabled={busy} onClick={() => inputRef.current?.click()}>添加参考论文</Button>
-    <p className={styles.hint}>选择或拖放 PDF / TeX ZIP，最多 30 MB。参考范围与当前论文的写作范围分别设置。</p>
+    <FileField hidden inputRef={inputRef} label="参考论文文件" accept=".pdf,.zip,.tex,.latex" multiple onSelect={files => void upload(files)} disabled={busy} />
+    <Button disabled={busy} onClick={() => { setImportError(""); setImportOpen(true); }}>添加参考论文</Button>
+    <p className={styles.hint}>支持 PDF、LaTeX、ZIP、DOI、arXiv ID 及全文链接；文件也可直接拖入，最多 30 MB。</p>
     {uploading ? <div role="status">正在上传 {uploading}… <Button size="small" variant="ghost" onClick={() => abortRef.current?.abort()}>取消上传</Button></div> : null}
     {error ? <p role="alert" className={styles.error}>{error}</p> : null}
-    {!papers.length ? <p className={styles.empty}>添加一篇论文，借鉴它的结构、论述与表达方式。</p> : <div className={styles.list} aria-label="参考论文列表">{papers.map(paper => <Button key={paper.id} variant={selectedId === paper.id ? "secondary" : "ghost"} onClick={() => setSelectedId(paper.id)} aria-pressed={selectedId === paper.id}><span className={styles.paperName}>{paper.title}<small>{paper.sourceKind === "tex-zip" ? "TeX" : "PDF"} · {statusLabels[paper.status]}{settings.selections.some(selection => selection.referenceId === paper.id) ? " · 已启用" : ""}</small></span></Button>)}</div>}
+    {!papers.length ? <p className={styles.empty}>添加一篇论文，借鉴它的结构、论述与表达方式。</p> : <div className={styles.list} aria-label="参考论文列表">{papers.map(paper => <Button key={paper.id} variant={selectedId === paper.id ? "secondary" : "ghost"} onClick={() => setSelectedId(paper.id)} aria-pressed={selectedId === paper.id}><span className={styles.paperName}>{paper.title}<small>{(paper.sourceKind === "tex" || paper.sourceKind === "tex-zip") ? "TeX" : "PDF"} · {statusLabels[paper.status]}{settings.selections.some(selection => selection.referenceId === paper.id) ? " · 已启用" : ""}</small></span></Button>)}</div>}
     {selected ? <div className={styles.detail}>
       <Field label="论文标题"><TextField value={title} onChange={setTitle} /></Field>
       <div className={styles.actions}><Button size="small" disabled={busy || !title.trim() || title === selected.title} onClick={() => void perform(() => api.referencePapers.rename(projectId, selected.id, title))}>保存标题</Button><Button size="small" variant="ghost" disabled={busy} onClick={() => setDeleting(true)}>删除论文</Button></div>
@@ -113,10 +128,18 @@ export function ReferenceStylePanel({ projectId, path, hasSelection, hasSection,
         {selected.warnings.length ? <Disclosure summary={`解析提示（${selected.warnings.length}）`} className={styles.hint ?? ""}>{selected.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</Disclosure> : null}
       </> : null}
     </div> : null}
+    <Dialog open={importOpen} title="添加参考论文" width="wide" onClose={() => { abortRef.current?.abort(); setImportOpen(false); }} footer={<><Button variant="ghost" onClick={() => { abortRef.current?.abort(); setImportOpen(false); }}>{busy ? "取消导入" : "取消"}</Button>{importMode !== "file" ? <Button variant="primary" loading={busy} disabled={busy || !(importMode === "latex" ? latexSource.trim() : importSource.trim())} onClick={() => void importPaper()}>导入论文</Button> : null}</>}>
+      <div className={styles.importForm}>
+        <SegmentedControl label="论文导入方式" value={importMode} onChange={mode => { if (!busy) { setImportMode(mode); setImportError(""); } }} options={[{ value: "file", label: "上传文件" }, { value: "identifier", label: "DOI / arXiv / 链接" }, { value: "latex", label: "LaTeX 源码" }]} />
+        {importMode === "file" ? <><Button disabled={busy} onClick={() => inputRef.current?.click()}>选择 PDF / LaTeX / ZIP 文件</Button><p className={styles.hint}>支持 .pdf、.tex、.latex 和包含论文的 .zip。多文件 LaTeX 项目请打包为 ZIP。</p></> : importMode === "identifier" ? <><Field label="DOI、arXiv ID 或全文链接"><TextField aria-label="论文标识或链接" value={importSource} onChange={setImportSource} placeholder="10.xxxx/…、2301.12345 或 https://…/paper.pdf" disabled={busy} /></Field><p className={styles.hint}>导入可下载的全文；若 DOI 未提供全文链接，可上传本地 PDF 或 LaTeX。</p></> : <><Field label="论文标题（可选）"><TextField value={importTitle} onChange={setImportTitle} disabled={busy} /></Field><Field label="LaTeX 源码"><TextArea aria-label="LaTeX 论文源码" value={latexSource} onChange={setLatexSource} rows={12} disabled={busy} placeholder={"\\documentclass{article}\n\\begin{document}\n…\n\\end{document}"} /></Field></>}
+        {busy ? <p role="status">{uploading ? `正在上传 ${uploading}…` : "正在导入论文…"}</p> : null}
+        {importError ? <p role="alert" className={styles.error}>{importError}</p> : null}
+      </div>
+    </Dialog>
     <Dialog open={preview && !!parsed && !!selected} title={selected?.title ?? "参考论文"} description="原文只读；选段以解析文本中的位置保存。" width="wide" onClose={() => setPreview(false)}>
-      {selected && parsed ? <div className={styles.reader}><div className={styles.actions}><Checkbox checked={original} onChange={setOriginal} disabled={selected.sourceKind === "tex-zip"}>查看原始 PDF</Checkbox><Button disabled={original} onClick={() => { const text = textRef.current; if (!text || text.selectionEnd <= text.selectionStart || !draft) { setError("请先在解析文本中选中一段文字。"); return; } setDraft({ ...draft, scope: { type: "excerpt", from: text.selectionStart, to: text.selectionEnd } }); setPreview(false); }}>使用所选片段</Button></div>{original ? <ReferencePdfViewer projectId={projectId} referenceId={selected.id} /> : <TextArea ref={textRef} readonly value={parsed.text} rows={22} resize="none" aria-label="参考论文解析原文" className={styles.sourceText ?? ""} />}</div> : null}
+      {selected && parsed ? <div className={styles.reader}><div className={styles.actions}><Checkbox checked={original} onChange={setOriginal} disabled={selected.sourceKind === "tex-zip" || selected.sourceKind === "tex"}>查看原始 PDF</Checkbox><Button disabled={original} onClick={() => { const text = textRef.current; if (!text || text.selectionEnd <= text.selectionStart || !draft) { setError("请先在解析文本中选中一段文字。"); return; } setDraft({ ...draft, scope: { type: "excerpt", from: text.selectionStart, to: text.selectionEnd } }); setPreview(false); }}>使用所选片段</Button></div>{original ? <ReferencePdfViewer projectId={projectId} referenceId={selected.id} /> : <TextArea ref={textRef} readonly value={parsed.text} rows={22} resize="none" aria-label="参考论文解析原文" className={styles.sourceText ?? ""} />}</div> : null}
     </Dialog>
     <Dialog open={deleting} title="删除参考论文" description={`移除“${selected?.title ?? ""}”及其解析内容和活动参考设置。已生成的写作候选仍可审核。`} width="small" onClose={() => setDeleting(false)}><Button disabled={busy} onClick={() => { setDeleting(false); if (selected) void perform(() => api.referencePapers.remove(projectId, selected.id)); }}>删除</Button></Dialog>
   </div>;
 }
-function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+function message(error: unknown): string { return userFacingError(error); }

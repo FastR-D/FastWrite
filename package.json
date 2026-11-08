@@ -46,7 +46,9 @@
     "e2e:bottom-panel-layout": "node scripts/e2e-bottom-panel-layout.mjs",
     "e2e:editor-matrix": "node scripts/e2e-editor-matrix.mjs",
     "e2e:workbench-performance": "node scripts/e2e-workbench-performance.mjs",
-    "e2e:large-document": "node scripts/e2e-large-document.mjs"
+    "e2e:large-document": "node scripts/e2e-large-document.mjs",
+    "e2e:paper-collaboration": "node scripts/e2e-paper-collaboration.mjs",
+    "e2e:sidebar-workflow": "node scripts/e2e-sidebar-workflow.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

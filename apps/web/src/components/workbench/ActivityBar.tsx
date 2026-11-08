@@ -1,8 +1,8 @@
 import { useFileDropTarget } from "../../lib/uploads/use-file-drop-target";
 import { Icon } from "vscrui";
 import { IconButton } from "../ui";
-export type SidebarView = "files" | "git" | "evidence" | "outline" | "reference-style" | "skills";
-const views = [{ id: "files", label: "文件", icon: "files" }, { id: "git", label: "Git", icon: "source-control" }, { id: "evidence", label: "证据", icon: "book" }, { id: "outline", label: "大纲", icon: "list-tree" }, { id: "reference-style", label: "参考论文", icon: "book" }, { id: "skills", label: "Skill", icon: "extensions" }] as const;
+export type SidebarView = "files" | "git" | "evidence" | "outline" | "reference-style" | "skills" | "collaboration";
+const views = [{ id: "files", label: "文件", icon: "files" }, { id: "git", label: "Git", icon: "source-control" }, { id: "evidence", label: "证据", icon: "book" }, { id: "outline", label: "大纲", icon: "list-tree" }, { id: "reference-style", label: "参考论文", icon: "book" }, { id: "skills", label: "Skill", icon: "extensions" }, { id: "collaboration", label: "协作", icon: "comment-discussion" }] as const;
 
 export function ActivityBar({ active, expanded, onSelect, onSettings, evidenceCount, onDropFiles }: { active: SidebarView; expanded: boolean; onSelect: (view: SidebarView) => void; onSettings: () => void; evidenceCount: number; onDropFiles?: (transfer: DataTransfer) => void }) {
   const drop = useFileDropTarget(onDropFiles);

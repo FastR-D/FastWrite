@@ -1,6 +1,8 @@
 import * as Y from "yjs";
 import type { CollaborationPersistResponse } from "@fastwrite/shared";
+import { buildTextHunks } from "@fastwrite/shared";
 import type { JsonDatabase } from "../storage/database";
+import { ProjectQueue } from "../workspace/project-queue";
 import type { WorkspaceService } from "../workspace/workspace-service";
 import { ApiError } from "../http";
 import type { CollaborationBus, CollaborationPersistence } from "./collaboration-bus";
@@ -10,7 +12,7 @@ const COMPACT_AFTER_BYTES = 5 * 1024 * 1024;
 const LIVE_FLUSH_IDLE_MS = 1_000;
 
 export class CollaborationService {
-  private readonly projectLocks = new Map<string, Promise<unknown>>();
+  private readonly projectQueue = new ProjectQueue();
   private readonly liveFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly persistedDocuments = new Map<string, Promise<void>>();
   constructor(private readonly database: JsonDatabase, private readonly workspaces: WorkspaceService, private readonly bus?: CollaborationBus, private readonly persistence?: CollaborationPersistence) {}
@@ -40,7 +42,7 @@ export class CollaborationService {
     let parsed: { documentId?: string; update?: string };
     try { parsed = JSON.parse(message) as typeof parsed; } catch { return; }
     if (parsed.documentId !== document.id || typeof parsed.update !== "string") return;
-    await this.serialized(document.projectId, async () => {
+    await this.projectQueue.run(document.projectId, async () => {
       const bytes = decode(parsed.update!);
       const ydoc = this.restore(document.id);
       try { Y.applyUpdate(ydoc, bytes, "remote-bus"); } catch { return; }
@@ -51,14 +53,17 @@ export class CollaborationService {
       });
       await this.persistence?.appendUpdate({ documentId: document.id, sequence, update: parsed.update!, bytes: bytes.byteLength, createdAt: new Date().toISOString() });
       await this.flush(document.projectId, document.path, document.id, ydoc);
-    });
+    }, false);
   }
 
   async open(projectId: string, path: string) {
+    return this.serialized(projectId, async () => {
     const document = await this.document(projectId, path);
     await this.ensurePersisted(document.id);
     const ydoc = this.restore(document.id);
-    return { documentId: document.id, path: document.path, fileVersion: document.fileVersion, update: encode(Y.encodeStateAsUpdate(ydoc)) };
+    try { return { documentId: document.id, path: document.path, fileVersion: document.fileVersion, update: encode(Y.encodeStateAsUpdate(ydoc)) }; }
+    finally { ydoc.destroy(); }
+    });
   }
 
   async positions(projectId: string, path: string, from: number, to: number) {
@@ -68,8 +73,33 @@ export class CollaborationService {
   }
 
   absolutePositions(documentId: string, start: string, end: string) {
-    const ydoc = this.restore(documentId); const decodePosition = (value: string) => Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(decode(value)), ydoc)?.index;
-    return { start: decodePosition(start), end: decodePosition(end) };
+    const document = this.database.snapshot().collaborationDocuments.find(item => item.id === documentId && item.status === "active");
+    if (!document) return {};
+    const ydoc = this.restore(documentId);
+    try {
+      const decodePosition = (value: string) => Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(decode(value)), ydoc)?.index;
+      return { start: decodePosition(start), end: decodePosition(end), content: ydoc.getText("content").toString(), path: document.path };
+    } finally { ydoc.destroy(); }
+  }
+
+  /** Validate and apply a review suggestion inside the same queue as live edits. */
+  async replaceAnchored(projectId: string, documentId: string, start: string, end: string, expected: string, replacement: string) {
+    return this.serialized(projectId, async () => {
+      const document = this.database.snapshot().collaborationDocuments.find(item => item.id === documentId && item.projectId === projectId && item.status === "active");
+      if (!document) throw new ApiError(409, "suggestion_outdated", "源文件已移除，请重新关联建议。");
+      const ydoc = this.restore(documentId);
+      try {
+        const from = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(decode(start)), ydoc)?.index;
+        const to = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(decode(end)), ydoc)?.index;
+        const text = ydoc.getText("content");
+        if (from === undefined || to === undefined || to < from || text.toString().slice(from, to) !== expected) throw new ApiError(409, "suggestion_outdated", "原文已更改，请核对并重新关联建议后再接受。");
+        // Flush first so an external file conflict cannot commit a partial replacement.
+        await this.flush(projectId, document.path, documentId, ydoc);
+        const vector = Y.encodeStateVector(ydoc);
+        ydoc.transact(() => { text.delete(from, to - from); text.insert(from, replacement); }, "review-suggestion");
+        return await this.applyNow(projectId, document.path, encode(Y.encodeStateAsUpdate(ydoc, vector)), this.database.snapshot().collaborationDocuments.find(item => item.id === documentId)!.fileVersion, true);
+      } finally { ydoc.destroy(); }
+    });
   }
 
   private async ensurePersisted(documentId: string): Promise<void> {
@@ -159,6 +189,45 @@ export class CollaborationService {
     return this.serialized(projectId, () => this.flushProjectNow(projectId));
   }
 
+  /** AI approvals, REST saves and history restores must join the live edit queue. */
+  async mutateWorkspace<T>(projectId: string, operation: () => Promise<T>, afterReconcile?: () => Promise<void>): Promise<T> {
+    return this.serialized(projectId, async () => {
+      await this.flushProjectNow(projectId);
+      let result: T;
+      try { result = await operation(); }
+      finally {
+        const documents = this.database.snapshot().collaborationDocuments.filter(item => item.projectId === projectId && item.status === "active");
+        for (const document of documents) {
+          if (!await this.workspaces.fileExists(projectId, document.path)) {
+            await this.database.mutate(state => { state.collaborationDocuments.find(item => item.id === document.id)!.status = "archived"; });
+            continue;
+          }
+          const file = await this.workspaces.readTextFile(projectId, document.path);
+          if (file.file.version === document.fileVersion) continue;
+          const ydoc = this.restore(document.id), text = ydoc.getText("content");
+          try {
+            const before = text.toString();
+            ydoc.transact(() => {
+              for (const hunk of buildTextHunks(before, file.content).reverse()) {
+                // Preserve unchanged character identities within each changed line.
+                let prefix = 0, suffix = 0;
+                while (prefix < Math.min(hunk.before.length, hunk.after.length) && hunk.before[prefix] === hunk.after[prefix]) prefix++;
+                while (suffix < Math.min(hunk.before.length, hunk.after.length) - prefix && hunk.before[hunk.before.length - suffix - 1] === hunk.after[hunk.after.length - suffix - 1]) suffix++;
+                text.delete(hunk.from + prefix, hunk.before.length - prefix - suffix);
+                text.insert(hunk.from + prefix, hunk.after.slice(prefix, hunk.after.length - suffix));
+              }
+            }, "workspace-mutation");
+            await this.compact(document.id, ydoc);
+            await this.database.mutate(state => { const stored = state.collaborationDocuments.find(item => item.id === document.id)!; stored.fileVersion = file.file.version; stored.updatedAt = new Date().toISOString(); });
+            await this.bus?.publish(`fastwrite:collab:${document.id}`, JSON.stringify({ documentId: document.id, update: encode(Y.encodeStateAsUpdate(ydoc)) }));
+          } finally { ydoc.destroy(); }
+        }
+      }
+      await afterReconcile?.();
+      return result;
+    });
+  }
+
   async discardPaths(projectId: string, paths: string[]): Promise<void> {
     await this.serialized(projectId, async () => {
       const documents = this.database.snapshot().collaborationDocuments.filter(item => item.projectId === projectId && item.status === "active" && paths.some(path => item.path === path || item.path.startsWith(`${path}/`)));
@@ -213,15 +282,8 @@ export class CollaborationService {
   private shouldCompact(documentId: string) { const updates = this.database.snapshot().yDocumentUpdates.filter((item) => item.documentId === documentId); return updates.length >= COMPACT_AFTER_UPDATES || updates.reduce((sum, item) => sum + item.bytes, 0) >= COMPACT_AFTER_BYTES; }
   private async compact(documentId: string, ydoc: Y.Doc) { const sequence = this.nextSequence(documentId); const update = encode(Y.encodeStateAsUpdate(ydoc)); const createdAt = new Date().toISOString(); await this.database.mutate((current) => { current.yDocumentSnapshots.push({ documentId, sequence, update, createdAt }); current.yDocumentUpdates = current.yDocumentUpdates.filter((item) => item.documentId !== documentId); }); await this.persistence?.saveSnapshot({ documentId, sequence, update, createdAt }); }
   private async flush(projectId: string, path: string, documentId: string, ydoc: Y.Doc) { const current = this.database.snapshot().collaborationDocuments.find((item) => item.id === documentId); if (!current) throw new ApiError(404, "collaboration_document_not_found", "Collaboration document not found"); const content = ydoc.getText("content").toString(); const file = await this.workspaces.readTextFile(projectId, path); if (file.content === content) return { fileVersion: file.file.version }; const saved = await this.workspaces.saveTextFile(projectId, path, { content, baseVersion: current.fileVersion }); await this.database.mutate((state) => { const stored = state.collaborationDocuments.find((item) => item.id === documentId); if (stored) { stored.fileVersion = saved.file.version; stored.updatedAt = new Date().toISOString(); } }); return { fileVersion: saved.file.version }; }
-  private async serialized<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.projectLocks.get(projectId) ?? Promise.resolve();
-    let release!: () => void;
-    const next = new Promise<void>((resolve) => { release = resolve; });
-    const queued = previous.then(() => next);
-    this.projectLocks.set(projectId, queued);
-    await previous;
-    try { return await operation(); } finally { release(); if (this.projectLocks.get(projectId) === queued) this.projectLocks.delete(projectId); }
-  }
+  withProjectLock<T>(projectId: string, operation: () => Promise<T>): Promise<T> { return this.projectQueue.run(projectId, operation); }
+  private serialized<T>(projectId: string, operation: () => Promise<T>): Promise<T> { return this.withProjectLock(projectId, operation); }
   private scheduleLiveFlush(projectId: string) {
     const previous = this.liveFlushTimers.get(projectId);
     if (previous) clearTimeout(previous);

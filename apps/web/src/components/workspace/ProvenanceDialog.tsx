@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { statusLabel } from "../../lib/labels";
 import { useEffect, useState } from "react";
 import type { AgentRun, ChangeSet } from "@fastwrite/shared";
@@ -14,13 +15,13 @@ export function ProvenanceDialog({ open, projectId, onClose }: { open: boolean; 
     if (!open) return;
     const controller = new AbortController();
     setError("");
-    void api.projects.provenance(projectId, controller.signal).then((value) => setDossier(value as ProvenanceDossier)).catch((failure) => { if ((failure as DOMException).name !== "AbortError") setError(failure instanceof Error ? failure.message : "无法加载溯源记录"); });
+    void api.projects.provenance(projectId, controller.signal).then((value) => setDossier(value as ProvenanceDossier)).catch((failure) => { if ((failure as DOMException).name !== "AbortError") setError(userFacingError(failure, "无法加载溯源记录")); });
     return () => controller.abort();
   }, [open, projectId]);
   const download = async () => {
     setExporting(true); setError("");
     try { await downloadFile(`/api/projects/${encodeURIComponent(projectId)}/provenance/export`, `fastwrite-provenance-${projectId}.json`); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "无法导出溯源记录"); }
+    catch (failure) { setError(userFacingError(failure, "无法导出溯源记录")); }
     finally { setExporting(false); }
   };
   return <Dialog open={open} width="wide" title="AI 写作溯源档案" description="可审计的运行记录、更改审核、修改块决定及使用声明草稿" onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>关闭</Button><Button variant="secondary" loading={exporting} onClick={() => void download()}>导出档案</Button></>}>

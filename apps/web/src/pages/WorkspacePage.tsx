@@ -1,11 +1,14 @@
+import { BrandMark } from "../components/BrandMark";
+import { userFacingError } from "../lib/notifications";
 import { statusLabel, roleLabel } from "../lib/labels";
 import type { ReferenceSettings, ReferencePaper } from "@fastwrite/shared";
 import type { ReferenceWriteAction } from "../components/workspace/ReferenceStylePanel";
 import { useFileDropTarget } from "../lib/uploads/use-file-drop-target";
 import { readDroppedFiles, type DroppedFile } from "../lib/uploads/drop-files";
 import { ReferenceStylePanel } from "../components/workspace/ReferenceStylePanel";
+import { SkillDetailPanel } from "../components/workspace/SkillDetailPanel";
 import { SkillPanel } from "../components/workspace/SkillPanel";
-import { useTaskSkills } from "../lib/useTaskSkills";
+import { useTaskSkills, taskSkillLabel } from "../lib/useTaskSkills";
 import { projectDocumentRegistry } from "../lib/editor/documentRegistry";
 import { QuickOpenDialog } from "../components/workbench/QuickOpenDialog";
 import { EditorTabs, diffRequestKey, type ComparisonTab } from "../components/workbench/EditorTabs";
@@ -34,15 +37,17 @@ import type {
   EvidenceCockpit,
 } from "@fastwrite/shared";
 import { api, ApiClientError } from "../api/client";
-import { Button, Dialog, Field, Icon, IconButton, Link, Select, TabBar, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
+import { Button, Checkbox, Dialog, Field, Icon, IconButton, Link, Select, TabBar, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { FileTree } from "../components/workspace/FileTree";
 import { AddFileDialog } from "../components/workspace/AddFileDialog";
 import { OutlineTree } from "../components/workspace/OutlineTree";
 import type { CompileStateReport } from "../components/workspace/PdfPane";
 import { ProjectSettingsEditor } from "../components/workspace/ProjectSettingsEditor";
 import { RenameFileDialog } from "../components/workspace/RenameFileDialog";
+import { CollaborationPanel } from "../components/workspace/CollaborationPanel";
+import { useProjectCollaboration } from "../lib/useProjectCollaboration";
 import { CollaborationButton } from "../components/workspace/CollaborationButton";
-import type { SourceEditorHandle } from "../components/workspace/SourceEditor";
+import type { SourceEditorHandle, WritingMode } from "../components/workspace/SourceEditor";
 import { AiWorkspace } from "../components/workspace/AiWorkspace";
 import { GithubSyncDialog } from "../components/workspace/GithubSyncDialog";
 import { ComplianceDialog } from "../components/workspace/ComplianceDialog";
@@ -103,9 +108,12 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [dirtyFiles, setDirtyFiles] = useState<Record<string, boolean>>({});
   const [tabError, setTabError] = useState("");
   const rootDrop = useFileDropTarget((transfer) => receiveDrop(transfer, ""));
-  const [sidebarView, setSidebarView] = useStoredString(`fastwrite.workbench-layout:${projectId}:sidebar-view`, "files", ["files", "git", "evidence", "outline", "reference-style", "skills"] as const);
+  const [sidebarView, setSidebarView] = useStoredString(`fastwrite.workbench-layout:${projectId}:sidebar-view`, "files", ["files", "git", "evidence", "outline", "reference-style", "skills", "collaboration"] as const);
   const [skillRevision, setSkillRevision] = useState(0);
   const taskSkills = useTaskSkills(projectId, skillRevision);
+  const [skillTabs, setSkillTabs] = useState<Array<{ id: string; label: string }>>([]);
+  const [activeSkill, setActiveSkill] = useState<string | null>(null);
+  useEffect(() => { setSkillTabs([]); setActiveSkill(null); }, [projectId]);
   const [skillTaskRequest, setSkillTaskRequest] = useState(0);
   const [historyDiff, setHistoryDiff] = useState<DiffRequest | null>(null);
   const [comparisonTabs, setComparisonTabs] = useState<ComparisonTab[]>([]);
@@ -141,6 +149,10 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     path: "",
     line: 1,
   });
+  const collaboration = useProjectCollaboration(projectId, registry, selectedPath, cursorLocation);
+  const [writingMode, setWritingMode] = useState<WritingMode | "auto">("auto");
+  const [editingMode, setEditingMode] = useState<WritingMode>("viewing");
+  const [activeCommentId, setActiveCommentId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [offlineNotice, setOfflineNotice] = useState("");
@@ -149,7 +161,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     254,
   );
   const [pdfWidth, setPdfWidth] = useStoredNumber(`fastwrite.workbench-layout:${projectId}:pdf-width`, 440);
-  const [aiHeight, setAiHeight] = useStoredNumber(`fastwrite.workbench-layout:${projectId}:bottom-height`, 322);
+  const [aiHeight, setAiHeight] = useStoredNumber(`fastwrite.workbench-layout:${projectId}:bottom-height`, 280);
   const [outlineHeight, setOutlineHeight] = useStoredNumber(
     `fastwrite.workbench-layout:${projectId}:outline-height`,
     250,
@@ -158,10 +170,15 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     `fastwrite.workbench-layout:${projectId}:outline-collapsed`,
     false,
   );
-  const [sidebarBeforeCollapse, setSidebarBeforeCollapse] = useState(254);
+  const [sidebarBeforeCollapse, setSidebarBeforeCollapse] = useStoredNumber(`fastwrite.workbench-layout:${projectId}:sidebar-expanded-width`, sidebarWidth || 254);
   useEffect(() => {
     if (sidebarWidth > 0) setSidebarBeforeCollapse(sidebarWidth);
   }, [sidebarWidth]);
+  useEffect(() => {
+    const threadId = new URLSearchParams(window.location.search).get("discussion");
+    if (!threadId || !/^thread_[a-zA-Z0-9_-]+$/.test(threadId)) return;
+    setActiveCommentId(threadId); setSidebarView("collaboration"); if (sidebarWidth === 0) setSidebarWidth(sidebarBeforeCollapse);
+  }, [projectId]);
   const [pdfBeforeCollapse, setPdfBeforeCollapse] = useState(440);
   const [resizing, setResizing] = useState<
     "sidebar" | "pdf" | "ai" | "outline" | null
@@ -179,7 +196,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [addFileOpen, setAddFileOpen] = useState(false);
   const [droppedFiles, setDroppedFiles] = useState<DroppedFile[]>([]);
   const [dropDirectory, setDropDirectory] = useState("");
-  const receiveDrop = (transfer: DataTransfer, directory: string) => { void readDroppedFiles(transfer).then(files => { setDroppedFiles(files); setDropDirectory(directory); setAddFileOpen(true); }).catch(error => window.alert(error instanceof Error ? error.message : String(error))); };
+  const receiveDrop = (transfer: DataTransfer, directory: string) => { if (!collaboration.access?.canWrite) return; void readDroppedFiles(transfer).then(files => { setDroppedFiles(files); setDropDirectory(directory); setAddFileOpen(true); }).catch(error => window.alert(userFacingError(error, String(error)))); };
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -206,7 +223,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   >("idle");
   const [shareOpen, setShareOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [commentsOpen, setCommentsOpen] = useState(false);
   const handleCompileState = useCallback(
     (report: CompileStateReport) =>
       setCompileState((current) =>
@@ -245,7 +261,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         settingsPanelRef.current?.querySelector<HTMLButtonElement>('button[data-save-command]:not(:disabled)')?.click();
         return;
       }
-      void prepareCompile().catch(failure => setTabError(failure instanceof Error ? failure.message : "保存失败，已保留本地文本"));
+      void prepareCompile().catch(failure => setTabError(userFacingError(failure, "保存失败，已保留本地文本")));
     };
     window.addEventListener(FASTWRITE_SAVE_EVENT, save);
     return () => window.removeEventListener(FASTWRITE_SAVE_EVENT, save);
@@ -283,6 +299,18 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     },
     [commitTree, projectId],
   );
+
+  useEffect(() => {
+    const version = collaboration.access?.projectVersion;
+    if (!project || !version || version <= project.version) return;
+    const controller = new AbortController();
+    void refreshWorkspace(controller.signal, selectedPath ?? undefined).then(nextProject => {
+      if (controller.signal.aborted || !selectedPath || findNode(treeRef.current, selectedPath)) return;
+      const entry = registry.get(selectedPath);
+      if (!entry || !registry.dirtyEntry(entry)) { setSelectedPath(nextProject.mainDocument); setSelection(null); setTargetSelection(null); }
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [collaboration.access?.projectVersion, project?.version, refreshWorkspace, registry, selectedPath]);
 
   useEffect(() => {
     registry.onSaved = saved => refreshWorkspace(undefined, saved.file.path).then(() => undefined);
@@ -356,7 +384,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           if (cachedMain) setFileDocument(cachedMain);
           setError("");
           setOfflineNotice("已加载离线工作区快照，缓存文件仍可使用。联网后请重新加载以刷新项目。");
-        } else setError(loadError instanceof Error ? loadError.message : "无法打开项目");
+        } else setError(userFacingError(loadError, "无法打开项目"));
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
@@ -395,7 +423,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         const cachedFile = canUseOfflineCache(readError) ? await loadWorkspaceFile<FileContentResponse>(projectId, selectedPath) : null;
         if (controller.signal.aborted) return;
         if (cachedFile) setFileDocument(cachedFile);
-        else setError(readError instanceof Error ? readError.message : "无法打开文件");
+        else setError(userFacingError(readError, "无法打开文件"));
       });
     return () => controller.abort();
   }, [projectId, selectedPath, registry]);
@@ -447,6 +475,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   ]);
 
   const closeHistoryDiff = useCallback(() => {
+    setActiveSkill(null);
     setSettingsActive(false);
     setHistoryDiff(null);
     if (diffPdfWidth.current !== null) { setPdfWidth(diffPdfWidth.current); diffPdfWidth.current = null; }
@@ -489,9 +518,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       } catch (navigationError) {
         if (!navigationRef.current.isCurrent(request)) return;
         setError(
-          navigationError instanceof Error
-            ? navigationError.message
-            : "无法打开源文件位置",
+          userFacingError(navigationError, "无法打开源文件位置"),
         );
       }
     },
@@ -514,7 +541,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
       commitTree(nextTree);
       const nextSelection = makeSelection(resolved.anchor.path, opened, resolved.anchor.startOffset, resolved.anchor.endOffset);
       closeHistoryDiff(); navigationRef.current.cancel(); setSelectedPath(resolved.anchor.path); setFileDocument(opened); setTargetLine(null); setSelection(nextSelection); setTargetSelection(nextSelection); setCursorLocation({ path: resolved.anchor.path, line: nextSelection.startLine, column: 1 });
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "无法核实论断位置"); }
+    } catch (failure) { setError(userFacingError(failure, "无法核实论断位置")); }
   };
   const selectEvidenceClaim = async (claim: PaperClaim) => {
     setSidebarView("evidence");
@@ -533,6 +560,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   }), [claimPathFilter, claimStatusFilter, claims]);
 
   const openSettings = async () => {
+    setActiveSkill(null);
     setSettingsActive(true);
     if (settingsOpen) return;
     setSettingsTree(tree);
@@ -540,7 +568,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     try {
       setSettingsTree(await api.projects.tree(projectId));
     } catch (settingsError) {
-      setTabError(settingsError instanceof Error ? settingsError.message : "无法加载设置所需的全部项目文件");
+      setTabError(userFacingError(settingsError, "无法加载设置所需的全部项目文件"));
     }
   };
 
@@ -639,6 +667,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     setSidebarView(view);
   };
   const openHistoryDiff = (request: DiffRequest) => {
+    setActiveSkill(null);
     setSettingsActive(false);
     const key = diffRequestKey(request);
     setComparisonTabs(tabs => tabs.some(tab => tab.key === key) ? tabs : [...tabs, { key, request }]);
@@ -656,7 +685,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         if (!returnToSource && remaining.length) openHistoryDiff(remaining.at(-1)!.request);
         else closeHistoryDiff();
       }
-    } catch (failure) { setTabError(failure instanceof Error ? failure.message : "无法保存对比结果，已保留本地文本"); }
+    } catch (failure) { setTabError(userFacingError(failure, "无法保存对比结果，已保留本地文本")); }
   };
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -698,7 +727,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             className="brand brand--workspace"
             href="/projects"
           >
-            <span className="brand__mark">F</span>
+            <BrandMark />
             <span>FastWrite</span>
           </Link>
           <span className="topbar-divider" />
@@ -708,7 +737,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           </div>
         </div>
         <div className="workspace-topbar__right">
-          <CollaborationButton key={projectId} registry={registry} path={!settingsActive && !historyDiff ? fileDocument?.file.path ?? null : null} />
+          <CollaborationButton key={projectId} registry={registry} path={!activeSkill && !settingsActive && !historyDiff ? fileDocument?.file.path ?? null : null} />
           <span
             className="skill-badge"
             title={project.publicationTarget?.venueId ?? project.skill.name}
@@ -727,30 +756,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             投稿检查
           </Button>
           <Button size="small" variant="secondary" icon={<Icon name={icons.history} />} onClick={() => setProvenanceOpen(true)}>溯源记录</Button>
-          <Button
-            size="small"
-            variant="secondary"
-            icon={<Icon name={icons.comment} />}
-            onClick={() => setCommentsOpen(true)}
-          >
-            评论
-          </Button>
-          <Button
-            size="small"
-            variant="secondary"
-            icon={<Icon name={icons.personAdd} />}
-            onClick={() => setInviteOpen(true)}
-          >
-            邀请
-          </Button>
-          <Button
-            size="small"
-            variant="secondary"
-            icon={<Icon name={icons.share} />}
-            onClick={() => setShareOpen(true)}
-          >
-            分享
-          </Button>
+          <Button size="small" variant="secondary" icon={<Icon name={icons.comment} />} aria-pressed={sidebarView === "collaboration" && sidebarWidth > 0} onClick={() => { setSidebarView("collaboration"); if (sidebarWidth === 0) setSidebarWidth(sidebarBeforeCollapse); }}>协作{collaboration.openCount ? ` · ${collaboration.openCount}` : ""}</Button>
           {project.source.type === "github" ? (
             <Button
               className="workspace-sync-button"
@@ -811,19 +817,19 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                     }}
                   />
                   <IconButton
-                    label="新建文件"
+                    disabled={!collaboration.access?.canWrite} label="新建文件"
                     icon={<Icon name={icons.newFile} />}
                     onClick={() => setNewFileOpen(true)}
                   />
                   <IconButton
-                    label="添加外部文件"
+                    disabled={!collaboration.access?.canWrite} label="添加外部文件"
                     icon={<Icon name={icons.cloudUpload} />}
                     onClick={() => { setDroppedFiles([]); setDropDirectory(""); setAddFileOpen(true); }}
                   />
                   <IconButton
                     label="重命名所选文件"
                     icon={<Icon name={icons.edit} />}
-                    disabled={selectedNode?.type !== "file"}
+                    disabled={!collaboration.access?.canWrite || selectedNode?.type !== "file"}
                     onClick={() => setRenameOpen(true)}
                   />
                   <IconButton
@@ -831,7 +837,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                     icon={<Icon name={icons.trash} />}
                     variant="danger"
                     disabled={
-                      selectedNode?.type !== "file" ||
+                      !collaboration.access?.canWrite || selectedNode?.type !== "file" ||
                       selectedPath === project.mainDocument
                     }
                     onClick={() => {
@@ -856,6 +862,17 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 onExpand={expandDirectory}
               />
             </section>
+            <section id="sidebar-collaboration" hidden={sidebarView !== "collaboration"} className="sidebar-section" style={{ flex: 1, minHeight: 0 }}>
+              <CollaborationPanel writingMode={editingMode} onWritingModeChange={setWritingMode} key={projectId} projectId={projectId} registry={registry} collaboration={collaboration} selection={selection} selectedPath={selectedPath} activeCommentId={activeCommentId} onInvite={() => setInviteOpen(true)} onShare={() => setShareOpen(true)} onSelection={setActiveCommentId} onCompare={(oid, path) => openHistoryDiff({ baseRef: oid, targetRef: "working", path })} onRestored={async () => { for (const entry of registry.entries.values()) { try { if (entry.collaboration) await entry.collaboration.refresh(); } catch { /* Deleted files are handled by the workspace refresh. */ } } await refreshAfterSync(); collaboration.refresh(); }} onNavigate={async (path, from, to, line) => {
+                await navigateToPath(path, line);
+                if (from !== undefined) {
+                  const entry = registry.get(path);
+                  if (entry?.collaboration) await entry.collaboration.refresh();
+                  const opened = registry.document(path) ?? await api.projects.readFile(projectId, path);
+                  setTargetSelection(makeSelection(path, opened, from, to ?? from));
+                }
+              }} />
+            </section>
             <section id="sidebar-reference-style" hidden={sidebarView !== "reference-style"} className="sidebar-section">
               <header className="panel-heading">
                 <div>
@@ -868,7 +885,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               </div>
             </section>
             <section id="sidebar-skills" hidden={sidebarView !== "skills"} className="sidebar-section">
-              <SkillPanel skills={taskSkills.skills} selectedIds={taskSkills.selectedIds} loading={taskSkills.loading} error={taskSkills.error} hasSection={Boolean(sectionSelection)} onChange={taskSkills.setSelectedIds} onReload={() => setSkillRevision(value => value + 1)} onUse={() => { setSkillTaskRequest(value => value + 1); setBottomPanelTab("ai"); setPanelCollapsed(false); setAiHeight(Math.max(aiHeight, 380)); }} />
+              <SkillPanel onDetails={skill => { closeHistoryDiff(); setSkillTabs(tabs => tabs.some(tab => tab.id === skill.id) ? tabs : [...tabs, { id: skill.id, label: skill.id }]); setActiveSkill(skill.id); }} skills={taskSkills.skills} selectedIds={taskSkills.selectedIds} loading={taskSkills.loading} error={taskSkills.error} hasSection={Boolean(sectionSelection)} onChange={taskSkills.setSelectedIds} onReload={() => setSkillRevision(value => value + 1)} onUse={() => { setSkillTaskRequest(value => value + 1); setBottomPanelTab("ai"); setPanelCollapsed(false); setAiHeight(Math.max(aiHeight, 380)); }} />
             </section>
             <section id="sidebar-outline" hidden={sidebarView !== "outline"} className="sidebar-section workbench-outline">
               <header className="panel-heading panel-heading--plain">
@@ -1022,7 +1039,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         /> : null}
 
         <main className="workspace-center">
-          <EditorTabs settings={settingsOpen ? { active: settingsActive, select: () => setSettingsActive(true), close: () => { setSettingsOpen(false); setSettingsActive(false); } } : undefined} comparisons={comparisonTabs} activeComparison={!settingsActive && historyDiff ? diffRequestKey(historyDiff) : null} onSelectComparison={openHistoryDiff} onCloseComparison={key => { void closeComparisonTab(key); }} tabs={sourceTabs} activePath={settingsActive || historyDiff ? null : selectedPath} dirty={dirtyFiles} onSelect={path => { closeHistoryDiff(); navigationRef.current.cancel(); setTargetLine(null); setTargetSelection(null); setSelectedPath(path); }} onPin={path => setSourceTabs(tabs => pinSourceTab(tabs, path))} onClose={async path => {
+          <EditorTabs documents={skillTabs.map(tab => ({ id: `skill-${tab.id}`, label: `Skill · ${taskSkillLabel(tab.id)}`, active: activeSkill === tab.id, select: () => { closeHistoryDiff(); setActiveSkill(tab.id); }, close: () => { setSkillTabs(tabs => tabs.filter(item => item.id !== tab.id)); if (activeSkill === tab.id) setActiveSkill(null); } }))} settings={settingsOpen ? { active: settingsActive, select: () => { setActiveSkill(null); setSettingsActive(true); }, close: () => { setSettingsOpen(false); setSettingsActive(false); } } : undefined} comparisons={comparisonTabs} activeComparison={!activeSkill && !settingsActive && historyDiff ? diffRequestKey(historyDiff) : null} onSelectComparison={openHistoryDiff} onCloseComparison={key => { void closeComparisonTab(key); }} tabs={sourceTabs} activePath={activeSkill || settingsActive || historyDiff ? null : selectedPath} dirty={dirtyFiles} onSelect={path => { closeHistoryDiff(); navigationRef.current.cancel(); setTargetLine(null); setTargetSelection(null); setSelectedPath(path); }} onPin={path => setSourceTabs(tabs => pinSourceTab(tabs, path))} onClose={async path => {
             setTabError("");
             try {
               await editorRef.current?.flush(); await registry.flush();
@@ -1030,7 +1047,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               const remaining = tabsStateRef.current.sourceTabs.filter(tab => tab.path !== path);
               setSourceTabs(remaining);
               if (path === tabsStateRef.current.selectedPath) setSelectedPath(remaining.at(-1)?.path ?? null);
-            } catch (failure) { setTabError(failure instanceof Error ? failure.message : "无法保存此标签页，已保留本地文本"); }
+            } catch (failure) { setTabError(userFacingError(failure, "无法保存此标签页，已保留本地文本")); }
           }} />
           {tabError ? <p role="alert">{tabError}</p> : null}
           <section className="editor-region" id="source-editor-area">
@@ -1040,8 +1057,9 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 await refreshWorkspace(undefined, selectedPath ?? updated.mainDocument);
               }} />
             </div> : null}
-            {comparisonTabs.map(tab => <div className="diff-tab-panel" id={`comparison-${tab.key}`} key={tab.key} hidden={settingsActive || !historyDiff || diffRequestKey(historyDiff) !== tab.key}><Suspense fallback={<p>正在加载对比…</p>}><WorkspaceDiffEditor registry={registry} projectId={projectId} projectVersion={project.version} dirty={buffersDirty} request={tab.request} onClose={() => { void closeComparisonTab(tab.key); }} onSaveCheckpoint={async () => { await editorRef.current?.flush(); await registry.flush(); await api.projects.checkpoint(projectId); return (await api.projects.get(projectId)).version; }} onRestored={async path => { await refreshWorkspace(undefined, path); setSelectedPath(path); setFileDocument(await api.projects.readFile(projectId, path)); await closeComparisonTab(tab.key, true); }} /></Suspense></div>)}
-            <div className="source-editor-container" hidden={settingsActive || historyDiff !== null}>
+            {comparisonTabs.map(tab => <div className="diff-tab-panel" id={`comparison-${tab.key}`} key={tab.key} hidden={!!activeSkill || settingsActive || !historyDiff || diffRequestKey(historyDiff) !== tab.key}><Suspense fallback={<p>正在加载对比…</p>}><WorkspaceDiffEditor allowEdit={editingMode === "editing"} registry={registry} projectId={projectId} projectVersion={project.version} dirty={buffersDirty} request={tab.request} onClose={() => { void closeComparisonTab(tab.key); }} onSaveCheckpoint={async () => { await editorRef.current?.flush(); await registry.flush(); await api.projects.checkpoint(projectId); return (await api.projects.get(projectId)).version; }} onRestored={async path => { await refreshWorkspace(undefined, path); setSelectedPath(path); setFileDocument(await api.projects.readFile(projectId, path)); await closeComparisonTab(tab.key, true); }} /></Suspense></div>)}
+            {skillTabs.map(tab => <div id={`skill-${tab.id}`} key={tab.id} className="skill-tab-panel" role="tabpanel" aria-label={`Skill · ${taskSkillLabel(tab.id)}`} hidden={activeSkill !== tab.id}><SkillDetailPanel id={tab.id} /></div>)}
+            <div className="source-editor-container" hidden={!!activeSkill || settingsActive || historyDiff !== null}>
             {fileDocument ? (
               <Suspense
                 fallback={
@@ -1051,6 +1069,12 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 <SourceEditor
                   ref={editorRef}
                   completionEnabled={completionEnabled}
+                  comments={collaboration.threads}
+                  onReviewSaved={collaboration.refresh}
+                  writingMode={writingMode}
+                  onModeChange={setEditingMode}
+                  activeCommentId={activeCommentId}
+                  onCommentClick={id => { setActiveCommentId(id); setSidebarView("collaboration"); if (sidebarWidth === 0) setSidebarWidth(sidebarBeforeCollapse); }}
                   registry={registry}
                   projectId={projectId}
                   references={referenceSettings?.selections ?? []}
@@ -1239,6 +1263,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
               }
             >
               <PdfPane
+                canCompile={collaboration.access?.canCompile ?? false}
                 projectId={projectId}
                 projectVersion={project.version}
                 buffersDirty={buffersDirty}
@@ -1337,22 +1362,10 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         onClose={() => setShareOpen(false)}
       />
       <InviteDialog
+        onTransferred={updated => { setProject(updated); collaboration.refresh(); }}
         open={inviteOpen}
         projectId={projectId}
         onClose={() => setInviteOpen(false)}
-      />
-      <CommentsDialog
-        open={commentsOpen}
-        projectId={projectId}
-        selection={selection}
-        selectedPath={selectedPath}
-        onClose={() => setCommentsOpen(false)}
-        onNavigate={(path, from) => {
-          setSelectedPath(path);
-          setTargetLine(null);
-          if (fileDocument?.file.path === path)
-            setTargetSelection(makeSelection(path, fileDocument, from, from));
-        }}
       />
       <Dialog
         open={deleteOpen}
@@ -1378,9 +1391,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                   await refreshWorkspace();
                 } catch (deleteFailure) {
                   setDeleteError(
-                    deleteFailure instanceof Error
-                      ? deleteFailure.message
-                      : "无法删除文件",
+                    userFacingError(deleteFailure, "无法删除文件"),
                   );
                 }
               }}
@@ -1417,9 +1428,15 @@ function ShareDialog({
       id: string;
       permission: "read" | "comment";
       revokedAt?: string;
+      label?: string;
+      expiresAt?: string;
       createdAt: string;
     }>
   >([]);
+  const [label, setLabel] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [createdUrl, setCreatedUrl] = useState("");
   const [error, setError] = useState("");
   const load = useCallback(
@@ -1429,7 +1446,7 @@ function ShareDialog({
         .then(setLinks)
         .catch((e) =>
           setError(
-            e instanceof Error ? e.message : "无法加载分享链接",
+            userFacingError(e, "无法加载分享链接"),
           ),
         ),
     [projectId],
@@ -1438,13 +1455,15 @@ function ShareDialog({
     if (open) void load();
   }, [load, open]);
   const create = async (permission: "read" | "comment") => {
+    if (busy) return;
+    setBusy(true); setError(""); setCopied(false);
     try {
-      const share = await api.projects.createShare(projectId, permission);
+      const share = await api.projects.createShare(projectId, permission, { ...(label.trim() ? { label: label.trim() } : {}), ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}) });
       setCreatedUrl(`${window.location.origin}/shared/${share.token}`);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "无法创建分享链接");
-    }
+      setError(userFacingError(e, "无法创建分享链接"));
+    } finally { setBusy(false); }
   };
   return (
     <Dialog
@@ -1459,17 +1478,20 @@ function ShareDialog({
       }
     >
       <div className="history-dialog">
+        <Field label="链接说明（可选）"><TextField aria-label="链接说明" value={label} onChange={setLabel} maxLength={120} placeholder="例如：外部合作者审阅" /></Field>
+        <Field label="失效时间（可选）"><TextField aria-label="分享链接失效时间" type="datetime-local" value={expiresAt} onChange={setExpiresAt} /></Field>
         <div>
-          <Button variant="secondary" onClick={() => void create("read")}>
+          <Button variant="secondary" disabled={busy} onClick={() => void create("read")}>
             创建只读链接
           </Button>{" "}
-          <Button variant="secondary" onClick={() => void create("comment")}>
+          <Button variant="secondary" disabled={busy} onClick={() => void create("comment")}>
             创建审稿链接
           </Button>
         </div>
         {createdUrl ? (
           <Field label="新链接（仅显示一次）">
             <TextField readonly value={createdUrl} />
+            <Button size="small" onClick={() => { void navigator.clipboard.writeText(createdUrl).then(() => setCopied(true)).catch(() => setError("请在链接文本框中手动复制链接")); }}>{copied ? "已复制" : "复制链接"}</Button>
           </Field>
         ) : null}
         {error ? (
@@ -1479,9 +1501,9 @@ function ShareDialog({
         ) : null}
         {links.map((link) => (
           <p className="dialog-copy" key={link.id}>
-            {statusLabel(link.permission)} · {new Date(link.createdAt).toLocaleString("zh-CN")} ·{" "}
+            {link.label ? `${link.label} · ` : ""}{statusLabel(link.permission)}{link.expiresAt ? ` · ${new Date(link.expiresAt).getTime() <= Date.now() ? "已过期" : `有效至 ${new Date(link.expiresAt).toLocaleString("zh-CN")}`}` : ""} · {new Date(link.createdAt).toLocaleString("zh-CN")} ·{" "}
             {link.revokedAt ? (
-              "revoked"
+              "已撤销"
             ) : (
               <Button
                 variant="ghost"
@@ -1504,11 +1526,15 @@ function InviteDialog({
   open,
   projectId,
   onClose,
+  onTransferred,
 }: {
   open: boolean;
   projectId: string;
   onClose: () => void;
+  onTransferred: (project: PaperProject) => void;
 }) {
+  const [ownerTarget, setOwnerTarget] = useState("");
+  const [confirmOwner, setConfirmOwner] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<
     "maintainer" | "editor" | "commenter" | "viewer"
@@ -1564,9 +1590,7 @@ function InviteDialog({
       setError("");
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法加载邀请",
+        userFacingError(failure, "无法加载邀请"),
       );
     }
   }, [projectId]);
@@ -1601,9 +1625,7 @@ function InviteDialog({
       await load();
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法创建邀请",
+        userFacingError(failure, "无法创建邀请"),
       );
     } finally {
       setBusy(false);
@@ -1623,9 +1645,7 @@ function InviteDialog({
       await load();
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法重新发送邀请",
+        userFacingError(failure, "无法重新发送邀请"),
       );
     } finally {
       setBusy(false);
@@ -1639,9 +1659,7 @@ function InviteDialog({
       await load();
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法撤销邀请",
+        userFacingError(failure, "无法撤销邀请"),
       );
     } finally {
       setBusy(false);
@@ -1658,9 +1676,7 @@ function InviteDialog({
       await load();
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法更新成员角色",
+        userFacingError(failure, "无法更新成员角色"),
       );
     } finally {
       setBusy(false);
@@ -1674,7 +1690,7 @@ function InviteDialog({
       await load();
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "无法移除成员",
+        userFacingError(failure, "无法移除成员"),
       );
     } finally {
       setBusy(false);
@@ -1688,9 +1704,7 @@ function InviteDialog({
       await load();
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法处理访问申请",
+        userFacingError(failure, "无法处理访问申请"),
       );
     } finally {
       setBusy(false);
@@ -1736,7 +1750,7 @@ function InviteDialog({
             options={[
               { value: "maintainer", label: "维护者" },
               { value: "editor", label: "编辑者" },
-              { value: "commenter", label: "评论者" },
+              { value: "commenter", label: "审阅者" },
               { value: "viewer", label: "查看者" }
             ]}
           />
@@ -1777,7 +1791,7 @@ function InviteDialog({
             <p className="dialog-copy" key={member.userId}>
               {member.user.displayName} ({member.user.emailNormalized}) ·{" "}
               {member.role === "owner" || !canManageMembers ? (
-                member.role
+                roleLabel(member.role)
               ) : (
                 <>
                   <Select
@@ -1794,7 +1808,7 @@ function InviteDialog({
                     options={[
                       { value: "maintainer", label: "维护者" },
                       { value: "editor", label: "编辑者" },
-                      { value: "commenter", label: "评论者" },
+                      { value: "commenter", label: "审阅者" },
                       { value: "viewer", label: "查看者" }
                     ]}
                   />{" "}
@@ -1847,16 +1861,23 @@ function InviteDialog({
               ) : null}
             </>
           ) : null}
+          {canManageMembers ? <section className="history-dialog">
+            <h3>转移所有权</h3>
+            <Field label="新所有者"><Select aria-label="新所有者" value={ownerTarget} disabled={busy} onChange={value => { setOwnerTarget(value); setConfirmOwner(false); }} options={[{ value: "", label: "选择已加入项目的协作者" }, ...members.filter(member => member.role !== "owner").map(member => ({ value: member.userId, label: `${member.user.displayName} (${member.user.emailNormalized})` }))]} /></Field>
+            <p className="dialog-copy">转移后，新所有者管理成员与分享；原所有者保留编辑权限。</p>
+            <Checkbox checked={confirmOwner} onChange={setConfirmOwner} disabled={!ownerTarget || busy}>确认将管理权限移交给所选协作者</Checkbox>
+            <Button variant="danger" size="small" disabled={busy || !ownerTarget || !confirmOwner} onClick={() => { setBusy(true); setError(""); void api.projects.transferOwnership(projectId, ownerTarget).then(updated => { onTransferred(updated); onClose(); }).catch(failure => setError(userFacingError(failure, "无法转移所有权"))).finally(() => setBusy(false)); }}>转移所有权</Button>
+          </section> : null}
           <h3>邀请</h3>
           {invitations.map((invitation) => (
             <p className="dialog-copy" key={invitation.id}>
               {invitation.emailNormalized} · {roleLabel(invitation.role)} ·{" "}
               {invitation.acceptedAt ? (
-                "accepted"
+                "已接受"
               ) : invitation.revokedAt ? (
-                "revoked"
+                "已撤销"
               ) : new Date(invitation.expiresAt) <= new Date() ? (
-                "expired"
+                "已过期"
               ) : (
                 <>
                   <span>
@@ -1887,278 +1908,6 @@ function InviteDialog({
             </p>
           ))}
         </div>
-      </div>
-    </Dialog>
-  );
-}
-
-type WorkspaceCommentThread = {
-  id: string;
-  path: string;
-  quote: string;
-  status: "open" | "resolved" | "orphaned";
-  anchorStatus: "attached" | "orphaned";
-  from?: number;
-  messages: Array<{
-    id: string;
-    authorUserId: string;
-    body: string;
-    mentionedUserIds?: string[];
-    createdAt: string;
-  }>;
-};
-function CommentsDialog({
-  open,
-  projectId,
-  selection,
-  selectedPath,
-  onClose,
-  onNavigate,
-}: {
-  open: boolean;
-  projectId: string;
-  selection: TextSelection | null;
-  selectedPath: string | null;
-  onClose: () => void;
-  onNavigate: (path: string, from: number) => void;
-}) {
-  const [threads, setThreads] = useState<WorkspaceCommentThread[]>([]);
-  const [body, setBody] = useState("");
-  const [replies, setReplies] = useState<Record<string, string>>({});
-  const [members, setMembers] = useState<
-    Array<{
-      userId: string;
-      user: { displayName: string; emailNormalized: string };
-    }>
-  >([]);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => {
-    try {
-      const [nextThreads, membership] = await Promise.all([
-        api.projects.comments(projectId),
-        api.projects.members(projectId),
-      ]);
-      setThreads(nextThreads);
-      setMembers(membership.members);
-      setError("");
-    } catch (failure) {
-      setError(
-        failure instanceof Error ? failure.message : "无法加载评论",
-      );
-    }
-  }, [projectId]);
-  useEffect(() => {
-    if (open) void load();
-  }, [load, open]);
-  const create = async () => {
-    if (!selection || !body.trim()) return;
-    setBusy(true);
-    try {
-      await api.projects.createComment(projectId, {
-        path: selection.path,
-        from: selection.from,
-        to: selection.to,
-        body: body.trim(),
-      });
-      setBody("");
-      await load();
-    } catch (failure) {
-      setError(
-        failure instanceof Error ? failure.message : "无法添加评论",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  const reply = async (threadId: string) => {
-    const text = replies[threadId]?.trim();
-    if (!text) return;
-    setBusy(true);
-    try {
-      await api.projects.replyComment(projectId, threadId, text);
-      setReplies((current) => ({ ...current, [threadId]: "" }));
-      await load();
-    } catch (failure) {
-      setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法回复评论",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Dialog
-      open={open}
-      title="评论"
-      description={
-        selection
-          ? `新评论位置： ${selection.path}`
-          : "在编辑器中选择文本以添加评论。"
-      }
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            关闭
-          </Button>
-          <Button
-            variant="primary"
-            icon={<Icon name={icons.comment} />}
-            loading={busy}
-            disabled={!selection || !body.trim()}
-            onClick={() => void create()}
-          >
-            添加评论
-          </Button>
-        </>
-      }
-    >
-      <div className="history-dialog">
-        {selection ? (
-          <>
-            <Field label="评论">
-              <TextArea
-                value={body}
-                onChange={setBody}
-                placeholder="添加审稿评论"
-                rows={3}
-              />
-            </Field>
-            <Field label="提及协作者">
-              <Select
-                aria-label="提及协作者"
-                value=""
-                placeholder="选择协作者"
-                onChange={(next) => {
-                  const member = members.find(
-                    (item) => item.userId === next,
-                  );
-                  if (member)
-                    setBody(
-                      (current) =>
-                        `${current}${current && !/\s$/.test(current) ? " " : ""}@[${member.user.displayName}](${member.userId}) `,
-                    );
-                }}
-                options={[
-                  { value: "", label: "选择协作者" },
-                  ...members.map((member) => ({
-                    value: member.userId,
-                    label: `${member.user.displayName} (${member.user.emailNormalized})`
-                  }))
-                ]}
-              />
-            </Field>
-          </>
-        ) : null}
-        {error ? (
-          <div className="form-error" role="alert">
-            {error}
-          </div>
-        ) : null}
-        {threads
-          .filter((thread) => !selectedPath || thread.path === selectedPath)
-          .map((thread) => (
-            <article className="comment-thread" key={thread.id}>
-              <header>
-                <Button
-                  variant="ghost"
-                  onClick={() =>
-                    thread.from !== undefined &&
-                    onNavigate(thread.path, thread.from)
-                  }
-                >
-                  {thread.path}
-                </Button>
-                <span>{statusLabel(thread.status)}</span>
-              </header>
-              <blockquote>
-                {thread.quote || "所选文本已被移除"}
-              </blockquote>
-              {thread.messages.map((message) => (
-                <p key={message.id}>{message.body}</p>
-              ))}
-              <div className="comment-thread-actions">
-                <Button
-                  size="small"
-                  variant="ghost"
-                  disabled={thread.status === "orphaned"}
-                  onClick={async () => {
-                    await api.projects.updateComment(
-                      projectId,
-                      thread.id,
-                      thread.status === "resolved" ? "open" : "resolved",
-                    );
-                    await load();
-                  }}
-                >
-                  {thread.status === "resolved" ? "重新打开" : "解决"}
-                </Button>
-                {thread.status === "orphaned" ? (
-                  <Button
-                    size="small"
-                    variant="secondary"
-                    disabled={!selection || busy}
-                    onClick={async () => {
-                      if (!selection) return;
-                      setBusy(true);
-                      try {
-                        await api.projects.reanchorComment(
-                          projectId,
-                          thread.id,
-                          {
-                            path: selection.path,
-                            from: selection.from,
-                            to: selection.to,
-                          },
-                        );
-                        await load();
-                      } catch (failure) {
-                        setError(
-                          failure instanceof Error
-                            ? failure.message
-                            : "无法重新关联评论",
-                        );
-                      } finally {
-                        setBusy(false);
-                      }
-                    }}
-                  >
-                    重新关联选区
-                  </Button>
-                ) : null}
-              </div>
-              {thread.status !== "orphaned" ? (
-                <div className="comment-reply">
-                  <TextArea
-                    aria-label="回复评论"
-                    value={replies[thread.id] ?? ""}
-                    onChange={(next) =>
-                      setReplies((current) => ({
-                        ...current,
-                        [thread.id]: next,
-                      }))
-                    }
-                    placeholder="回复"
-                    rows={2}
-                  />
-                  <Button
-                    size="small"
-                    variant="secondary"
-                    disabled={busy || !replies[thread.id]?.trim()}
-                    onClick={() => void reply(thread.id)}
-                  >
-                    回复
-                  </Button>
-                </div>
-              ) : null}
-            </article>
-          ))}
-        {!threads.length && !error ? (
-          <p className="sidebar-empty">此项目暂无评论。</p>
-        ) : null}
       </div>
     </Dialog>
   );
@@ -2247,7 +1996,7 @@ function AssetPreview({
       objectURL = URL.createObjectURL(blob);
       setPreview({ key: assetKey, url: objectURL });
     }).catch(error => {
-      if (!controller.signal.aborted) setPreview({ key: assetKey, error: error instanceof Error ? error.message : "无法加载图片" });
+      if (!controller.signal.aborted) setPreview({ key: assetKey, error: userFacingError(error, "无法加载图片") });
     });
     return () => {
       controller.abort();
@@ -2289,9 +2038,7 @@ function NewFileDialog({
       await onCreated(file.path);
     } catch (createError) {
       setError(
-        createError instanceof Error
-          ? createError.message
-          : "无法创建文件",
+        userFacingError(createError, "无法创建文件"),
       );
     } finally {
       setLoading(false);
@@ -2339,7 +2086,7 @@ function NewFileDialog({
 function WorkspaceLoading() {
   return (
     <div className="workspace-loading">
-      <span className="brand__mark">F</span>
+      <BrandMark />
       <div>
         <strong>正在打开论文</strong>
         <span>正在加载工作区…</span>

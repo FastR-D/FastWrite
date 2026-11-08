@@ -1,3 +1,4 @@
+import { userFacingError } from "../lib/notifications";
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { Button, Dialog, Field, TextField } from "./ui";
@@ -9,14 +10,14 @@ export function FastCASDialog({ open, onClose }: { open: boolean; onClose: () =>
   const [newPassword, setNewPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  useEffect(() => { if (open) { setPassword(""); setNewPassword(""); setError(""); void api.auth.fastcasStatus().then(setStatus).catch(error => setError(error.message)); void api.auth.providers().then(setProviders).catch(() => {}); } }, [open]);
+  useEffect(() => { if (open) { setPassword(""); setNewPassword(""); setError(""); void api.auth.fastcasStatus().then(setStatus).catch(error => setError(userFacingError(error))); void api.auth.providers().then(setProviders).catch(() => {}); } }, [open]);
   const current = status?.links.find(link => link.state !== "revoked");
   const proof = status?.proof;
   const canChange = proof?.method === "password" ? Boolean(password) : proof?.method === "external" && proof.recent;
   async function act(operation: () => Promise<unknown>) {
     setBusy(true); setError("");
     try { await operation(); setStatus(await api.auth.fastcasStatus()); setPassword(""); setNewPassword(""); }
-    catch (error) { setError(error instanceof Error ? error.message : "无法更新认证信息"); }
+    catch (error) { setError(userFacingError(error, "无法更新认证信息")); }
     finally { setBusy(false); }
   }
   return <Dialog open={open} onClose={onClose} title="FastCAS 认证" description="保留现有 FastWrite 账号和项目，FastCAS 提供额外的登录方式。">

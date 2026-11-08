@@ -1,4 +1,5 @@
 import { ReferencePaperService, readReferenceUpload } from "./references/service";
+import type { ReferenceDownloader } from "./references/importer";
 import type { ReferenceSelection } from "@fastwrite/shared";
 import { existsSync } from "node:fs";
 import { timingSafeEqual, createHash, randomBytes } from "node:crypto";
@@ -70,7 +71,9 @@ import { AuthService, requireAdminReadRole, requireRole, type AuthResult, type P
 import { AuthorizationService, type ProjectAction } from "./auth/authorization-service";
 import { TeamService } from "./teams/team-service";
 import { HarnessProfileService } from "./harness/profile-service";
+import { CollaborationHistoryService } from "./collaboration/collaboration-history-service";
 import { CollaborationService } from "./collaboration/collaboration-service";
+import { PresenceService } from "./collaboration/presence-service";
 import { CommentService } from "./comments/comment-service";
 import { CasIdentityProvider, OidcIdentityProvider, type IdentityProvider } from "./auth/identity-provider";
 import { FastCASService, type FastCASConfiguration } from "./auth/fastcas-service";
@@ -103,7 +106,7 @@ interface Services {
   agentTasks: AgentTaskService;
   completions: CompletionService;
   texPackages: TexPackageProvider;
-  latexCompiler: LatexCompileService;
+  latexCompiler: Pick<LatexCompileService, "compile">;
   skillRegistry: SkillRegistry;
   compliance: ComplianceService;
   latexTemplates: LatexTemplateService;
@@ -120,6 +123,7 @@ interface Services {
   teams: TeamService;
   harnessProfiles: HarnessProfileService;
   collaboration: CollaborationService;
+  collaborationHistory: CollaborationHistoryService;
   comments: CommentService;
   mailDelivery: MailDeliveryService;
   externalAdapters: ExternalResearchAdapters;
@@ -129,7 +133,7 @@ interface Services {
 }
 
 type Handler = (request: Request, params: Record<string, string>, url: URL) => Promise<Response> | Response;
-export type ApplicationFetch = ((request: Request) => Promise<Response>) & { dispatchMail(): Promise<void>; authorizeHarnessRun(request: Request, runId: string): void; onAuthChange?(listener: () => void): () => void };
+export type ApplicationFetch = ((request: Request) => Promise<Response>) & { dispatchMail(): Promise<void>; checkpointCollaborations(): Promise<void>; authorizeHarnessRun(request: Request, runId: string): void; onAuthChange?(listener: () => void): () => void };
 
 interface Route {
   method: string;
@@ -143,12 +147,14 @@ export interface ApplicationOptions {
   bootstrapAdmin?: { email: string; password: string };
   agentProvider?: AgentProvider;
   texPackages?: TexPackageProvider;
+  latexCompiler?: Pick<LatexCompileService, "compile">;
   features?: Partial<typeof config.features>;
   oidcProvider?: IdentityProvider;
   casProvider?: IdentityProvider;
   fastcasConfiguration?: FastCASConfiguration;
   mailTransport?: MailTransport;
   researchFetcher?: (input: string | Request | URL, init?: RequestInit) => Promise<Response>;
+  referenceDownloader?: ReferenceDownloader;
   metrics?: MetricsRegistry;
   collaborationBus?: CollaborationBus;
   postgresRepository?: import("./storage/repository").PostgresRepository;
@@ -306,6 +312,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const collaboration = new CollaborationService(database, workspaces, collaborationBus, postgresMirror && "appendUpdate" in postgresMirror && "saveSnapshot" in postgresMirror && "load" in postgresMirror ? postgresMirror as import("./collaboration/collaboration-bus").CollaborationPersistence : undefined);
   const stopCollaborationBus = await collaboration.subscribeBus();
   const comments = new CommentService(database, collaboration, authorization);
+  const collaborationHistory = new CollaborationHistoryService(database, workspaces, collaboration, authorization);
   const mailDelivery = new MailDeliveryService(database, options.mailTransport ?? (config.mail ? new SmtpMailTransport(config.mail.smtpUrl, config.mail.from) : undefined));
   const uploads = new UploadService(dataDirectory, database, workspaces);
   await uploads.initialize();
@@ -342,7 +349,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const sharedProvider = runtimeAgentProvider(activeProvider);
   const providers = { completion: sharedProvider, agent: sharedProvider, revise: sharedProvider, review: sharedProvider, memory: sharedProvider };
   const harnessSessions = new HarnessSessionService(database);
-  const latexCompiler = new LatexCompileService(dataDirectory, workspaces, { mode: features.serverAuth || process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host" });
+  const latexCompiler = options.latexCompiler ?? new LatexCompileService(dataDirectory, workspaces, { mode: features.serverAuth || process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host" });
   const mcpTools = new McpToolService(mcpRegistry, workspaces, latexCompiler, database);
   const latexTemplates = new LatexTemplateService(dataDirectory, fetch, config.templateDirectory);
   const memories = new MemoryService(database, workspaces, skillRegistry, asGateway(providers.memory));
@@ -367,7 +374,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
         if (!actor || actor.status !== "active") throw new ApiError(403, "reference_job_actor_revoked", "Reference task owner is no longer active");
         authorization.requireProject({ user: actor, sessionId: "reference-job" }, projectId, job.policy?.action === "project:write" ? "project:write" : "agent:propose");
       }
-    });
+    }, options.referenceDownloader);
   await referencePapers.initialize();
   const revisions = new ReviseService(database, workspaces, skillRegistry, asGateway(providers.revise), memories, referencePapers);
   const drafts = new DraftService(database, workspaces, skillRegistry, asGateway(providers.agent), referencePapers);
@@ -387,7 +394,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const alignment = new AlignmentService(workspaces);
   const agentTasks = new AgentTaskService(database, workspaces, skillRegistry, asGateway(providers.agent), memories, asGateway(providers.review), compliance, referencePapers);
   const completions = new CompletionService(workspaces, skillRegistry, asGateway(providers.completion), memories, referencePapers);
-  const services: Services = { referencePapers, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
+  const services: Services = { referencePapers, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, collaborationHistory, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
   const routes = buildRoutes(services, {
     status: () => {
       const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
@@ -414,7 +421,15 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
           const current = auth.principal(request)!;
           authorization.requireProject(current, params.projectId, projectActionFor(url.pathname, request.method));
         }
-        const response = withRuntimeHeaders(await route.handler(request, params, url));
+        const synchronizesWorkspace = params.projectId && (
+          (request.method === "PUT" && /\/(file|assets)$/.test(url.pathname)) ||
+          (request.method === "POST" && /\/(?:change-sets\/[^/]+\/(?:accept|decide|rollback)|history\/[^/]+\/restore|github-sync\/[^/]+\/(?:resolve|finalize))$/.test(url.pathname))
+        );
+        if (synchronizesWorkspace && request.method === "PUT") {
+          const current = auth.principal(request, features.serverAuth);
+          if (current) authorization.requireProjectPath(current, params.projectId!, requiredQuery(url, "path"), "project:write");
+        }
+        const response = withRuntimeHeaders(await (synchronizesWorkspace ? collaboration.mutateWorkspace(params.projectId!, async () => route.handler(request, params, url)) : route.handler(request, params, url)));
         if (!postgresCutover) await persistToPostgres();
         metrics.observe(request.method, url.pathname, response.status);
         void mailDelivery.dispatchPending();
@@ -431,6 +446,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   };
   void stopCollaborationBus;
   applicationFetch.dispatchMail = () => mailDelivery.dispatchPending();
+  applicationFetch.checkpointCollaborations = () => collaborationHistory.checkpointDueProjects();
   applicationFetch.authorizeHarnessRun = (request, runId) => {
     requireHarnessAccess(auth, request, features.serverAuth);
     if (!harnessRuns.get(runId)) throw new ApiError(404, "harness_run_not_found", "Harness run not found");
@@ -457,6 +473,7 @@ function projectActionFor(pathname: string, method: string): ProjectAction {
   if (/\/shares(?:\/|$)/.test(pathname)) return "project:manage";
   if (method === "GET") return "project:read";
   if ((method === "DELETE" || method === "PATCH") && /^\/api\/projects\/[^/]+$/.test(pathname)) return "project:manage";
+  if (/\/collaboration\/presence(?:\/|$)/.test(pathname)) return "project:read";
   if (/\/comments(?:\/|$)/.test(pathname)) return "comment:write";
   if (/\/compile(?:-|$)/.test(pathname)) return "compile:run";
   if (/\/reviews(?:\/|$)|\/review-issues(?:\/|$)/.test(pathname)) return "review:run";
@@ -468,7 +485,7 @@ function projectActionFor(pathname: string, method: string): ProjectAction {
 }
 
 function pathAuthorizesIndividually(pathname: string): boolean {
-  return /\/api\/projects\/[^/]+\/(?:file|asset|files|assets)$/.test(pathname);
+  return /\/api\/projects\/[^/]+\/(?:file|asset|files|assets)$/.test(pathname) || /\/api\/projects\/[^/]+\/(?:comments|checkpoints|review-sessions|shared-comments|collaboration|access)(?:\/|$)/.test(pathname);
 }
 
 // Raw Harness sessions share host CLI credentials and accept arbitrary working
@@ -480,8 +497,8 @@ function requireHarnessAccess(auth: AuthService, request: Request, authEnabled: 
   return actor;
 }
 
-function buildRoutes({ referencePapers, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry(), fastcas?: FastCASService): Route[] {
-  const presence = new Map<string, Map<string, { clientId: string; name: string; color?: string; path: string; line?: number; updatedAt: string }>>();
+function buildRoutes({ referencePapers, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, collaborationHistory, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry(), fastcas?: FastCASService): Route[] {
+  const presence = new PresenceService(authorization);
   const principal = (request: Request, required = authEnabled): Principal | undefined => auth.principal(request, required);
   const harnessRoute = (method: string, path: string, handler: Handler, adminOnly = true): Route => route(method, path, (request, params, url) => {
     requireHarnessAccess(auth, request, authEnabled, adminOnly);
@@ -667,6 +684,11 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     route("POST", "/api/skills/releases/:skillId/evaluate", async (request, params) => { const actor = principal(request, authEnabled); if (actor) requireRole(actor.user, "platform_admin"); try { return json(await skillRegistry.evaluate(required(params, "skillId"))); } catch (error) { throw new ApiError(404, "skill_release_not_found", error instanceof Error ? error.message : "Skill release not found"); } }),
     route("POST", "/api/skills/releases/:skillId/rollback", async (request, params) => { const actor = principal(request, authEnabled); if (actor) requireRole(actor.user, "platform_admin"); const body = await readJson<{ reason?: string }>(request); if (!body.reason?.trim()) throw new ApiError(400, "skill_rollback_reason_required", "A rollback reason is required"); try { return json(await skillRegistry.rollback(required(params, "skillId"), body.reason)); } catch (error) { throw new ApiError(404, "skill_release_not_found", error instanceof Error ? error.message : "Skill release not found"); } }),
     route("GET", "/api/agent-skills", async () => json(await skillRegistry.taskCatalog())),
+    route("GET", "/api/agent-skills/:skillId", async (_request, params) => {
+      const id = required(params, "skillId");
+      if (!(await skillRegistry.taskCatalog()).some(skill => skill.id === id)) throw new ApiError(404, "skill_not_found", "Skill not found");
+      return json(await skillRegistry.loadTask(id));
+    }),
     harnessRoute("GET", "/api/harnesses", async () => json(await Promise.all(harnessRegistry.list().map(async (adapter) => ({ status: await adapter.getStatus(), capabilities: await adapter.getCapabilities() })))), false),
     harnessRoute("GET", "/api/harness-sessions", async () => json(harnessSessions.list())),
     harnessRoute("GET", "/api/mcp", async () => json(mcpRegistry.list()), false),
@@ -759,7 +781,7 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     }),
     route("GET", "/api/projects/:projectId/collaboration", async (request, params, url) => {
       const projectId = required(params, "projectId"); const path = requiredQuery(url, "path"); const current = principal(request); if (current) authorization.requireProjectPath(current, projectId, path, "project:read"); const opened = await collaboration.open(projectId, path);
-      return json({ ...opened, presence: [...(presence.get(projectId)?.values() ?? [])].filter((item) => Date.now() - Date.parse(item.updatedAt) < 45_000 && (!current || canReadProjectPath(current, projectId, item.path, authorization))) });
+      return json({ ...opened, presence: current ? presence.list(projectId, current) : [] });
     }),
     route("POST", "/api/projects/:projectId/collaboration/persist", async (request, params) => {
       const projectId = required(params, "projectId");
@@ -773,28 +795,62 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     route("POST", "/api/projects/:projectId/collaboration", async (request, params) => {
       const projectId = required(params, "projectId"); const body = await readJson<{ path?: string; update?: string; baseVersion?: number; clientId?: string; name?: string; color?: string; line?: number }>(request); if (!body.path || !body.update || !Number.isInteger(body.baseVersion)) throw new ApiError(400, "collaboration_update_invalid", "path, update and baseVersion are required"); const current = principal(request); if (current) authorization.requireProjectPath(current, projectId, body.path, "project:write");
       const saved = await collaboration.apply(projectId, body.path, body.update, body.baseVersion!);
-      if (body.clientId && (current || body.name)) { const palette = ["#2563eb", "#059669", "#c2410c", "#7c3aed", "#be123c"]; const color = current ? palette[Number.parseInt(current.user.id.replace(/\D/g, "").slice(-4) || "0", 10) % palette.length]! : body.color?.slice(0, 32); const projectPresence = presence.get(projectId) ?? new Map(); projectPresence.set(body.clientId, { clientId: body.clientId, name: current?.user.displayName ?? body.name!.slice(0, 80), ...(color ? { color } : {}), path: body.path, ...(Number.isInteger(body.line) && body.line! > 0 ? { line: body.line } : {}), updatedAt: new Date().toISOString() }); presence.set(projectId, projectPresence); }
-      return json({ ...saved, presence: [...(presence.get(projectId)?.values() ?? [])] });
+      if (body.clientId && current) presence.update(projectId, current, { clientId: body.clientId, path: body.path, ...(body.line === undefined ? {} : { line: body.line }) });
+      return json({ ...saved, presence: current ? presence.list(projectId, current) : (body.clientId && typeof body.name === "string" ? [{ clientId: body.clientId, name: body.name.slice(0, 80), path: body.path, updatedAt: new Date().toISOString() }] : []) });
     }),
-    route("POST", "/api/projects/:projectId/collaboration/presence", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, true)!; const body = await readJson<{ clientId?: string; path?: string; line?: number }>(request); if (!body.clientId || !body.path) throw new ApiError(400, "presence_invalid", "clientId and path are required"); authorization.requireProjectPath(current, projectId, body.path, "project:read"); const palette = ["#2563eb", "#059669", "#c2410c", "#7c3aed", "#be123c"]; const color = palette[Number.parseInt(current.user.id.replace(/\D/g, "").slice(-4) || "0", 10) % palette.length]!; const projectPresence = presence.get(projectId) ?? new Map(); projectPresence.set(body.clientId, { clientId: body.clientId, name: current.user.displayName, color, path: body.path, ...(Number.isInteger(body.line) && body.line! > 0 ? { line: body.line } : {}), updatedAt: new Date().toISOString() }); presence.set(projectId, projectPresence); return json([...projectPresence.values()].filter((item) => Date.now() - Date.parse(item.updatedAt) < 45_000 && canReadProjectPath(current, projectId, item.path, authorization))); }),
+    route("GET", "/api/projects/:projectId/access", async (request, params, url) => {
+      const projectId = required(params, "projectId"), current = principal(request);
+      workspaces.getProject(projectId);
+      if (!current) return json({ projectVersion: workspaces.getProject(projectId).version, canCompile: true, role: "owner", canWrite: true, canComment: false, canInvite: false, canManage: true, realtime: false });
+      const role = authorization.requireProject(current, projectId, "project:read"), path = url.searchParams.get("path");
+      if (path) authorization.requireProjectPath(current, projectId, path, "project:read");
+      const allows = (action: ProjectAction) => { try { if (path) authorization.requireProjectPath(current, projectId, path, action); else authorization.requireProject(current, projectId, action); return true; } catch { return false; } };
+      return json({ projectVersion: workspaces.getProject(projectId).version, canCompile: allows("compile:run"), role, userId: current.user.id, canWrite: allows("project:write"), canComment: allows("comment:write"), canInvite: allows("project:invite"), canManage: allows("project:manage"), realtime: true });
+    }),
+    route("GET", "/api/projects/:projectId/collaboration/presence", async (request, params) => json(presence.list(required(params, "projectId"), principal(request, true)!))),
+    route("POST", "/api/projects/:projectId/collaboration/presence", async (request, params) => json(presence.update(required(params, "projectId"), principal(request, true)!, await readJson(request)))),
+    route("DELETE", "/api/projects/:projectId/collaboration/presence/:clientId", async (request, params) => { presence.remove(required(params, "projectId"), required(params, "clientId"), principal(request, true)!); return new Response(null, { status: 204 }); }),
+    route("POST", "/api/projects/:projectId/review-sessions", async (request, params) => { const body = await readJson<{ path?: string; previousId?: string }>(request); if (typeof body.path !== "string" || !body.path || (body.previousId !== undefined && typeof body.previousId !== "string")) throw new ApiError(400, "review_path_required", "path is required"); return json(await comments.startReview(required(params, "projectId"), principal(request, true)!, body.path, body.previousId), 201); }),
+    route("GET", "/api/projects/:projectId/review-sessions/:reviewSessionId", async (request, params) => json(await comments.getReview(required(params, "projectId"), required(params, "reviewSessionId"), principal(request, true)!))),
+    route("PUT", "/api/projects/:projectId/review-sessions/:reviewSessionId", async (request, params) => json(await comments.saveReview(required(params, "projectId"), required(params, "reviewSessionId"), principal(request, true)!, await readJson(request)))),
     route("GET", "/api/projects/:projectId/comments", async (request, params) => json(await comments.list(required(params, "projectId"), principal(request, true)!))),
-    route("POST", "/api/projects/:projectId/comments", async (request, params) => { const body = await readJson<{ path: string; from: number; to: number; body: string }>(request); return json(await comments.create(required(params, "projectId"), principal(request, true)!, body), 201); }),
-    route("POST", "/api/projects/:projectId/comments/:threadId/messages", async (request, params) => { const body = await readJson<{ body?: string }>(request); return json(await comments.reply(required(params, "projectId"), required(params, "threadId"), principal(request, true)!, body.body?.trim() ?? ""), 201); }),
+    route("POST", "/api/projects/:projectId/comments", async (request, params) => { const body = await readJson<{ path: string; from: number; to: number; body: string; quote?: string; replacement?: string; scope?: "project" }>(request); return json(await comments.create(required(params, "projectId"), principal(request, true)!, body), 201); }),
+    route("POST", "/api/projects/:projectId/comments/:threadId/messages", async (request, params) => { const body = await readJson<{ body?: string }>(request); return json(await comments.reply(required(params, "projectId"), required(params, "threadId"), principal(request, true)!, body.body ?? ""), 201); }),
     route("PATCH", "/api/projects/:projectId/comments/:threadId", async (request, params) => { const body = await readJson<{ status?: "open" | "resolved" }>(request); if (body.status !== "open" && body.status !== "resolved") throw new ApiError(400, "comment_status_invalid", "status must be open or resolved"); return json(await comments.updateStatus(required(params, "projectId"), required(params, "threadId"), principal(request, true)!, body.status)); }),
-    route("POST", "/api/projects/:projectId/comments/:threadId/reanchor", async (request, params) => { const body = await readJson<{ path?: string; from?: number; to?: number }>(request); if (!body.path || !Number.isInteger(body.from) || !Number.isInteger(body.to)) throw new ApiError(400, "comment_anchor_invalid", "path, from and to are required"); return json(await comments.reanchor(required(params, "projectId"), required(params, "threadId"), principal(request, true)!, { path: body.path, from: body.from!, to: body.to! })); }),
+    route("POST", "/api/projects/:projectId/comments/:threadId/decision", async (request, params) => { const body = await readJson<{ decision?: "accepted" | "rejected" }>(request); if (body.decision !== "accepted" && body.decision !== "rejected") throw new ApiError(400, "suggestion_decision_invalid", "decision must be accepted or rejected"); return json(await comments.decide(required(params, "projectId"), required(params, "threadId"), principal(request, true)!, body.decision)); }),
+    route("POST", "/api/projects/:projectId/comments/:threadId/reanchor", async (request, params) => { const body = await readJson<{ path?: string; from?: number; to?: number; quote?: string }>(request); if (!body.path || !Number.isInteger(body.from) || !Number.isInteger(body.to)) throw new ApiError(400, "comment_anchor_invalid", "path, from and to are required"); return json(await comments.reanchor(required(params, "projectId"), required(params, "threadId"), principal(request, true)!, { path: body.path, from: body.from!, to: body.to!, ...(body.quote === undefined ? {} : { quote: body.quote }) })); }),
+    route("GET", "/api/projects/:projectId/shared-comments", async (request, params) => {
+      const projectId = required(params, "projectId"), current = principal(request);
+      workspaces.getProject(projectId);
+      if (current) authorization.requireProject(current, projectId, "project:read");
+      return json(database.snapshot().shareComments.filter(item => item.projectId === projectId && (!current || canReadProjectPath(current, projectId, item.path, authorization))).map(({ shareId: _shareId, ...item }) => ({ ...item, canComment: !current || authorization.projectPathDecision(current, projectId, item.path, "comment:write").allowed })));
+    }),
+    route("PATCH", "/api/projects/:projectId/shared-comments/:commentId", async (request, params) => {
+      const projectId = required(params, "projectId"), current = principal(request), body = await readJson<{ status?: "open" | "resolved" }>(request);
+      if (body.status !== "open" && body.status !== "resolved") throw new ApiError(400, "comment_status_invalid", "status must be open or resolved");
+      const comment = database.snapshot().shareComments.find(item => item.id === required(params, "commentId") && item.projectId === projectId);
+      if (!comment) throw new ApiError(404, "comment_not_found", "Comment not found");
+      if (current) authorization.requireProjectPath(current, projectId, comment.path, "comment:write");
+      await database.mutate(state => { const stored = state.shareComments.find(item => item.id === comment.id)!; stored.status = body.status!; stored.updatedAt = new Date().toISOString(); });
+      return new Response(null, { status: 204 });
+    }),
     route("POST", "/api/projects/:projectId/shares", async (request, params) => {
       const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:manage"); workspaces.getProject(projectId);
       const body = await readJson<{ permission?: "read" | "comment"; label?: string; expiresAt?: string }>(request);
+      if (body.permission !== "read" && body.permission !== "comment") throw new ApiError(400, "share_permission_invalid", "分享权限必须为只读或可评论");
+      if (body.label !== undefined && (typeof body.label !== "string" || body.label.trim().length > 120)) throw new ApiError(400, "share_label_invalid", "链接说明不能超过 120 字符");
+      let expiresAt: string | undefined;
+      if (body.expiresAt !== undefined) { const value = typeof body.expiresAt === "string" ? Date.parse(body.expiresAt) : NaN; if (!Number.isFinite(value) || value <= Date.now()) throw new ApiError(400, "share_expiry_invalid", "失效时间必须为有效的未来时间"); expiresAt = new Date(value).toISOString(); }
       const token = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
       const createdAt = new Date().toISOString();
-      const share = await database.mutate((state) => { const item = { id: `share_${crypto.randomUUID()}`, projectId, tokenHash: shareTokenHash(token), permission: body.permission === "comment" ? "comment" as const : "read" as const, ...(body.label?.trim() ? { label: body.label.trim().slice(0, 120) } : {}), ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}), createdAt }; state.projectShares.push(item); return item; });
+      const share = await database.mutate((state) => { const item = { id: `share_${crypto.randomUUID()}`, projectId, tokenHash: shareTokenHash(token), permission: body.permission === "comment" ? "comment" as const : "read" as const, ...(body.label?.trim() ? { label: body.label.trim().slice(0, 120) } : {}), ...(expiresAt ? { expiresAt } : {}), createdAt }; state.projectShares.push(item); return item; });
       return json({ id: share.id, token, permission: share.permission, label: share.label, expiresAt: share.expiresAt, createdAt: share.createdAt }, 201);
     }),
     route("GET", "/api/projects/:projectId/shares", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:manage"); workspaces.getProject(projectId); return json(database.snapshot().projectShares.filter((item) => item.projectId === projectId).map(({ tokenHash: _tokenHash, ...item }) => item)); }),
     route("DELETE", "/api/projects/:projectId/shares/:shareId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:manage"); workspaces.getProject(projectId); await database.mutate((state) => { const share = state.projectShares.find((item) => item.projectId === projectId && item.id === required(params, "shareId")); if (!share) throw new ApiError(404, "share_not_found", "Share link not found"); share.revokedAt = new Date().toISOString(); }); return new Response(null, { status: 204 }); }),
     route("GET", "/api/shared/:token", async (_request, params) => { const share = activeShare(database.snapshot().projectShares, required(params, "token")); const project = workspaces.getProject(share.projectId); return json({ project: { id: project.id, name: project.name, mainDocument: project.mainDocument, version: project.version }, permission: share.permission, tree: await workspaces.tree(project.id), comments: database.snapshot().shareComments.filter((item) => item.shareId === share.id) }); }),
     route("GET", "/api/shared/:token/file", async (_request, params, url) => { const share = activeShare(database.snapshot().projectShares, required(params, "token")); const path = requiredQuery(url, "path"); const file = await workspaces.readTextFile(share.projectId, path); return json({ path, content: file.content, version: file.file.version }); }),
-    route("POST", "/api/shared/:token/comments", async (request, params) => { const share = activeShare(database.snapshot().projectShares, required(params, "token")); if (share.permission !== "comment") throw new ApiError(403, "share_read_only", "This share link is read-only"); const body = await readJson<{ path?: string; line?: number; author?: string; body?: string }>(request); if (!body.path || !body.body?.trim() || !body.author?.trim()) throw new ApiError(400, "comment_invalid", "path, author and body are required"); await workspaces.readTextFile(share.projectId, body.path); const createdAt = new Date().toISOString(); return json(await database.mutate((state) => { const comment = { id: `comment_${crypto.randomUUID()}`, shareId: share.id, projectId: share.projectId, path: body.path!, ...(Number.isInteger(body.line) && body.line! > 0 ? { line: body.line } : {}), author: body.author!.trim().slice(0, 80), body: body.body!.trim().slice(0, 4000), status: "open" as const, createdAt, updatedAt: createdAt }; state.shareComments.push(comment); return comment; }), 201); }),
+    route("POST", "/api/shared/:token/comments", async (request, params) => { const share = activeShare(database.snapshot().projectShares, required(params, "token")); if (share.permission !== "comment") throw new ApiError(403, "share_read_only", "This share link is read-only"); const body = await readJson<{ path?: string; line?: number; author?: string; body?: string }>(request); if (typeof body.path !== "string" || !body.path || typeof body.body !== "string" || !body.body.trim() || typeof body.author !== "string" || !body.author.trim()) throw new ApiError(400, "comment_invalid", "path, author and body are required"); await workspaces.readTextFile(share.projectId, body.path); const createdAt = new Date().toISOString(); return json(await database.mutate((state) => { const comment = { id: `comment_${crypto.randomUUID()}`, shareId: share.id, projectId: share.projectId, path: body.path!, ...(Number.isInteger(body.line) && body.line! > 0 ? { line: body.line } : {}), author: body.author!.trim().slice(0, 80), body: body.body!.trim().slice(0, 4000), status: "open" as const, createdAt, updatedAt: createdAt }; state.shareComments.push(comment); return comment; }), 201); }),
     route("POST", "/api/projects/:projectId/compliance-checks", async (request, params) => {
       const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read");
       const body = await readJson<{ pdfBase64?: string; renderedPages?: number; mainBodyPages?: number; verifyCitationsOnline?: boolean }>(request);
@@ -823,6 +879,18 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     }),
     route("GET", "/api/projects/:projectId/reference-papers", (request, params) => { const projectId = required(params, "projectId"); authorize(request, projectId, "project:read"); return json(referencePapers.list(projectId)); }),
     route("POST", "/api/projects/:projectId/reference-papers", async (request, params, url) => { const projectId = required(params, "projectId"); const actor = authorize(request, projectId, "project:write"); return json(await referencePapers.upload(projectId, requiredQuery(url, "name"), await readReferenceUpload(request), actor?.user.id), 202); }),
+    route("POST", "/api/projects/:projectId/reference-papers/import", async (request, params) => {
+      const projectId = required(params, "projectId"), actor = authorize(request, projectId, "project:write");
+      const body = await readJson<{ source?: unknown }>(request);
+      try {
+        const source = await referencePapers.resolveImport(body.source, request.signal);
+        authorize(request, projectId, "project:write");
+        return json(await referencePapers.upload(projectId, source.name, source.bytes, actor?.user.id), 202);
+      } catch (failure) {
+        if (failure instanceof ApiError) throw failure;
+        throw new ApiError(502, "reference_import_failed", "无法下载论文全文，请检查链接、稍后重试或上传本地文件");
+      }
+    }),
     route("GET", "/api/projects/:projectId/reference-papers/:referenceId/text", async (request, params) => { const projectId = required(params, "projectId"); authorize(request, projectId, "project:read"); return json(await referencePapers.parsed(projectId, required(params, "referenceId"))); }),
     route("GET", "/api/projects/:projectId/reference-papers/:referenceId/source", async (request, params) => { const projectId = required(params, "projectId"); authorize(request, projectId, "project:read"); const source = await referencePapers.preview(projectId, required(params, "referenceId")); return new Response(source.bytes, { headers: { "content-type": source.type, "cache-control": "private, no-store", "content-disposition": "inline" } }); }),
     route("PATCH", "/api/projects/:projectId/reference-papers/:referenceId", async (request, params) => { const projectId = required(params, "projectId"); authorize(request, projectId, "project:write"); const id = required(params, "referenceId"); referencePapers.get(projectId, id); const body = await readJson<{ title?: string }>(request); if (typeof body.title !== "string" || !body.title.trim() || body.title.length > 200) throw new ApiError(400, "reference_title_invalid", "Enter a title under 200 characters"); return json(await database.mutate(state => { const paper = state.referencePapers.find(item => item.projectId === projectId && item.id === id); if (!paper) throw new ApiError(404, "reference_not_found", "Reference was deleted"); paper.title = body.title!.trim(); paper.updatedAt = new Date().toISOString(); return paper; })); }),
@@ -962,6 +1030,10 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
       const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "project:read", workspaces);
       return workspaces.exportProject(projectId);
     }),
+    route("GET", "/api/projects/:projectId/checkpoints", async (request, params, url) => json(await collaborationHistory.list(required(params, "projectId"), principal(request, true)!, url.searchParams.get("cursor") ?? undefined))),
+    route("POST", "/api/projects/:projectId/checkpoints", async (request, params) => { const body = await readJson<{ label?: string }>(request); return json(await collaborationHistory.create(required(params, "projectId"), principal(request, true)!, body.label ?? ""), 201); }),
+    route("GET", "/api/projects/:projectId/checkpoints/:oid/preview", async (request, params) => json(await collaborationHistory.preview(required(params, "projectId"), required(params, "oid"), principal(request, true)!))),
+    route("POST", "/api/projects/:projectId/checkpoints/:oid/restore", async (request, params) => json(await collaborationHistory.restore(required(params, "projectId"), required(params, "oid"), principal(request, true)!, await readJson(request)))),
     route("POST", "/api/projects/:projectId/history/checkpoint", async (request, params) => {
       await authorizeHistoryPaths(request, required(params, "projectId"));
       return json(await workspaces.createHistoryCheckpoint(required(params, "projectId")), 201);
@@ -1138,19 +1210,27 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
       const body = await readJson<{ from: string; to: string }>(request);
       const projectId = required(params, "projectId");
       const current = principal(request, authEnabled); if (current) { authorization.requireProjectPath(current, projectId, body.from, "project:write"); authorization.requireProjectPath(current, projectId, body.to, "project:write"); }
+      return collaboration.withProjectLock(projectId, async () => {
+      const actor = principal(request, authEnabled); if (actor) { authorization.requireProjectPath(actor, projectId, body.from, "project:write"); authorization.requireProjectPath(actor, projectId, body.to, "project:write"); }
+      await collaboration.flushProject(projectId);
       await workspaces.renamePath(projectId, body.from, body.to);
       await collaboration.renamePath(projectId, normalizeWorkspacePath(body.from), normalizeWorkspacePath(body.to));
       await claims.renamePath(projectId, body.from, body.to);
       return new Response(null, { status: 204 });
+      });
     }),
     route("DELETE", "/api/projects/:projectId/files", async (request, params, url) => {
       const projectId = required(params, "projectId");
       const path = requiredQuery(url, "path");
       const current = principal(request, authEnabled); if (current) authorization.requireProjectPath(current, projectId, path, "project:write");
+      return collaboration.withProjectLock(projectId, async () => {
+      const actor = principal(request, authEnabled); if (actor) authorization.requireProjectPath(actor, projectId, path, "project:write");
+      await collaboration.flushProject(projectId);
       await workspaces.deletePath(projectId, path);
       await collaboration.archivePath(projectId, path);
       await claims.deletePath(projectId, path);
       return new Response(null, { status: 204 });
+      });
     }),
     route("GET", "/api/projects/:projectId/outline", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); const outline = await workspaces.outline(projectId); return json(current ? filterVisibleOutline(outline, current, projectId, authorization) : outline); }),
     route("GET", "/api/projects/:projectId/search", async (request, params, url) => { const projectId = required(params, "projectId"); const current = principal(request, true)!; return json(await projectSearch.search(projectId, current, url.searchParams.get("query") ?? "")); }),
@@ -1274,6 +1354,16 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
       const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read");
       workspaces.getProject(projectId);
       return json(database.snapshot().compileRecords.filter((record) => record.projectId === projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null);
+    }),
+    route("GET", "/api/projects/:projectId/compiled-preview", async (request, params, url) => {
+      const projectId = required(params, "projectId"), current = principal(request);
+      workspaces.getProject(projectId);
+      if (current) authorization.requireProject(current, projectId, "project:read");
+      const job = database.snapshot().jobs.filter(item => item.kind === "latex.compile" && item.status === "completed" && item.policy?.projectId === projectId && (item.output as { success?: boolean })?.success).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      const result = job?.output as import("./compiler/latex-compile-service").ServerCompileResult | undefined;
+      if (!result || !result.pdfBase64) return json(null);
+      if (current) for (const path of new Set([...(job!.policy?.paths ?? []), ...result.workspacePaths])) authorization.requireProjectPath(current, projectId, path, "project:read");
+      return json(result.snapshotId === url.searchParams.get("after") ? null : result);
     }),
     route("POST", "/api/projects/:projectId/compile", async (request, params) => { const projectId = required(params, "projectId"); await collaboration.flushProject(projectId); const current = principal(request, authEnabled); if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); const paths = current ? await visibleTextPaths(projectId, current, authorization, "compile:run", workspaces) : []; const job = jobs.enqueue("latex.compile", { projectId }, async ({ projectId: queuedProjectId }, _job, signal) => { const result = await latexCompiler.compile(queuedProjectId, signal); if (current) await requireWorkspacePathAccess(queuedProjectId, current, authorization, "compile:run", workspaces); return result; }, { policy: { ...(current ? { actorUserId: current.user.id, authorizationVersion: current.user.authzVersion, action: "compile:run", paths } : {}), projectId, projectVersion: workspaces.getProject(projectId).version }, recheck: async () => { if (current) await requireWorkspacePathAccess(projectId, current, authorization, "compile:run", workspaces); } }); return json(job, 202); }),
     route("POST", "/api/projects/:projectId/experiments", async (request, params) => {

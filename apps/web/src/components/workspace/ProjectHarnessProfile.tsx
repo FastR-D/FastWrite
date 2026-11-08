@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useCallback, useEffect, useState } from "react";
 import { Button, Field, Select, TextField } from "../ui";
 import type { AgentWireApi } from "@fastwrite/shared";
@@ -38,7 +39,7 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
       //   : await api.projects.harnessProfile(scopeId);
       // setProfile(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "无法加载模型配置");
+      setError(userFacingError(err, "无法加载模型配置"));
     }
   }, [scope, scopeId]);
 
@@ -94,7 +95,7 @@ export function HarnessProfileEditor({ scope, teamId, projectId }: HarnessProfil
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "无法保存模型配置");
+      setError(userFacingError(err, "无法保存模型配置"));
     } finally {
       setBusy(false);
     }

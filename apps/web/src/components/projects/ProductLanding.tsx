@@ -1,3 +1,4 @@
+import { BrandMark } from "../BrandMark";
 import { Button, Icon, Link, List, ListRow, ThemeToggle, icons } from "../ui";
 import styles from "./ProductLanding.module.css";
 
@@ -13,7 +14,7 @@ export function ProductLanding({ onSignIn }: { onSignIn: () => void }) {
     <div className={styles.page}>
       <header className={styles.header}>
         <Link variant="inherit" className="brand" href="/projects">
-          <span className="brand__mark">F</span><span>FastWrite</span>
+          <BrandMark /><span>FastWrite</span>
         </Link>
         <nav className={styles.navigation} aria-label="首页导航">
           <ThemeToggle />

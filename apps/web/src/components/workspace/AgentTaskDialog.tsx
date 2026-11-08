@@ -1,10 +1,11 @@
+import { userFacingError } from "../../lib/notifications";
 import type { ReferenceSelection, AgentTaskRequest } from "@fastwrite/shared";
 import { ReferenceSnapshotSummary } from "./ReferenceTags";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRun, AgentTaskIntent, AgentTaskPlan, AgentTaskSkillDescriptor, ChangeSet, ChangeSetConflictDetails, ChangeSetDecisionRequest, IssueResolution, PaperProject } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
 import { diffWords } from "../../lib/wordDiff";
-import { Button, Disclosure, Field, Icon, List, ListRow, MultiSelect, Stepper, TextArea, icons, type StepStatus } from "../ui";
+import { Button, Disclosure, Field, Icon, List, ListRow, Stepper, TextArea, icons, type StepStatus } from "../ui";
 import type { CompileStateReport } from "./PdfPane";
 import { EditableChangeReview } from "./EditableChangeReview";
 import { ChangeSetConflictDialog } from "./ChangeSetConflictDialog";
@@ -17,7 +18,7 @@ type Stage = "input" | "planning" | "plan" | "generating" | "diff" | "applying" 
 type PendingConflict = { details: ChangeSetConflictDetails; request: ChangeSetDecisionRequest; finishAfter: boolean };
 export interface AgentTaskSeed { planId?: string; issueIds?: string[]; objective?: string; scope?: AgentTaskRequest["scope"]; path?: string; harness?: "codex" | "claude" }
 
-export function AgentTaskWorkspace({ open, project, seed, taskSkills, taskSkillsLoading, taskSkillIds, onTaskSkillIdsChange, references = [], compileState, onRequestCompile, onClose, onAccepted, onNavigate }: { open: boolean; project: PaperProject; seed: AgentTaskSeed; taskSkills: AgentTaskSkillDescriptor[]; taskSkillsLoading: boolean; taskSkillIds: string[]; onTaskSkillIdsChange: (ids: string[]) => void; references?: ReferenceSelection[]; compileState: CompileStateReport; onRequestCompile: () => void; onClose: () => void; onAccepted: (path: string) => void | Promise<void>; onNavigate?: (path: string, line?: number) => void }) {
+export function AgentTaskWorkspace({ open, project, seed, taskSkills, taskSkillsLoading, taskSkillIds, references = [], compileState, onRequestCompile, onClose, onAccepted, onNavigate }: { open: boolean; project: PaperProject; seed: AgentTaskSeed; taskSkills: AgentTaskSkillDescriptor[]; taskSkillsLoading: boolean; taskSkillIds: string[]; onTaskSkillIdsChange: (ids: string[]) => void; references?: ReferenceSelection[]; compileState: CompileStateReport; onRequestCompile: () => void; onClose: () => void; onAccepted: (path: string) => void | Promise<void>; onNavigate?: (path: string, line?: number) => void }) {
   const [stage, setStage] = useState<Stage>("input");
   const [objective, setObjective] = useState("");
   const [plan, setPlan] = useState<AgentTaskPlan | null>(null);
@@ -63,7 +64,7 @@ export function AgentTaskWorkspace({ open, project, seed, taskSkills, taskSkills
       setRun(recoveredRun);
       setObjective(recoverable.request.objective);
       setResolution(recoveredResolution);
-    }).catch(error => { if(!controller.signal.aborted&&seed.planId)setError(error instanceof Error?error.message:String(error)); });
+    }).catch(error => { if(!controller.signal.aborted&&seed.planId)setError(userFacingError(error, String(error))); });
     return () => controller.abort();
   }, [dismissedPlanId, open, project.id, seed.issueIds, seed.objective, seed.planId, stage]);
   useEffect(() => {
@@ -194,7 +195,7 @@ export function AgentTaskWorkspace({ open, project, seed, taskSkills, taskSkills
   );
   const content = <>
     <ReferenceSnapshotSummary context={plan?.styleReferenceContext} />
-    {stage === "input" ? <div className="agent-task-form"><Field label="希望智能助手做什么？"><TextArea name="agent-task-objective" ref={objectiveRef} value={objective} onChange={setObjective} placeholder="生成初稿、续写待完成章节，或统一修改引言与评估章节…" autoFocus /></Field><div className="agent-command-buttons" aria-label="智能助手任务指令">{AGENT_INTENT_COMMANDS.map(({ intent, label }) => <Button type="button" size="small" variant="secondary" icon={intent === "draft" ? <Icon name={icons.newFile} /> : intent === "continue" ? <Icon name={icons.checklist} /> : <Icon name={icons.edit} />} aria-pressed={activeAgentIntentCommand(objective) === intent} key={intent} onClick={() => applyIntent(intent)}>{label}</Button>)}</div>{taskSkills.length ? <Field label="任务技能"><MultiSelect label="任务技能" value={taskSkillIds} onChange={onTaskSkillIdsChange} options={taskSkills.filter((skill) => !skill.supportedIntents.length || skill.supportedIntents.includes(activeAgentIntentCommand(objective) ?? "revise")).map((skill) => ({ value: skill.id, label: `${taskSkillLabel(skill.id)} · ${skill.description}` }))} /></Field> : null}{seed.path ? <small className="agent-command-hint">编辑器上下文： {seed.path}</small> : null}{seed.issueIds?.length ? <div className="agent-issue-seed"><Icon name={icons.verified} /> 修改关联至 {seed.issueIds.length} 审稿问题.</div> : null}</div> : null}
+    {stage === "input" ? <div className="agent-task-form"><Field label="希望智能助手做什么？"><TextArea name="agent-task-objective" ref={objectiveRef} value={objective} onChange={setObjective} placeholder="生成初稿、续写待完成章节，或统一修改引言与评估章节…" autoFocus /></Field><div className="agent-command-buttons" aria-label="智能助手任务指令">{AGENT_INTENT_COMMANDS.map(({ intent, label }) => <Button type="button" size="small" variant="secondary" icon={intent === "draft" ? <Icon name={icons.newFile} /> : intent === "continue" ? <Icon name={icons.checklist} /> : <Icon name={icons.edit} />} aria-pressed={activeAgentIntentCommand(objective) === intent} key={intent} onClick={() => applyIntent(intent)}>{label}</Button>)}</div>{seed.path ? <small className="agent-command-hint">编辑器上下文： {seed.path}</small> : null}{seed.issueIds?.length ? <div className="agent-issue-seed"><Icon name={icons.verified} /> 修改关联至 {seed.issueIds.length} 审稿问题.</div> : null}</div> : null}
     {busy ? <div className="agent-progress agent-task-progress" role="status" aria-live="polite"><Icon name={icons.loading} spin /><strong>{stage === "planning" ? "正在规划智能助手任务" : stage === "generating" ? "正在并行执行已确认的计划" : stage === "rereviewing" ? "正在检查问题是否已解决" : "正在完成已审核的更改"}</strong><span>{stage === "planning" ? "正在读取源文件上下文并生成可审核的文件计划，尚未修改文件。" : stage === "generating" ? "按计划并行生成各文件，应用前仍需审核每个修改块。" : "只有接受修改块后，才会更改文件。"}</span>{stage === "generating" && run?.steps?.length ? <Stepper variant="list" label="智能助手任务步骤" steps={run.steps.map((step) => ({ id: step.id, label: step.label, status: agentStepStatus(step.status), icon: agentStepIcon(step.status), detail: statusLabel(step.status) }))} /> : null}</div> : null}
     {stage === "plan" && plan?.sectionContracts?.length ? <div className="agent-contract-preview"><h3>章节约定</h3>{plan.sectionContracts.map((contract) => <article key={contract.path}><strong>{contract.path}</strong><span>{contract.purpose}</span><small>{contract.requiredClaimIds.length} 项必需论断 · {contract.allowedEvidenceIds.length} 项可用证据{contract.openQuestions.length ? ` · ${contract.openQuestions.length} 个待解问题` : ""}</small></article>)}</div> : null}
     {stage === "plan" && plan ? <div className="agent-plan"><div className="agent-plan__objective"><small>{statusLabel(plan.intent ?? plan.request.intent ?? "revise")}计划</small><strong>{plan.request.objective}</strong></div><section><h3>步骤</h3><List ordered label="计划步骤">{plan.steps.map((step, index) => <ListRow key={index}>{step}</ListRow>)}</List></section>{plan.sectionBudget?.length ? <section><h3>章节篇幅</h3><List label="章节篇幅">{plan.sectionBudget.map((item, index) => <ListRow key={index}><strong>{item.section}</strong>{item.targetPages ? ` · ${item.targetPages} 页` : ""} — {item.purpose}</ListRow>)}</List></section> : null}{plan.venueChecks?.length ? <section><h3>投稿规则检查</h3><List label="投稿规则检查">{plan.venueChecks.map((item, index) => <ListRow key={index}><strong>{statusLabel(item.status)}: {item.requirement}</strong>{item.action ? ` — ${item.action}` : ""}</ListRow>)}</List></section> : null}<section><h3>涉及文件</h3>{plan.affectedFiles.map((path) => <code key={path}>{path}</code>)}</section><section><h3>验证</h3><List label="验证">{plan.validation.map((item, index) => <ListRow key={index}>{item}</ListRow>)}</List></section><section><h3>风险</h3>{plan.risks.length ? <List label="风险">{plan.risks.map((risk, index) => <ListRow key={index}>{risk}</ListRow>)}</List> : <p>未发现特殊风险。</p>}</section></div> : null}
@@ -215,7 +216,7 @@ export function AgentTaskWorkspace({ open, project, seed, taskSkills, taskSkills
   return <><section className="agent-embedded" aria-label="智能助手工作区"><div className="agent-embedded__body">{content}</div><footer className="agent-embedded__footer">{footer}</footer></section><ChangeSetConflictDialog details={pendingConflict?.details ?? null} busy={deciding} onCancel={() => setPendingConflict(null)} onConfirm={() => void confirmOverwrite()} /></>;
 }
 
-function message(error: unknown) { return error instanceof Error ? error.message : "智能助手任务失败"; }
+function message(error: unknown) { return userFacingError(error, "智能助手任务失败"); }
 /*
  * The run's own words ("completed"/"running"/"failed") translate to Stepper's
  * four. The detail line keeps the raw status, as this dialog always showed it.

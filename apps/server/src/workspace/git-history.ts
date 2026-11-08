@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { HistoryCommit, HistorySummary, HistoryPage, HistoryTreeEntry, HistoryFileSide, HistoryComparison, HistoryChangedFile, HistoryChanges, WorkingStatus } from "@fastwrite/shared";
 import { ApiError } from "../http";
@@ -327,6 +327,20 @@ export class GitHistory {
     });
   }
 
+  async materialize(projectDirectory: string, ref: string, destination: string): Promise<string[]> {
+    const oid = await this.resolveCommit(projectDirectory, ref);
+    const files = await this.tree(projectDirectory, oid);
+    if (files.length > 10_000 || files.reduce((size, file) => size + file.size, 0) > 256 * 1024 * 1024) throw new ApiError(400, "history_restore_too_large", "历史版本超过恢复大小上限");
+    for (const file of files) { historyPath(file.path); if (!["100644", "100755"].includes(file.mode)) throw new ApiError(400, "history_unsafe_entry", "历史版本包含不支持的文件类型"); }
+    for (const file of files) {
+      const target = resolveWorkspacePath(destination, file.path).absolutePath;
+      await mkdir(dirname(target), { recursive: true });
+      const bytes = await runGitBytes([`--git-dir=${join(projectDirectory, "history.git")}`, "cat-file", "blob", file.oid]);
+      await writeFile(target, bytes);
+    }
+    return files.map(file => file.path);
+  }
+
   async side(projectDirectory: string, ref: string, requestedPath: string): Promise<HistoryFileSide> {
     const path = historyPath(requestedPath);
     if (ref === "empty") return { ref: "empty", path, exists: false, binary: false, size: 0 };
@@ -425,7 +439,7 @@ function parseCommits(output: string): HistoryCommit[] {
     if (!oid) continue;
     const message = tokens[index + 3]!;
     commits.push({ oid, parentOids: tokens[index + 1]!.split(" ").filter(Boolean), createdAt: tokens[index + 2]!, message,
-      source: message === "Manual checkpoint" ? "manual" : /^Auto|^Save /.test(message) ? "automatic" : "system" });
+      source: message === "Manual checkpoint" || message.startsWith("Saved version: ") ? "manual" : /^Auto|^Save /.test(message) ? "automatic" : "system" });
   }
   return commits;
 }

@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeSet, DraftOutlineSection, DraftPlan, PaperProject } from "@fastwrite/shared";
 import { api } from "../../api/client";
@@ -143,7 +144,7 @@ export function DraftDialog({ open, project, onClose, onAccepted, compileState, 
 function updateOutline(setter: React.Dispatch<React.SetStateAction<DraftOutlineSection[]>>, index: number, key: keyof DraftOutlineSection, value: string) {
   setter((current) => current.map((section, itemIndex) => itemIndex === index ? { ...section, [key]: value } : section));
 }
-function message(error: unknown) { return error instanceof Error ? error.message : "初稿助手任务失败"; }
+function message(error: unknown) { return userFacingError(error, "初稿助手任务失败"); }
 function cancelMessage(error: unknown, label: string) { return error instanceof DOMException && error.name === "AbortError" ? `${label} 已取消，未产生更改。` : message(error); }
 function beginRequest(ref: React.MutableRefObject<AbortController | null>) { ref.current?.abort(); const controller = new AbortController(); ref.current = controller; return controller; }
 function finishRequest(ref: React.MutableRefObject<AbortController | null>, controller: AbortController) { if (ref.current === controller) ref.current = null; }

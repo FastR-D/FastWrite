@@ -9,6 +9,7 @@ import { runAgentOperation } from "../agent/agent-operation";
 import { InProcessJobQueue, type JobRecord } from "../jobs/job-queue";
 import { ApiError, readBoundedBytes } from "../http";
 import { isPdf, MAX_REFERENCE_BYTES, parseReferencePdf, parseReferenceTex, readReferenceZip, referenceCandidates, REFERENCE_PARSER_VERSION } from "./parser";
+import { downloadReference, resolveReferenceImport, type ReferenceDownloader } from "./importer";
 
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const now = () => new Date().toISOString();
@@ -25,7 +26,8 @@ export class ReferencePaperService {
     private readonly jobs: InProcessJobQueue,
     private readonly provider: AgentProvider,
     private readonly providerKey: () => string = () => "default",
-    private readonly authorizeJob: (job: JobRecord) => void = () => {}
+    private readonly authorizeJob: (job: JobRecord) => void = () => {},
+    private readonly download: ReferenceDownloader = downloadReference
   ) {}
 
   async initialize(): Promise<void> {
@@ -37,6 +39,7 @@ export class ReferencePaperService {
     }
   }
   list(projectId: string): ReferencePaper[] { this.workspaces.getProject(projectId); return this.database.snapshot().referencePapers.filter(item => item.projectId === projectId); }
+  resolveImport(source: unknown, signal: AbortSignal) { return resolveReferenceImport(source, signal, this.download); }
   get(projectId: string, id: string): ReferencePaper {
     this.workspaces.getProject(projectId);
     const item = this.database.snapshot().referencePapers.find(candidate => candidate.projectId === projectId && candidate.id === id);
@@ -48,20 +51,25 @@ export class ReferencePaperService {
 
   async upload(projectId: string, name: string, bytes: Uint8Array, actorUserId?: string): Promise<ReferencePaper> {
     this.workspaces.getProject(projectId);
-    if (!bytes.length || bytes.length > MAX_REFERENCE_BYTES) throw new ApiError(413, "reference_too_large", "Choose a non-empty PDF or ZIP of at most 30 MB");
+    if (!bytes.length || bytes.length > MAX_REFERENCE_BYTES) throw new ApiError(413, "reference_too_large", "选择不超过 30 MB 的 PDF、LaTeX 或 ZIP 文件");
     if (this.list(projectId).length >= 50) throw new ApiError(413, "reference_capacity", "A project can contain at most 50 reference papers");
     const sourceHash = hash(bytes);
     const duplicate = this.list(projectId).find(paper => paper.sourceHash === sourceHash);
     if (duplicate) return duplicate;
     let sourceKind: ReferencePaper["sourceKind"] = "pdf";
     let candidates: string[] = [];
-    if (!isPdf(bytes)) {
-      if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) throw new ApiError(422, "reference_format_unsupported", "Upload a PDF or a ZIP containing TeX/PDF papers");
+    if (!isPdf(bytes) && /\.(tex|latex)$/i.test(name)) {
+      let content: string;
+      try { content = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { throw new ApiError(422, "reference_tex_encoding", "LaTeX 文件需要使用 UTF-8 编码"); }
+      if (content.includes("\u0000") || !/\\(?:documentclass|begin|section|chapter|input|title)\b/.test(content)) throw new ApiError(422, "reference_tex_invalid", "未识别到有效 LaTeX 源码");
+      sourceKind = "tex"; candidates = ["main.tex"];
+    } else if (!isPdf(bytes)) {
+      if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) throw new ApiError(422, "reference_format_unsupported", "请上传 PDF、LaTeX 或包含论文的 ZIP 文件");
       ({ kind: sourceKind, candidates } = referenceCandidates(readReferenceZip(bytes)));
     }
     const sourceName = name.replace(/[\u0000-\u001f\\/]/g, "_").slice(0, 200) || "Reference";
     const paper: ReferencePaper = {
-      id: `reference_${crypto.randomUUID()}`, projectId, title: sourceName.replace(/\.(pdf|zip)$/i, ""), sourceName,
+      id: `reference_${crypto.randomUUID()}`, projectId, title: sourceName.replace(/\.(pdf|zip|tex|latex)$/i, ""), sourceName,
       sourceKind, sourceHash, status: candidates.length > 1 ? "needs-input" : "parsing", parseRevision: 1,
       parserVersion: REFERENCE_PARSER_VERSION, ...(candidates.length ? { candidates } : {}),
       ...(candidates.length === 1 ? { mainDocument: candidates[0]! } : {}),
@@ -125,6 +133,7 @@ export class ReferencePaperService {
       const parseSignal = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
       let parsed: ParsedReference;
       if (paper.sourceKind === "pdf") parsed = await parseReferencePdf(bytes, parseSignal);
+      else if (paper.sourceKind === "tex") parsed = parseReferenceTex(new Map([["main.tex", bytes]]), "main.tex", parseSignal);
       else {
         const files = readReferenceZip(bytes);
         parsed = paper.sourceKind === "tex-zip" ? parseReferenceTex(files, paper.mainDocument!, parseSignal) : await parseReferencePdf(files.get(paper.mainDocument!)!, parseSignal);
@@ -159,6 +168,7 @@ export class ReferencePaperService {
     const paper = this.get(projectId, id);
     const bytes = new Uint8Array(await readFile(join(this.directory(paper), "source")));
     if (paper.sourceKind === "pdf") return { bytes, type: "application/pdf" };
+    if (paper.sourceKind === "tex") return { bytes, type: "text/plain; charset=utf-8" };
     if (paper.sourceKind === "pdf-zip" && paper.mainDocument) return { bytes: readReferenceZip(bytes).get(paper.mainDocument)!, type: "application/pdf" };
     return { bytes, type: "application/zip" };
   }

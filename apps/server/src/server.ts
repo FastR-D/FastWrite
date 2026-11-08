@@ -3,6 +3,7 @@ import { config } from "./config";
 import { lockDataDirectory } from "./storage/data-directory-lock";
 import type { Server, ServerWebSocket } from "bun";
 import { harnessEventBus } from "./agent/harness-event-bus";
+import { logServerError } from "./safe-log";
 import { ApiError, errorResponse } from "./http";
 import * as Y from "yjs";
 import * as decoding from "lib0/decoding";
@@ -25,6 +26,8 @@ export async function startServer() {
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => process.exit(0));
   const mailTimer = setInterval(() => { void fetch.dispatchMail(); }, 15_000);
   mailTimer.unref?.();
+  const historyTimer = setInterval(() => { void fetch.checkpointCollaborations().catch(error => logServerError("automatic collaboration checkpoint failed", error)); }, 60_000);
+  historyTimer.unref?.();
   console.log(`FastWrite server: http://localhost:${config.port}`);
   console.log(`Workspace data: ${config.dataDirectory}`);
   if (config.features.multiNodeCollaboration && !config.redisUrl) console.warn("FASTWRITE_MULTI_NODE_COLLABORATION is enabled but FASTWRITE_REDIS_URL is not configured; collaboration remains single-node.");
@@ -94,9 +97,11 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
         return server.upgrade(request, { data: { kind: "harness", runId, accessRequest } }) ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
       }
       const response = await fetch(request);
-      const discardedProject = request.method === "POST" && url.pathname.match(/^\/api\/projects\/([^/]+)\/history\/discard$/);
-      if (response.ok && discardedProject) {
-        const projectId = decodeURIComponent(discardedProject[1]!);
+      const discardedProject = request.method === "POST" && url.pathname.match(/^\/api\/projects\/([^/]+)\/(?:history\/discard|comments\/[^/]+\/decision|checkpoints\/[^/]+\/restore)$/);
+      const externalMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && url.pathname.match(/^\/api\/projects\/([^/]+)\/(?:file|files|assets|change-sets\/[^/]+\/(?:accept|decide|rollback)|history\/[^/]+\/restore|github-sync\/[^/]+\/(?:resolve|finalize))$/);
+      const changedProject = discardedProject || externalMutation;
+      if (response.ok && changedProject) {
+        const projectId = decodeURIComponent(changedProject[1]!);
         for (const room of rooms.values()) for (const socket of room) if (socket.data.projectId === projectId) {
           try { if (await reauthorizeCollaborationSocket(socket)) await sendSyncStep2(fetch, socket, new Uint8Array([0])); }
           catch { socket.close(4003, "Workspace document changed"); }

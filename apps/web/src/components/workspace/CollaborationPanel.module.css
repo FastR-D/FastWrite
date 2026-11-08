@@ -1,0 +1,42 @@
+.panel { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; font-size: 12px; }
+.header { display: flex; align-items: center; justify-content: space-between; padding: 14px 12px 10px; gap: 8px; }
+.header > div, .person > span:nth-child(2), .member > span:first-child { display: flex; flex-direction: column; min-width: 0; gap: 4px; }
+.header strong { font-size: 13px; }
+.header small, .hint, .person small, .member small, .message time { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.mode { display: flex; flex-direction: column; gap: 6px; padding: 0 12px 12px; border-bottom: 1px solid var(--border); }
+.scroll { overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 0; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.actions > :first-child:not(:last-child) { max-width: 100%; }
+.compose { display: flex; flex-direction: column; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.thread { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border); border-radius: 6px; padding: 10px; background: var(--surface); }
+.active { border-color: var(--accent, #2563eb); }
+.threadHeader { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.threadHeader > button { min-width: 0; overflow: hidden; text-overflow: ellipsis; max-width: 65%; }
+.badge { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.quote { margin: 0; padding: 6px 8px; border-left: 2px solid var(--border); color: var(--text-muted); font: 11px/1.65 var(--font-mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 110px; overflow-y: auto; }
+.change { border-left: 2px solid #299764; padding-left: 8px; }
+.change small { color: var(--text-muted); }
+.change pre { margin: 5px 0 0; font: 12px/1.6 var(--font-mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.message > div { display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
+.message strong { font-weight: 600; font-size: 11px; }
+.message p { line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; margin: 5px 0 0; }
+.reply { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 8px; }
+.error, .warning { padding: 8px 10px; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.error { color: var(--danger, #c43d42); margin: 8px 12px 0; }
+.warning { color: var(--text-muted); background: var(--surface-hover); border-radius: 4px; margin: 0; }
+.empty { padding: 24px 4px; color: var(--text-muted); text-align: center; line-height: 1.7; }
+.empty > svg { display: block; margin: 0 auto 10px; width: 24px; height: 24px; }
+.empty strong { display: block; color: var(--text); font-size: 12px; }
+.empty p { margin: 6px 0 0; font-size: 11px; }
+.sectionTitle { margin: 4px 0; font-size: 11px; color: var(--text-muted); font-weight: 600; }
+.person { display: flex; width: 100%; gap: 8px; justify-content: flex-start; height: auto; padding: 8px 0; text-align: left; }
+.person strong { font-size: 12px; }
+.avatar { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; color: white; flex-shrink: 0; font-size: 12px; }
+.online { width: 6px; height: 6px; background: #299764; border-radius: 50%; margin-left: auto; flex-shrink: 0; }
+.member { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 7px 0; }
+.member strong { font-size: 12px; font-weight: 500; }
+
+.version { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 5px; height: auto; padding: 10px 6px; width: 100%; white-space: normal; }
+.version strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.version small, .version > span { color: var(--text-muted); font-size: 10px; }

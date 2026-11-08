@@ -2,6 +2,7 @@ import {
   cp,
   lstat,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
   rename,
@@ -832,6 +833,41 @@ export class WorkspaceService {
       const restored = files.map((file) => file.path);
       const checkpoint = await this.commitHistory(id, `Restore history checkpoint ${oid}`, true);
       return { ...(checkpoint ? { oid: checkpoint } : {}), restored };
+    });
+  }
+
+  async restoreProjectHistory(id: string, oid: string, expectedVersion: number, mainDocument?: string): Promise<{ restored: string[]; removed: string[] }> {
+    return this.projectQueue.run(id, async () => {
+      const project = this.getProject(id);
+      if (project.version !== expectedVersion) throw new ApiError(409, "version_conflict", "项目在确认后发生了更改，请刷新恢复预览");
+      const root = this.workspaceRoot(id), projectDirectory = join(this.projectsDirectory, id);
+      const staging = await mkdtemp(join(projectDirectory, "restore-"));
+      const beforeFiles = await this.listRelativeFiles(root), beforeHashes = await this.fileHashes(root, beforeFiles);
+      const backup = join(projectDirectory, "trash", `before-project-restore-${crypto.randomUUID()}`);
+      let moved = false, installed = false;
+      try {
+        const restored = await this.gitHistory.materialize(projectDirectory, oid, staging);
+        const main = normalizeWorkspacePath(mainDocument ?? project.mainDocument);
+        if (!main.endsWith(".tex") || !restored.includes(main)) throw new ApiError(409, "history_main_document_missing", "此版本不包含当前主文件，请选择包含主文件的版本");
+        const afterHashes = await this.fileHashes(staging, restored);
+        await mkdir(dirname(backup), { recursive: true });
+        await rename(root, backup); moved = true;
+        await rename(staging, root); installed = true;
+        const timestamp = now();
+        await this.database.mutate(state => {
+          const versions = state.fileVersions[id] ?? {};
+          for (const path of beforeFiles) if (!afterHashes.has(path)) delete versions[path];
+          for (const path of restored) if (!versions[path] || beforeHashes.get(path) !== afterHashes.get(path)) versions[path] = { version: (versions[path]?.version ?? 0) + 1, updatedAt: timestamp };
+          state.fileVersions[id] = versions;
+          const stored = state.projects.find(item => item.id === id)!;
+          stored.mainDocument = main; stored.version++; stored.updatedAt = timestamp;
+        });
+        return { restored, removed: beforeFiles.filter(path => !afterHashes.has(path)) };
+      } catch (error) {
+        if (installed) await rm(root, { recursive: true, force: true });
+        if (moved) await rename(backup, root);
+        throw error;
+      } finally { await rm(staging, { recursive: true, force: true }); }
     });
   }
 

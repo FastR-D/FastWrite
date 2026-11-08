@@ -175,8 +175,8 @@ export type ProjectAclAction = "read" | "comment" | "edit" | "manage" | "run_ai"
 export interface ProjectAclRule { id: string; projectId: string; pathPrefix: string; subjectType: "user" | "project_role" | "team_role" | "idp_group"; subjectId: string; action: ProjectAclAction; effect: "allow" | "deny"; createdByUserId: string; createdAt: string; updatedAt: string; }
 export interface Invitation { id: string; resourceType: "team" | "project"; resourceId: string; emailNormalized: string; role: TeamRole | ProjectRole; tokenHash: string; invitedByUserId: string; expiresAt: string; message?: string; acceptedAt?: string; revokedAt?: string; createdAt: string; }
 export interface AccessRequest { id: string; projectId: string; requesterUserId: string; requestedRole: Exclude<ProjectRole, "owner">; message?: string; status: "pending" | "approved" | "rejected"; decidedByUserId?: string; decidedAt?: string; createdAt: string; updatedAt: string; }
-export type UserNotificationType = "access_request" | "access_request_decision" | "mention";
-export interface UserNotification { id: string; userId: string; type: UserNotificationType; title: string; body?: string; projectId?: string; accessRequestId?: string; inApp: boolean; readAt?: string; createdAt: string; }
+export type UserNotificationType = "access_request" | "access_request_decision" | "mention" | "discussion";
+export interface UserNotification { id: string; userId: string; type: UserNotificationType; title: string; body?: string; projectId?: string; accessRequestId?: string; threadId?: string; inApp: boolean; readAt?: string; createdAt: string; }
 export interface NotificationPreference { userId: string; type: UserNotificationType; inApp: boolean; email: boolean; updatedAt: string; }
 export interface NotificationDelivery { id: string; notificationId: string; userId: string; channel: "email"; status: "pending" | "sent" | "failed" | "suppressed"; attempts: number; recipientEmail: string; subject: string; text: string; nextAttemptAt?: string; lastError?: string; sentAt?: string; createdAt: string; updatedAt: string; }
 export interface AuditEvent { id: string; actorUserId?: string; action: string; resourceType: string; resourceId: string; requestId?: string; metadata?: Record<string, string>; createdAt: string; }
@@ -219,6 +219,7 @@ export interface ResolvedHarnessProfile {
 }
 
 export interface CommentThread {
+  scope?: "project";
   id: string;
   projectId: string;
   documentId: string;
@@ -232,8 +233,65 @@ export interface CommentThread {
   authorUserId: string;
   createdAt: string;
   updatedAt: string;
+  suggestion?: { replacement: string; status: "pending" | "accepted" | "rejected" | "withdrawn"; decidedByUserId?: string; decidedAt?: string };
+  review?: { sessionId: string; from: number; to: number };
 }
 export interface CommentMessage { id: string; threadId: string; authorUserId: string; body: string; mentionedUserIds?: string[]; createdAt: string; updatedAt: string; }
+export interface CommentThreadView extends CommentThread {
+  anchorStatus: "attached" | "orphaned" | "changed";
+  from?: number;
+  to?: number;
+  canComment: boolean;
+  canEdit: boolean;
+  messages: Array<CommentMessage & { authorName: string }>;
+}
+export interface ProjectAccess {
+  projectVersion?: number;
+  canCompile?: boolean;
+  role: ProjectRole;
+  userId?: string;
+  canWrite: boolean;
+  canComment: boolean;
+  canInvite: boolean;
+  canManage: boolean;
+  realtime: boolean;
+}
+export interface CollaboratorPresence { clientId: string; userId: string; name: string; color: string; path: string; line?: number; updatedAt: string; }
+
+export interface CollaborationReviewSession {
+  id: string;
+  projectId: string;
+  documentId: string;
+  path: string;
+  authorUserId: string;
+  baseUpdate: string;
+  baseContent: string;
+  draftContent: string;
+  fileVersion: number;
+  revision: number;
+  lastOperationId?: string;
+  recentOperations?: Array<{ id: string; inputHash: string }>;
+  liveConflict?: boolean;
+  closedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export type CollaborationReviewSessionView = Omit<CollaborationReviewSession, "baseUpdate"> & { pendingCount: number };
+export interface CollaborationCheckpoint {
+  projectVersion?: number;
+  discussionVersion?: string;
+  projectId: string;
+  oid: string;
+  label: string;
+  mainDocument: string;
+  createdByUserId?: string;
+  createdAt: string;
+  threads: Array<{ thread: CommentThread; from?: number; to?: number }>;
+  messages: CommentMessage[];
+  externalComments: ShareComment[];
+}
+export interface CollaborationVersion extends HistoryCommit { label: string; authorName: string; annotationsAvailable: boolean; }
+export interface CollaborationVersionPage { commits: CollaborationVersion[]; nextCursor: string | null; }
 
 export type PaperFileKind = "text" | "image" | "binary";
 

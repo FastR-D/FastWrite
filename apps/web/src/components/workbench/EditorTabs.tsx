@@ -22,7 +22,7 @@ interface EditorTabEntry {
   close: () => void;
 }
 
-export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, comparisons = [], activeComparison = null, onSelectComparison, onCloseComparison, settings }: { tabs: SourceTab[]; activePath: string | null; dirty: Record<string, boolean>; onSelect: (path: string) => void; onPin: (path: string) => void; onClose: (path: string) => void; comparisons?: ComparisonTab[]; activeComparison?: string | null; onSelectComparison?: (request: DiffRequest) => void; onCloseComparison?: (key: string) => void; settings?: { active: boolean; select: () => void; close: () => void } | undefined }) {
+export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, comparisons = [], activeComparison = null, onSelectComparison, onCloseComparison, documents = [], settings }: { tabs: SourceTab[]; activePath: string | null; dirty: Record<string, boolean>; onSelect: (path: string) => void; onPin: (path: string) => void; onClose: (path: string) => void; comparisons?: ComparisonTab[]; activeComparison?: string | null; onSelectComparison?: (request: DiffRequest) => void; onCloseComparison?: (key: string) => void; documents?: Array<{ id: string; label: string; active: boolean; select: () => void; close: () => void }>; settings?: { active: boolean; select: () => void; close: () => void } | undefined }) {
   const entries: EditorTabEntry[] = [
     ...tabs.map(tab => {
       const name = tab.path.split("/").pop()!;
@@ -59,6 +59,7 @@ export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, 
         close: () => onCloseComparison?.(tab.key)
       };
     }),
+    ...documents.map(document => ({ ...document, title: document.label, controls: document.id, icon: <Icon name={icons.book} aria-hidden />, preview: false, dirty: false, closeLabel: `关闭 ${document.label}`, pin: () => undefined })),
     ...(settings ? [{
       id: "settings",
       label: "设置",

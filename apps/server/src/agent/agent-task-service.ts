@@ -60,7 +60,7 @@ export class AgentTaskService {
     const intent = request.intent ?? commandIntent ?? (issues.length ? "revise" : classifyAgentIntent(objective, visibleDocuments));
     const normalizedRequest: AgentTaskRequest = { ...request, objective, intent };
     const workflow = /compile\s+repair|latex\s+error/i.test(objective) ? "compile-repair" : "revise";
-    const [skill, workflowInstructions, taskSkills] = await Promise.all([this.skills.load(project.skill, project.publicationTarget), this.skills.loadWorkflow(workflow), Promise.all((request.taskSkillIds ?? []).slice(0, 5).map((id) => this.skills.loadTask(id)))]);
+    const [skill, workflowInstructions, taskSkills] = await Promise.all([this.skills.load(project.skill, project.publicationTarget), this.skills.loadWorkflow(workflow), Promise.all([...new Set(request.taskSkillIds ?? [])].map((id) => this.skills.loadTask(id)))]);
     for (const taskSkill of taskSkills) {
       if (!taskSkill.descriptor.supportedIntents.includes(intent) || (request.scope.type !== taskSkill.descriptor.allowedScope && taskSkill.descriptor.allowedScope !== "project")) throw new ApiError(400, "agent_task_skill_scope_invalid", `Task Skill '${taskSkill.descriptor.id}' does not support this intent or scope`);
     }
@@ -135,7 +135,7 @@ export class AgentTaskService {
     const plannedSkill = plannedRun?.skill ?? project.skill;
     const plannedTarget = plannedRun?.publicationTarget;
     const workflow = /compile\s+repair|latex\s+error/i.test(plan.request.objective) ? "compile-repair" : "revise";
-    const [skill, workflowInstructions, taskSkills] = await Promise.all([this.skills.load(plannedSkill, plannedTarget), this.skills.loadWorkflow(workflow), Promise.all((plan.request.taskSkillIds ?? []).slice(0, 5).map((id) => this.skills.loadTask(id)))]);
+    const [skill, workflowInstructions, taskSkills] = await Promise.all([this.skills.load(plannedSkill, plannedTarget), this.skills.loadWorkflow(workflow), Promise.all([...new Set(plan.request.taskSkillIds ?? [])].map((id) => this.skills.loadTask(id)))]);
     const currentTaskSkills = taskSkills.map((item) => ({ id: item.descriptor.id, version: item.descriptor.version, digest: createHash("sha256").update(item.instructions).digest("hex") }));
     if ((plan.taskSkills ?? []).length !== currentTaskSkills.length || (plan.taskSkills ?? []).some((saved) => { const current = currentTaskSkills.find((item) => item.id === saved.id); return !current || current.version !== saved.version || current.digest !== saved.digest; })) throw new ApiError(409, "agent_task_skill_changed", "A selected Agent Task Skill changed; create a fresh plan before execution");
     const memory = this.memories ? await this.memories.fullAgentContext(projectId) : { content: "" };

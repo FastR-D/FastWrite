@@ -43,13 +43,30 @@ bun start
 
 写作质量接口：`POST /api/projects/:projectId/writing-checks` 执行确定性检查；`GET /api/projects/:projectId/argument-graph` 获取论证关系；`POST /api/projects/:projectId/adversarial-memo` 生成仅供参考的对抗预检意见。Claim 侧栏支持 stale claim 的 reanchor；Agent 生成候选会校验 Writing Guard 与 evidence dependencies；Review 报告会显示各 pass 的完成、失败或跳过状态。评测可运行 `bun run writing:eval`。
 
-工作区 Skill 面板可选择科学论文写作、文献综合、引用核验、结构化评审、学术表达精修、审稿回复和研究型内容写作等任务 Skill，最多同时选择 5 个。新增 Skill 的上游来源、授权、逐项取舍和实测结果见 [Agent 写作 Skill 调研](docs/RESEARCH-AGENT-WRITING-SKILLS-2026-11.md)。已登录本机 Codex 后，可运行 `bun run skills:eval:codex --phase=adapted`，直接复用 Codex 配置验证中英文合成写作样例；复现方式与结果边界见 [评测说明](evaluation/agent-writing-skills/README.md)。
+工作区 Skill 面板可打开中央只读 tab 查看每项完整内容，使用 header 右侧按钮确认或清空选择。可选择科学论文写作、文献综合、引用核验、结构化评审、学术表达精修、审稿回复和研究型内容写作等任务 Skill，可同时选择多个。新增 Skill 的上游来源、授权、逐项取舍和实测结果见 [Agent 写作 Skill 调研](docs/RESEARCH-AGENT-WRITING-SKILLS-2026-11.md)。已登录本机 Codex 后，可运行 `bun run skills:eval:codex --phase=adapted`，直接复用 Codex 配置验证中英文合成写作样例；复现方式与结果边界见 [评测说明](evaluation/agent-writing-skills/README.md)。
 
 科研帖子与收藏提炼的六个阶段入口已接入内置 Skill：文献入稿、搭建主线、撰写实验、解读结果、核对图注、全文复核。来源分析、适用边界和真实 Codex 验收见 [调研与集成记录](docs/RESEARCH-SOCIAL-WRITING-SKILLS-2026-11.md)；复测命令为 `bun run skills:eval:social`。
 
-IDE 的“参考论文”侧栏支持添加或拖放 PDF、包含 TeX/PDF 的 ZIP（上传上限 30 MB）。多入口压缩包需要选择主文件；解析后可按全文、章节、PDF 页码或原文选段设置参考范围，并选择借鉴结构、段落、论述或表达。保存后，写作区会显示参考标签；侧栏可指定当前选区、章节、文件或整篇论文作为写作目标。Draft/Continue/Agent 和 Revise 使用参考写法，超过局部精修长度限制的当前章节会交给限定章节范围的 Agent，结果继续通过原有 ChangeSet 审核；Completion 只读取已缓存的精简写法，可先点击“准备写作参考”。扫描 PDF 无文本时需要提供有文字层的 PDF 或 TeX 源码；首版不提供 OCR 或 TAR/RAR 导入。
+IDE 的“参考论文”侧栏支持上传或拖放 PDF、LaTeX（.tex/.latex）、包含 TeX/PDF 的 ZIP，也可粘贴 LaTeX 源码，或通过 DOI、arXiv ID、HTTPS 全文链接导入（文件上限 30 MB）。多入口压缩包需要选择主文件；解析后可按全文、章节、PDF 页码或原文选段设置参考范围，并选择借鉴结构、段落、论述或表达。保存后，写作区会显示参考标签；侧栏可指定当前选区、章节、文件或整篇论文作为写作目标。Draft/Continue/Agent 和 Revise 使用参考写法，超过局部精修长度限制的当前章节会交给限定章节范围的 Agent，结果继续通过原有 ChangeSet 审核；Completion 只读取已缓存的精简写法，可先点击“准备写作参考”。扫描 PDF 无文本时需要提供有文字层的 PDF 或 TeX 源码；DOI 导入需要可直接下载的 PDF 全文，不提供 OCR 或 TAR/RAR 导入。
 
 参考材料保存在 `FASTWRITE_DATA_DIR/projects/<projectId>/reference-papers/`，与正文 `workspace/` 分开，避免进入正文编译、GitHub 同步、Paper Memory 或事实证据。备份项目文件时需复制整个项目目录，包括参考材料；现有 JSON 数据库备份不包含原始文件或解析文件。普通论文 ZIP 导出仍只包含正文工作区。验证参考功能可运行 `bun test apps/server/src/references`、`bun run references:eval` 和构建后的 `bun run e2e:references`。配置真实模型后，`bun run references:eval -- --live` 会使用合成论文验证真实模型的参考写作链路。
+
+## 多人论文协作
+
+登录后打开项目，文本文件自动使用 Yjs 实时协作。顶部“协作”或左侧协作图标打开常驻面板：
+
+- **成员与分享**：查看在线成员及其文件、行号，点击跳转；邀请成员，调整编辑／审阅／查看权限，处理访问申请并转移所有权。所有者可创建只读或可评论的访客链接，填写链接说明、设置失效时间、复制或撤销链接。文件级 ACL 继续生效。
+- **编辑、审阅与查看**：在协作侧栏切换模式，编辑者可使用三种模式；审阅者默认进入跟踪修订模式，不能直接写正文或增删文件；查看者只读。审阅模式支持直接输入增删、撤销和自动保存，改动会成为带作者的待审核建议，接受前不改变正文或 PDF。
+- **讨论**：选择正文后发表评论或建议替换文本，也可选择“项目讨论”发送不关联选区的讨论。支持回复、@ 提及、搜索、文件／状态筛选、解决与重新打开。正文下划线及行号旁标记可打开讨论；提及与回复通知可直接跳转到讨论。
+- **修改建议**：有对应文件编辑权限的成员逐项接受或拒绝。原文发生重叠修改时，系统保留建议并阻止过期内容覆盖正文；可核对后重新关联选区。跟踪修订会同步合作者对正文的独立更改；已有修订被处理后，可保留本地副本并开始下一轮，剩余建议继续保留在讨论中。
+- **外部反馈与 PDF**：通过分享链接提交的访客反馈会出现在项目内，可定位并解决；访客姓名由其自行填写。审阅者与查看者自动读取团队最新成功编译的 PDF，不创建编译任务。服务端同时检查该 PDF 包含的源文件访问权限。
+- **历史版本**：保存命名版本，或查看服务端每分钟检查并保存的有变化协作状态。版本保留源文件、二进制附件、主文件设置、评论、修订状态及访客反馈，支持作者／时间显示、文件对比、单文件或整项目恢复。恢复前显示变化范围并自动保存副本；确认期间若正文或讨论改变，会要求刷新预览。恢复不会回退成员权限或分享设置。升级前的普通 Git 版本仍可查看和恢复源文件，但不含当时的讨论快照。
+
+断线时保留正文与修订的本地草稿，恢复连接后合并更新；正文的协作撤销只影响本人的编辑。AI ChangeSet 审批、普通文件保存、历史恢复及 GitHub 同步确认进入同一项目队列，更新同一协作文档并推送给在线成员。讨论、在线列表、权限、共享 PDF 和审阅草稿约每 3 秒刷新，正文与光标通过 WebSocket 实时同步。通知设置可分别控制评论提及及讨论回复／建议审批。
+
+部署仍遵循上文的单服务进程、单数据目录要求。匿名本机模式使用普通文件编辑；多人权限、邀请、修订与实时协作需要登录身份。单个修订草稿上限为 200 万字符、1,000 处更改；重叠输入保存在本地，需核对后继续。
+
+回归测试：`bun run test`、`bun run typecheck`、`bun run build`、`bun run security:check`。启动测试服务后设置 `FASTWRITE_E2E_URL`（默认 `http://127.0.0.1:3221`），运行 `bun run e2e:paper-collaboration`，使用独立作者、审阅者和查看者会话验证跟踪修订、实时广播、权限升级、离线合并、共享 PDF 及整项目恢复。
 
 ## 备份恢复
 

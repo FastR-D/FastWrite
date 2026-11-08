@@ -1,0 +1,8 @@
+.review { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: hidden; }
+.bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; gap: 8px; border-bottom: 1px solid var(--border); font-size: 11px; flex-shrink: 0; }
+.bar > span { display: flex; gap: 6px; align-items: center; color: var(--text-secondary); }
+.hint { margin: 0; padding: 6px 10px; color: var(--text-muted); font-size: 11px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.host { min-height: 0; flex: 1; }
+.notice { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; line-height: 1.6; background: var(--surface-hover); flex-shrink: 0; }
+.error { margin: 0; padding: 8px 10px; color: var(--danger, #bc3541); font-size: 12px; }
+.recoveries { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 11px; border-top: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; }

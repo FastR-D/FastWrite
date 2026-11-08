@@ -73,3 +73,13 @@ export function materializeTextHunks(before: string, hunks: TextHunk[]): string 
   }
   return result + before.slice(cursor);
 }
+
+/** Keep unchanged characters at the edges of a changed line out of a review. */
+export function buildReviewHunks(before: string, after: string): TextHunk[] {
+  return buildTextHunks(before, after).map(hunk => {
+    let prefix = 0, suffix = 0;
+    while (prefix < Math.min(hunk.before.length, hunk.after.length) && hunk.before[prefix] === hunk.after[prefix]) prefix++;
+    while (suffix < Math.min(hunk.before.length, hunk.after.length) - prefix && hunk.before[hunk.before.length - suffix - 1] === hunk.after[hunk.after.length - suffix - 1]) suffix++;
+    return { ...hunk, from: hunk.from + prefix, to: hunk.to - suffix, before: hunk.before.slice(prefix, hunk.before.length - suffix), after: hunk.after.slice(prefix, hunk.after.length - suffix) };
+  });
+}

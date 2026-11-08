@@ -115,3 +115,17 @@ test("a rejected reviewed merge preserves the result and its reviewed baseline",
   expect(session.baseContent).toBe("theirs");
   expect(session.dirty).toBe(true);
 });
+
+
+test("read-only observations never schedule saves or discard a pending local draft", async () => {
+  let writes = 0;
+  const session = new DocumentSession("p", "reader", "before", 1, async () => { writes++; return { version: 2 }; }, 10000);
+  session.observe("live remote text");
+  expect(session.content).toBe("live remote text");
+  expect(session.dirty).toBe(false);
+  await session.flush(); expect(writes).toBe(0);
+  session.edit("local draft before permission change");
+  session.observe("remote update", 3);
+  expect(session.content).toBe("local draft before permission change");
+  await session.flush();
+});

@@ -1,3 +1,5 @@
+import { BrandMark } from "../components/BrandMark";
+import { userFacingError } from "../lib/notifications";
 import { ProductLanding } from "../components/projects/ProductLanding";
 import { roleLabel, modelProviderLabel } from "../lib/labels";
 import { HarnessProfileEditor } from "../components/workspace/ProjectHarnessProfile";
@@ -53,9 +55,7 @@ export function ProjectsPage() {
     } catch (loadError) {
       if ((loadError as DOMException).name !== "AbortError")
         setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "无法加载项目",
+          userFacingError(loadError, "无法加载项目"),
         );
     } finally {
       setLoading(false);
@@ -93,9 +93,7 @@ export function ProjectsPage() {
     } catch (failure) {
       setInvitationState("error");
       setInvitationError(
-        failure instanceof Error
-          ? failure.message
-          : "无法接受邀请",
+        userFacingError(failure, "无法接受邀请"),
       );
     }
   }, [account, invitationState, invitationToken, loadProjects]);
@@ -132,7 +130,7 @@ export function ProjectsPage() {
       await loadProjects();
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "无法删除项目",
+        userFacingError(failure, "无法删除项目"),
       );
     } finally {
       setDeleting(null);
@@ -143,7 +141,7 @@ export function ProjectsPage() {
     <div className="projects-page">
       <header className="projects-topbar">
         <Link variant="inherit" className="brand" href="/projects">
-          <span className="brand__mark">F</span>
+          <BrandMark />
           <span>FastWrite</span>
         </Link>
         <div className="topbar-actions">
@@ -382,7 +380,7 @@ function AccountDialog({
       onAuthenticated(result.user);
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "无法完成认证",
+        userFacingError(failure, "无法完成认证"),
       );
     } finally {
       setLoading(false);
@@ -529,7 +527,7 @@ function TeamsDialog({
       setError("");
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "无法加载团队",
+        userFacingError(failure, "无法加载团队"),
       );
     }
   }, []);
@@ -546,9 +544,7 @@ function TeamsDialog({
       .then(setPolicy)
       .catch((failure) =>
         setError(
-          failure instanceof Error
-            ? failure.message
-            : "无法加载团队策略",
+          userFacingError(failure, "无法加载团队策略"),
         ),
       );
   }, [selected?.id, selected?.personalUserId]);
@@ -572,9 +568,7 @@ function TeamsDialog({
       setGroupBindings(bindings);
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法加载团队管理信息",
+        userFacingError(failure, "无法加载团队管理信息"),
       );
     }
   }, [selected?.id, selected?.personalUserId]);
@@ -591,7 +585,7 @@ function TeamsDialog({
       setSelectedId(created.id);
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "无法创建团队",
+        userFacingError(failure, "无法创建团队"),
       );
     } finally {
       setBusy(false);
@@ -604,9 +598,7 @@ function TeamsDialog({
       await api.teams.updatePolicy(selected.id, policy);
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法保存团队策略",
+        userFacingError(failure, "无法保存团队策略"),
       );
     } finally {
       setBusy(false);
@@ -632,9 +624,7 @@ function TeamsDialog({
       setInviteMessage("");
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法邀请团队成员",
+        userFacingError(failure, "无法邀请团队成员"),
       );
     } finally {
       setBusy(false);
@@ -651,9 +641,7 @@ function TeamsDialog({
       await loadGovernance();
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法更新团队成员",
+        userFacingError(failure, "无法更新团队成员"),
       );
     } finally {
       setBusy(false);
@@ -668,9 +656,7 @@ function TeamsDialog({
       await loadGovernance();
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法移除团队成员",
+        userFacingError(failure, "无法移除团队成员"),
       );
     } finally {
       setBusy(false);
@@ -689,9 +675,7 @@ function TeamsDialog({
       await loadGovernance();
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法更新邀请",
+        userFacingError(failure, "无法更新邀请"),
       );
     } finally {
       setBusy(false);
@@ -701,21 +685,21 @@ function TeamsDialog({
     if (!selected || !groupValue.trim()) return;
     setBusy(true);
     try { await api.teams.saveGroupBinding(selected.id, "new", { idpGroup: groupValue.trim(), role: groupRole }); setGroupValue(""); await loadGovernance(); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "无法保存身份服务用户组绑定"); }
+    catch (failure) { setError(userFacingError(failure, "无法保存身份服务用户组绑定")); }
     finally { setBusy(false); }
   };
   const previewGroupBinding = async () => {
     if (!selected || !groupValue.trim()) return;
     setBusy(true);
     try { setGroupPreview(await api.teams.previewGroupBindings(selected.id, [groupValue.trim()])); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "无法预览身份服务用户组绑定"); }
+    catch (failure) { setError(userFacingError(failure, "无法预览身份服务用户组绑定")); }
     finally { setBusy(false); }
   };
   const removeGroupBinding = async (id: string) => {
     if (!selected) return;
     setBusy(true);
     try { await api.teams.deleteGroupBinding(selected.id, id); await loadGovernance(); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "无法移除身份服务用户组绑定"); }
+    catch (failure) { setError(userFacingError(failure, "无法移除身份服务用户组绑定")); }
     finally { setBusy(false); }
   };
   const setAllowedProviders = (providers: string[]) =>
@@ -987,13 +971,14 @@ function NotificationsDialog({
       title: string;
       body?: string;
       projectId?: string;
+      threadId?: string;
       readAt?: string;
       createdAt: string;
     }>
   >([]);
   const [preferences, setPreferences] = useState<
     Array<{
-      type: "access_request" | "access_request_decision" | "mention";
+      type: "access_request" | "access_request_decision" | "mention" | "discussion";
       inApp: boolean;
       email: boolean;
     }>
@@ -1010,9 +995,7 @@ function NotificationsDialog({
       setError("");
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "无法加载通知",
+        userFacingError(failure, "无法加载通知"),
       );
     }
   }, []);
@@ -1042,6 +1025,7 @@ function NotificationsDialog({
             <strong>{notification.title.replace(/ requested access$/, " 申请访问项目").replace("You were mentioned in a comment", "有人在评论中提及了你").replace("Project access approved", "项目访问申请已批准").replace("Project access request declined", "项目访问申请已拒绝")}</strong>
             {notification.body ? ` ${notification.body.replace(/^Comment thread /, "评论讨论 ")}` : ""} ·{" "}
             {new Date(notification.createdAt).toLocaleString("zh-CN")}{" "}
+            {notification.projectId ? <Button size="small" variant="ghost" onClick={() => { onClose(); navigate(`${projectPath(notification.projectId!)}${notification.threadId ? `?discussion=${encodeURIComponent(notification.threadId)}` : ""}`); }}>{notification.threadId ? "查看讨论" : "打开项目"}</Button> : null}
             {!notification.readAt ? (
               <Button
                 size="small"
@@ -1074,9 +1058,10 @@ function NotificationsDialog({
   );
 }
 
-function notificationPreferenceLabel(type: "access_request" | "access_request_decision" | "mention") {
+function notificationPreferenceLabel(type: "access_request" | "access_request_decision" | "mention" | "discussion") {
   if (type === "access_request") return "访问申请";
   if (type === "access_request_decision") return "访问审批结果";
+  if (type === "discussion") return "讨论回复与建议审批";
   return "评论提及";
 }
 
@@ -1140,9 +1125,7 @@ function NewPaperDialog({
       );
     } catch (createError) {
       setError(
-        createError instanceof Error
-          ? createError.message
-          : "无法创建项目",
+        userFacingError(createError, "无法创建项目"),
       );
     } finally {
       setLoading(false);

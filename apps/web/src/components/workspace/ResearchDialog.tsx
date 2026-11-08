@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { statusLabel } from "../../lib/labels";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeSet, ClaimEvidenceLink, CitationReviewer, FastReadBundleReceipt, PaperClaim, PaperProject, ProjectResearchWorkDetails, ResearchRun, SourceEvidence, WorkspaceTreeNode } from "@fastwrite/shared";
@@ -344,5 +345,5 @@ function providerLabel(provider: string): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "文献请求失败";
+  return userFacingError(error, "文献请求失败");
 }

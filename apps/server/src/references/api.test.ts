@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { strToU8, zipSync } from "fflate";
 import type { AgentTaskPlanResponse, DraftPlanResponse, FileContentResponse, PaperProject, ReferencePaper, ReferenceSettings, ReviseResponse, StyleReferenceContext } from "@fastwrite/shared";
 import { createApplication } from "../app";
+import { referencePdf } from "./fixtures";
 import { referenceTestOutline, referenceTestProvider } from "./test-provider";
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });
@@ -12,7 +13,7 @@ const json = (method: string, body: unknown, token?: string): RequestInit => ({ 
 async function fixture(auth = false) {
   const directory = await mkdtemp(join(tmpdir(), "fastwrite-reference-api-")); directories.push(directory);
   const calls: Array<{ operation: string; input: unknown }> = [];
-  const app = await createApplication(directory, { agentProvider: referenceTestProvider(calls), features: { serverAuth: auth }, ...(auth ? { bootstrapAdmin: { email: "reference-admin@example.test", password: "reference-testing-password" } } : {}) });
+  const app = await createApplication(directory, { agentProvider: referenceTestProvider(calls), features: { serverAuth: auth }, referenceDownloader: async url => url.startsWith("https://api.crossref.org/works/") ? { bytes: new TextEncoder().encode(JSON.stringify({ message: { title: ["DOI reference"], link: [{ URL: "https://papers.example.test/example.pdf", "content-type": "application/pdf" }] } })), contentType: "application/json" } : { bytes: referencePdf([["Introduction", "Downloaded full paper text."]]), contentType: "application/pdf" }, ...(auth ? { bootstrapAdmin: { email: "reference-admin@example.test", password: "reference-testing-password" } } : {}) });
   const request = (path: string, init?: RequestInit) => app(new Request(`http://fastwrite.test${path}`, init));
   return { request, calls };
 }
@@ -29,6 +30,28 @@ async function ready(request: Awaited<ReturnType<typeof fixture>>["request"], ro
 }
 
 describe("reference writing API", () => {
+  test("DOI and arXiv imports become parsed project references and reject invalid identifiers", async () => {
+    const { request } = await fixture();
+    const project = await (await request("/api/projects", json("POST", { name: "Imported papers" }))).json() as PaperProject;
+    const root = `/api/projects/${project.id}`;
+    const response = await request(`${root}/reference-papers/import`, json("POST", { source: "10.1234/example" }));
+    expect(response.status).toBe(202); const paper = await response.json() as ReferencePaper;
+    expect(paper.title).toBe("DOI reference");
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const parsed = await request(`${root}/reference-papers/${paper.id}/text`);
+      if (parsed.status === 200) { expect((await parsed.json() as { text: string }).text).toContain("Downloaded full paper text."); break; }
+      if (attempt === 99) throw new Error("Imported paper did not become ready");
+      await Bun.sleep(5);
+    }
+    expect((await request(`${root}/reference-papers/import`, json("POST", { source: "arxiv:2301.12345v2" }))).status).toBe(202);
+    expect((await request(`${root}/reference-papers/import`, json("POST", { source: "not a paper" }))).status).toBe(400);
+    expect((await request(`${root}/reference-papers/import`, json("POST", { source: "https://127.0.0.1/private.pdf" }))).status).toBe(400);
+    const catalog = await (await request("/api/agent-skills")).json() as Array<{ id: string }>;
+    const detail = await request(`/api/agent-skills/${catalog[0]!.id}`);
+    expect(detail.status).toBe(200); expect((await detail.json() as { instructions: string }).instructions.length).toBeGreaterThan(100);
+    expect((await request("/api/agent-skills/missing-skill")).status).toBe(404);
+  });
+
   test("references reach revise, completion, Agent and Draft; approved plans freeze their context", async () => {
     const { request, calls } = await fixture();
     const project = await (await request("/api/projects", json("POST", { name: "Own manuscript" }))).json() as PaperProject;
@@ -76,6 +99,8 @@ describe("reference writing API", () => {
     for (const suffix of ["reference-papers", `reference-papers/${paper.id}/text`, `reference-papers/${paper.id}/source`, "reference-selections", "reference-profiles"]) expect((await request(`${root}/${suffix}`, { headers: { authorization: `Bearer ${other.token}` } })).status).toBe(403);
     expect((await request(`${root}/reference-profiles`, { method: "POST", headers: { authorization: `Bearer ${other.token}` } })).status).toBe(403);
     expect((await request(`${root}/reference-papers`)).status).toBe(401);
+    expect((await request(`${root}/reference-papers/import`, json("POST", { source: "2301.12345" }))).status).toBe(401);
+    expect((await request(`${root}/reference-papers/import`, json("POST", { source: "2301.12345" }, other.token))).status).toBe(403);
     const otherProject = await (await request("/api/projects", json("POST", { name: "Other" }, other.token))).json() as PaperProject;
     expect((await request(`/api/projects/${otherProject.id}/reference-papers/${paper.id}/text`, { headers: { authorization: `Bearer ${other.token}` } })).status).toBe(404);
     const selected = { referenceId: paper.id, parseRevision: 1, scope: { type: "full" }, aspects: ["structure"] };

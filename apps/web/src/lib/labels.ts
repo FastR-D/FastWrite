@@ -64,7 +64,7 @@ export function statusLabel(value: string | null | undefined): string { return v
 
 const ROLE_LABELS: Readonly<Record<string, string>> = {
   user: "用户", support_auditor: "支持审计员", platform_admin: "平台管理员",
-  owner: "所有者", maintainer: "维护者", editor: "编辑者", commenter: "评论者", viewer: "查看者", member: "成员", admin: "管理员"
+  owner: "所有者", maintainer: "维护者", editor: "编辑者", commenter: "审阅者", viewer: "查看者", member: "成员", admin: "管理员"
 };
 export function roleLabel(value: string): string { return ROLE_LABELS[value] ?? value; }
 

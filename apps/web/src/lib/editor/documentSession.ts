@@ -64,6 +64,14 @@ export class DocumentSession {
     return true;
   }
 
+  /** Read-only live views observe CRDT state without scheduling a write. */
+  observe(content: string, version = this.serverVersion) {
+    if (this.dirty || this.running) return;
+    this.content = this.baseContent = content;
+    this.serverVersion = Math.max(this.serverVersion, version);
+    this.emit();
+  }
+
   /** User-reviewed resolution rebases the next conditional save; it is not an ACK. */
   resolveConflict(content: string, serverContent: string, serverVersion: number, expectedRevision: number) {
     if (this.running) throw new Error("仍有保存操作正在进行，请等待完成后再应用对比结果。");

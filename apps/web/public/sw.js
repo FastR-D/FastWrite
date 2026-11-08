@@ -1,4 +1,4 @@
-const CACHE = "fastwrite-shell-v2";
+const CACHE = "fastwrite-shell-v3";
 const SHELL = ["/", "/index.html", "/manifest.webmanifest", "/busytex.js", "/busytex.wasm", "/worker.js"];
 
 self.addEventListener("install", (event) => {

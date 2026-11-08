@@ -2,7 +2,10 @@
 .content > * { flex-shrink: 0; }
 .hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 .list { display: flex; flex-direction: column; gap: 8px; }
-.item { padding: 10px 8px; border: 1px solid var(--border); border-radius: 4px; }
+.item { position: relative; padding: 10px 8px; border: 1px solid var(--border); border-radius: 4px; }
+.headerActions { display: flex; align-items: center; gap: 3px; }
+.detailButton { position: absolute; top: 4px; right: 4px; }
+.details strong { padding-right: 24px; }
 .item > label { align-items: flex-start; width: 100%; }
 .details { min-width: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; line-height: 1.5; }
 .details strong { color: var(--vscode-foreground); font-size: 13px; }
@@ -10,3 +13,8 @@
 .actions { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
 .stages { display: flex; flex-direction: column; gap: 8px; }
 .stageButtons { display: flex; flex-wrap: wrap; gap: 6px; }
+.document { min-width: 0; min-height: 0; height: 100%; overflow: auto; padding: 20px 28px; background: var(--vscode-editor-background); }
+.document header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.document h2 { margin: 0; font-size: 18px; }
+.document header span, .document > p { color: var(--text-muted); font-size: 12px; }
+.document pre { margin: 20px 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.8 var(--font-mono, monospace); tab-size: 2; }

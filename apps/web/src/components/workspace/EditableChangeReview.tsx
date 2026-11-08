@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useEffect, useState } from "react";
 import type { TextChange } from "@fastwrite/shared";
 import * as monaco from "../../lib/editor/monacoRuntime";
@@ -37,7 +38,7 @@ export function EditableChangeReview({ change, busy, readOnly = false, editingDi
       await onSave!(draft);
       setEditing(false);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "无法保存已编辑的建议内容");
+      setError(userFacingError(failure, "无法保存已编辑的建议内容"));
     } finally {
       setSaving(false);
     }

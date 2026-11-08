@@ -1,15 +1,14 @@
+import { userFacingError } from "./notifications";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentTaskSkillDescriptor } from "@fastwrite/shared";
 import { api } from "../api/client";
-
-export const MAX_TASK_SKILLS = 5;
 
 function storageKey(projectId: string) { return `fastwrite.task-skills:${projectId}`; }
 
 function readSelection(projectId: string): string[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(storageKey(projectId)) ?? "[]");
-    return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string"))].slice(0, MAX_TASK_SKILLS) : [];
+    return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string"))] : [];
   } catch { return []; }
 }
 
@@ -28,13 +27,13 @@ export function useTaskSkills(projectId: string, revision: number) {
     void api.agentSkills.list(controller.signal).then(items => {
       if (!controller.signal.aborted) { setSkills(items); setLoaded(true); }
     }).catch(failure => {
-      if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "无法加载内置 Skill");
+      if (!controller.signal.aborted) setError(userFacingError(failure, "无法加载内置 Skill"));
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [projectId, revision]);
 
   const setSelectedIds = useCallback((ids: string[]) => {
-    const next = [...new Set(ids)].filter(id => skills.some(skill => skill.id === id)).slice(0, MAX_TASK_SKILLS);
+    const next = [...new Set(ids)].filter(id => skills.some(skill => skill.id === id));
     setSelections(current => ({ ...current, [projectId]: next }));
     try { localStorage.setItem(storageKey(projectId), JSON.stringify(next)); } catch { /* Keep the selection for this session if storage is unavailable. */ }
   }, [projectId, skills]);

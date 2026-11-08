@@ -1,5 +1,5 @@
 import * as monaco from "./monacoRuntime";
-import { normalizeWorkspacePath, type FileContentResponse, type SaveFileResponse } from "@fastwrite/shared";
+import { normalizeWorkspacePath, type FileContentResponse, type SaveFileResponse, type ProjectAccess } from "@fastwrite/shared";
 import { api } from "../../api/client";
 import { CollaborationProvider } from "./collaborationProvider";
 import { DocumentSession } from "./documentSession";
@@ -15,6 +15,8 @@ export interface DocumentEntry {
   references: number;
   lastAccess: number;
   mode: "rest" | "collaboration";
+  readOnly: boolean;
+  access?: ProjectAccess;
   collaboration?: CollaborationProvider;
   persist?: (snapshot: { content: string; baseVersion: number; revision: number }) => Promise<Pick<SaveFileResponse, "file">>;
   recoveries: RecoveryDraft[];
@@ -72,12 +74,13 @@ export class DocumentRegistry {
     if (!path) throw new Error("请提供文档路径");
     const model = monaco.editor.createModel(document.content, languageForPath(path), monaco.Uri.from({ scheme: "fastwrite", authority: this.projectId, path: `/${path}` }));
     const session = new DocumentSession(this.projectId, path, document.content, document.file.version, async snapshot => {
+      if (created.readOnly) throw new Error("你当前只有阅读或审阅权限，本地更改已保留。");
       const result = await (created.persist ? created.persist(snapshot) : api.projects.saveFile(this.projectId, path, { content: snapshot.content, baseVersion: snapshot.baseVersion }));
       created.file = result.file;
       void Promise.resolve().then(() => { if (!this.closed) return this.onSaved?.({ file: result.file, content: snapshot.content }); }).catch(() => undefined);
       return { version: result.file.version };
     });
-    const created: DocumentEntry = { session, model, file: document.file, viewState: null, applyingExternal: false, references: 0, lastAccess: performance.now(), mode: "rest", recoveries: [], draftLoading: true, draftReady: Promise.resolve(), draftWrites: Promise.resolve(), dispose: () => undefined };
+    const created: DocumentEntry = { session, model, file: document.file, viewState: null, applyingExternal: false, references: 0, lastAccess: performance.now(), mode: "rest", readOnly: true, recoveries: [], draftLoading: true, draftReady: Promise.resolve(), draftWrites: Promise.resolve(), dispose: () => undefined };
     this.entries.set(key, created);
     const change = model.onDidChangeContent(() => {
       if (!created.applyingExternal && created.mode === "rest") session.edit(model.getValue());
@@ -93,7 +96,11 @@ export class DocumentRegistry {
     created.draftReady = this.recoverDrafts(created).catch(error => { created.draftError = error; this.emit(created); throw error; });
     created.draftWrites = created.draftReady;
     void created.draftReady.catch(() => undefined);
-    if (localStorage.getItem("fastwrite.collaboration.enabled") === "true") this.enableCollaboration(created);
+    void api.projects.access(this.projectId, path).then(access => {
+      if (this.closed || created.model.isDisposed()) return;
+      if (access.realtime) this.enableCollaboration(created);
+      this.setAccess(created, access);
+    }).catch(error => { if (!this.closed) { created.draftError = error; this.emit(created); } });
     this.emit(created);
     return created;
   }
@@ -149,6 +156,11 @@ export class DocumentRegistry {
     const file = await api.projects.createFile(this.projectId, normalized, content);
     void Promise.resolve().then(() => this.onSaved?.({ file, content })).catch(() => undefined);
     return file;
+  }
+
+  setAccess(entry: DocumentEntry, access: ProjectAccess) {
+    entry.access = access; entry.readOnly = !access.canWrite;
+    this.emit(entry);
   }
 
   enableCollaboration(entry: DocumentEntry) {

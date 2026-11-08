@@ -27,6 +27,9 @@ const RUNTIME_GENERATED = new Set([
   "fastwrite-remote-line",
   "fastwrite-remote-label",
   "fastwrite-remote-cursor",
+  "fastwrite-remote-caret",
+  "fastwrite-remote-selection",
+  ...[0, 1, 2, 3, 4].map(index => `remote-color-${index}`),
   // vscrui's own Button renders this, and one of our rules uses it inside
   // `:not()` to exempt vscrui buttons from the app's styling.
   "vscrui-button",

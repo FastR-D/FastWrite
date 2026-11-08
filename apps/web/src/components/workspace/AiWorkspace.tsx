@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { statusLabel } from "../../lib/labels";
 import type { AgentTaskRequest, AgentTaskSkillDescriptor, ReferencePaper, ReferenceSettings } from "@fastwrite/shared";
 import type { ReferenceWriteAction } from "./ReferenceStylePanel";
@@ -199,7 +200,7 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
     try {
       const candidate = await api.structuredCandidates.propose(project.id, { kind: structuredKind, targetPath: structuredPath, sourceFormat: structuredKind === "equation" && structuredFormat === "csv" ? "latex" : structuredFormat, source: structuredSource });
       setStructuredCandidate(candidate);
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "无法生成结构化候选内容"); }
+    } catch (failure) { setError(userFacingError(failure, "无法生成结构化候选内容")); }
     finally { setStructuredBusy(false); }
   };
   const compileStructured = async () => {
@@ -208,7 +209,7 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
     try {
       const result = await api.structuredCandidates.compileCheck(project.id, structuredCandidate.changeSet.id);
       setStructuredCandidate((current) => current ? { ...current, compileCheck: { status: result.status, message: result.message } } : current);
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "无法验证候选内容"); }
+    } catch (failure) { setError(userFacingError(failure, "无法验证候选内容")); }
     finally { setStructuredBusy(false); }
   };
 
@@ -248,7 +249,7 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
       setState("idle");
     } catch (failure) {
       if ((failure as DOMException).name === "AbortError") return;
-      setError(failure instanceof Error ? failure.message : "修改失败");
+      setError(userFacingError(failure, "修改失败"));
       setState("error");
     }
   };
@@ -279,7 +280,7 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
         inputRef.current?.focus();
       }
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "无法应用此审核决定");
+      setError(userFacingError(failure, "无法应用此审核决定"));
       setState("error");
     }
   };
@@ -295,7 +296,7 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
       await onFileChanged(change.path, { from: change.from, to: change.from + change.before.length });
       resetChat();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "无法回滚此次修改");
+      setError(userFacingError(failure, "无法回滚此次修改"));
       setState("error");
     }
   };
@@ -374,7 +375,7 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
       <div hidden={activeTab !== "revise"} className="revise-chat">
         {selection ? <aside className="revise-context-strip"><span>{selection.path} · 行 {selection.startLine}–{selection.endLine}</span><p title={selection.text}>{selection.text}</p><IconButton label="清除所选上下文" icon={<Icon name={icons.close} />} onClick={onClearSelection} /></aside> : null}
         <div ref={messagesRef} className="revise-chat__messages" aria-live="polite">
-          {!selection ? <div className="revise-chat__empty"><Icon name={icons.sparkle} /><strong>在编辑器中选择文本</strong><span>选择句子、使用光标所在段落，或修改当前章节。对话期间将保留所选上下文。</span>{paragraphSelection ? <Button size="small" variant="primary" onClick={() => onUseSelection(paragraphSelection)}>使用当前段落</Button> : null}{sectionSelection ? <Button size="small" variant="secondary" onClick={() => onUseSelection(sectionSelection)}>使用当前章节</Button> : null}</div> : null}
+          {!selection ? <div className="revise-chat__empty"><Icon name={icons.sparkle} /><strong>在编辑器中选择文本</strong><span>选择句子、使用光标所在段落，或修改当前章节。对话期间将保留所选上下文。</span><div className="revise-chat__targets">{paragraphSelection ? <Button size="small" variant="primary" onClick={() => onUseSelection(paragraphSelection)}>使用当前段落</Button> : null}{sectionSelection ? <Button size="small" variant="secondary" onClick={() => onUseSelection(sectionSelection)}>使用当前章节</Button> : null}</div></div> : null}
           {messages.map((message, index) => <article className={`revise-message revise-message--${message.role}`} key={message.id}>
             <span>{message.role === "assistant" ? <><Icon name={icons.robot} /> {project.skill.name}</> : "你"}</span>
             {message.role === "assistant" && index === messages.length - 1 && changeSet ? <>
@@ -394,7 +395,6 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
             <Button variant="ghost" className="revise-shortcut" icon={<Icon name={icons.ellipsis} />} disabled={!selection || busy} onClick={() => setActionsOpen(true)}>更多操作</Button>
           </div>
           <div className="revise-composer__input"><TextArea ref={inputRef} rows={2} value={instruction} onChange={setInstruction} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (selection && instruction.trim() && !busy) void propose(); } }} placeholder={selection ? "提出进一步修改要求…" : "在编辑器中选择文本以开始…"} disabled={!selection || busy} aria-label="修改要求" /><Button variant="primary" size="small" icon={<Icon name={icons.send} />} loading={busy} disabled={!selection || !instruction.trim() || busy} type="submit">发送</Button></div>
-          <small>每轮回复都会优化当前候选内容，接受后才会修改文件。</small>
         </form>
       </div>
       <div hidden={activeTab !== "agent"} className="agent-workspace-slot"><AgentTaskWorkspace key={agentSeed.planId ?? "default"} open={activeTab === "agent"} project={project} taskSkills={taskSkills} taskSkillsLoading={taskSkillsLoading} taskSkillIds={taskSkillIds} onTaskSkillIdsChange={onTaskSkillIdsChange} references={referenceSettings?.selections ?? []} seed={{ ...agentSeed, harness: selectedHarness, scope: taskScope }} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onAccepted={onFileChanged} onNavigate={onNavigate} /></div>

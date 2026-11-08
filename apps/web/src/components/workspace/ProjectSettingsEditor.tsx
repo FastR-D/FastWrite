@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { statusLabel } from "../../lib/labels";
 import { useEffect, useMemo, useState } from "react";
 import { isIgnoredWorkspacePath, WRITING_PROFILES, type AgentWireApi, type PaperProject, type ProjectAclAction, type PublicationTarget, type PublishedSkillDescriptor, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
@@ -101,7 +102,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
       await onSaved(updated);
       setSaved(true);
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "无法更新项目");
+      setError(userFacingError(saveError, "无法更新项目"));
     } finally {
       setLoading(false);
     }
@@ -118,7 +119,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
     try {
       await persistAgentSettings(decision.body);
     } catch (saveError) {
-      setAgentError(saveError instanceof Error ? saveError.message : "无法保存智能助手设置");
+      setAgentError(userFacingError(saveError, "无法保存智能助手设置"));
     } finally {
       setSavingAgent(false);
     }
@@ -142,13 +143,13 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
     setAclError("");
     setAclBusy(true);
     try { await api.projects.saveAcl(project.id, "new", aclDraft); setAclRules(await api.projects.acl(project.id)); setAclDraft((current) => ({ ...current, pathPrefix: "" })); }
-    catch (failure) { setAclError(failure instanceof Error ? failure.message : "无法保存路径规则"); }
+    catch (failure) { setAclError(userFacingError(failure, "无法保存路径规则")); }
     finally { setAclBusy(false); }
   };
   const removeAcl = async (ruleId: string) => {
     setAclError(""); setAclBusy(true);
     try { await api.projects.deleteAcl(project.id, ruleId); setAclRules((rules) => rules.filter((rule) => rule.id !== ruleId)); }
-    catch (failure) { setAclError(failure instanceof Error ? failure.message : "无法移除路径规则"); }
+    catch (failure) { setAclError(userFacingError(failure, "无法移除路径规则")); }
     finally { setAclBusy(false); }
   };
 
@@ -246,7 +247,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
             <h2 id="backup-settings-title">历史与导出</h2>
             <p className={styles.description}>保存工作历史，并下载可迁移的副本。</p>
         <div className="settings-export"><div><strong>自动记录 Git 历史</strong><span>成功保存后，将在 FastWrite 项目历史中创建本地 Git 检查点。</span></div></div>
-        <div className="settings-export"><div><strong>工作区快照</strong><span>将全部源文件下载为可迁移的 tar.gz 压缩包。</span></div><Button loading={exporting} onClick={() => { setExporting(true); setError(""); void downloadFile(api.projects.exportUrl(project.id), `fastwrite-${project.id}.tar.gz`).catch(failure => setError(failure instanceof Error ? failure.message : "无法导出工作区")).finally(() => setExporting(false)); }}><Icon name={icons.cloudDownload} />导出</Button></div>
+        <div className="settings-export"><div><strong>工作区快照</strong><span>将全部源文件下载为可迁移的 tar.gz 压缩包。</span></div><Button loading={exporting} onClick={() => { setExporting(true); setError(""); void downloadFile(api.projects.exportUrl(project.id), `fastwrite-${project.id}.tar.gz`).catch(failure => setError(userFacingError(failure, "无法导出工作区"))).finally(() => setExporting(false)); }}><Icon name={icons.cloudDownload} />导出</Button></div>
           </section>
         </div>
       </div>

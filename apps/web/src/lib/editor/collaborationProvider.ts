@@ -28,6 +28,7 @@ export class CollaborationProvider {
   private localRevision = 0;
   private persistedRevision = 0;
   private persistTail: Promise<unknown> = Promise.resolve();
+  private renewTimer: ReturnType<typeof setTimeout> | undefined;
   private metadataTimer: ReturnType<typeof setTimeout> | undefined;
   get dirty() { return this.localRevision > this.persistedRevision; }
   private attempts = 0;
@@ -45,7 +46,7 @@ export class CollaborationProvider {
   constructor(readonly projectId: string, readonly entry: DocumentEntry, private readonly changed: () => void) {
     this.initialContent = entry.model.getValue();
     this.modelSubscription = entry.model.onDidChangeContent((event: monaco.editor.IModelContentChangedEvent) => {
-      if (this.applying || entry.applyingExternal) return;
+      if (this.applying || entry.applyingExternal || entry.readOnly) return;
       if (this.initialized) {
         this.applying = true;
         try { this.doc.transact(() => {
@@ -62,6 +63,7 @@ export class CollaborationProvider {
     this.doc.getText("content").observe(this.onText);
     this.doc.on("update", this.onUpdate);
     this.doc.on("beforeAllTransactions", this.captureSelections);
+    this.awareness.setLocalState({ user: {} });
     this.awareness.on("update", this.onAwareness);
     window.addEventListener("online", this.online);
     void this.ready().catch(() => undefined);
@@ -82,30 +84,32 @@ export class CollaborationProvider {
     if (this.documentId && this.documentId !== state.documentId) throw new Error("协作文档已被替换，已保留本地文本用于比较。");
     if (state.fileVersion < this.entry.session.serverVersion) throw new Error("文件在协作之外发生了更改，已保留本地文本，请先比较再重新连接。");
     this.documentId = state.documentId;
-    if (!this.persistence) this.persistence = new IndexeddbPersistence(`fastwrite-collaboration:${this.projectId}:${state.documentId}`, this.doc);
-    await this.persistence.whenSynced;
+    if (!this.entry.readOnly && !this.persistence) this.persistence = new IndexeddbPersistence(`fastwrite-collaboration:${this.projectId}:${state.documentId}`, this.doc);
+    await this.persistence?.whenSynced;
     if (this.disposed) return;
     Y.applyUpdate(this.doc, fromBase64(state.update), REMOTE);
     const text = this.doc.getText("content");
     const pending = this.entry.model.getValue();
-    if (pending !== this.initialContent) {
-      if (text.toString() !== this.initialContent) throw new Error("初始化期间本地内容与协作文档均有更改，已保留本地文本用于比较。");
+    const baseline = this.entry.session.dirty ? this.entry.session.baseContent : this.initialContent;
+    if (!this.entry.readOnly && pending !== baseline) {
+      if (text.toString() !== baseline && text.toString() !== pending) throw new Error("初始化期间本地内容与协作文档均有更改，已保留本地文本用于比较。");
       // Reconcile only the changed range, retaining CRDT identities for untouched text.
       let start = 0, end = 0;
-      while (start < Math.min(pending.length, this.initialContent.length) && pending[start] === this.initialContent[start]) start++;
-      while (end < Math.min(pending.length, this.initialContent.length) - start && pending[pending.length - end - 1] === this.initialContent[this.initialContent.length - end - 1]) end++;
-      this.doc.transact(() => { text.delete(start, this.initialContent.length - start - end); text.insert(start, pending.slice(start, pending.length - end)); }, LOCAL);
+      while (start < Math.min(pending.length, baseline.length) && pending[start] === baseline[start]) start++;
+      while (end < Math.min(pending.length, baseline.length) - start && pending[pending.length - end - 1] === baseline[baseline.length - end - 1]) end++;
+      if (text.toString() !== pending) this.doc.transact(() => { text.delete(start, baseline.length - start - end); text.insert(start, pending.slice(start, pending.length - end)); }, LOCAL);
     }
     this.initialized = true;
     // Cached updates can be textually identical while carrying new CRDT identities/deletes.
     // Confirm the entire recovered state even when DocumentSession has no textual edit.
-    this.localRevision++;
+    if (!this.entry.readOnly) this.localRevision++;
     clearTimeout(this.metadataTimer);
     this.metadataTimer = setTimeout(() => {
       if (this.dirty && !this.entry.session.dirty && !this.entry.session.saving) void this.persist().catch(error => { this.error = error; this.changed(); });
     }, 850);
     this.replaceModel(text.toString());
-    this.entry.session.edit(text.toString());
+    if (this.entry.readOnly) this.entry.session.observe(text.toString(), state.fileVersion);
+    else this.entry.session.edit(text.toString());
     this.state = "cached"; this.error = null; this.changed();
     void this.connect();
   }
@@ -163,11 +167,12 @@ export class CollaborationProvider {
     this.applying = this.entry.applyingExternal = true;
     try { model.applyEdits(edits); this.restoreSelections(); }
     finally { this.applying = this.entry.applyingExternal = false; }
-    this.entry.session.edit(model.getValue());
+    if (this.entry.readOnly) this.entry.session.observe(model.getValue());
+    else this.entry.session.edit(model.getValue());
     this.changed();
   };
   private onUpdate = (update: Uint8Array, origin: unknown) => {
-    if (origin === REMOTE || !this.initialized && origin !== LOCAL) return;
+    if (this.entry.readOnly || origin === REMOTE || !this.initialized && origin !== LOCAL) return;
     this.localRevision++;
     clearTimeout(this.metadataTimer);
     this.metadataTimer = setTimeout(() => {
@@ -187,9 +192,8 @@ export class CollaborationProvider {
     this.changed();
   };
   private online = () => { void this.ready().then(() => { void this.connect(); return this.entry.session.flush(); }).catch(() => undefined); };
-  private tokenIsExpired() { return this.tokenExpiresAt > 0 && Date.now() >= this.tokenExpiresAt - 2_000; }
   private async connect() {
-    if (this.disposed || this.tokenExpired || this.tokenIsExpired() || this.connecting || this.socket && this.socket.readyState < WebSocket.CLOSING) return;
+    if (this.disposed || this.tokenExpired || this.connecting || this.socket && this.socket.readyState < WebSocket.CLOSING) return;
     this.connecting = true;
     this.state = "connecting"; this.changed();
     try {
@@ -199,6 +203,8 @@ export class CollaborationProvider {
       Y.applyUpdate(this.doc, fromBase64(state.update), REMOTE);
       const grant = await api.projects.collaborationToken(this.projectId, this.entry.session.path);
       this.tokenExpiresAt = Date.parse(grant.expiresAt);
+      clearTimeout(this.renewTimer);
+      this.renewTimer = setTimeout(() => { this.socket?.close(1000, "Renew collaboration token"); }, Math.max(1_000, this.tokenExpiresAt - Date.now() - 30_000));
       if (this.disposed) return;
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const socket = new WebSocket(`${protocol}//${location.host}/api/collaboration/socket?clientId=${this.clientId}&token=${encodeURIComponent(grant.token)}`);
@@ -222,13 +228,15 @@ export class CollaborationProvider {
     finally { this.connecting = false; }
   }
   private scheduleReconnect() {
-    if (this.disposed || this.tokenExpired || this.reconnectTimer) return;
-    this.state = "offline"; this.changed();
+    if (this.disposed || this.reconnectTimer) return;
+    this.state = this.tokenExpired ? "conflict" : "offline"; if (this.tokenExpired) this.error = new Error("协作权限已变更，请刷新页面；本地更改已保留。"); this.changed();
+    if (this.tokenExpired) return;
     this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; void this.connect(); }, Math.min(1000 * 2 ** this.attempts++, 30000));
   }
 
   async persist() {
     await this.ready();
+    if (this.entry.readOnly) throw new Error("当前文件为只读，无法保存更改。");
     if (this.disposed || !this.documentId || this.state === "conflict") throw this.error ?? new Error("协作暂不可用");
     const update = toBase64(Y.encodeStateAsUpdate(this.doc));
     const revision = this.localRevision, documentId = this.documentId;
@@ -245,6 +253,14 @@ export class CollaborationProvider {
     return operation;
   }
   async flush() { await this.ready(); if (this.dirty) await this.persist(); }
+  async reconnect() {
+    await this.ready();
+    this.tokenExpired = false;
+    this.error = null;
+    clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
+    if (this.socket && this.socket.readyState < WebSocket.CLOSING) this.socket.close(1000, "Reconnect");
+    else { this.socket = undefined; await this.connect(); }
+  }
   async refresh() {
     await this.ready();
     const state = await api.projects.collaboration(this.projectId, this.entry.session.path);
@@ -261,7 +277,7 @@ export class CollaborationProvider {
       this.awareness.setLocalStateField("cursor", { anchor: toBase64(Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, model.getOffsetAt(selection.getSelectionStart())))), head: toBase64(Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, model.getOffsetAt(selection.getPosition())))) });
     });
     const keys = editor.onKeyDown(event => {
-      if (event.browserEvent.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+      if (this.entry.readOnly || editor.getOption(monaco.editor.EditorOption.readOnly) || event.browserEvent.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey) return;
       const key = event.browserEvent.key.toLowerCase();
       if (key !== "z" && key !== "y") return;
       event.preventDefault(); event.stopPropagation();
@@ -269,15 +285,26 @@ export class CollaborationProvider {
     });
     return () => { cursor.dispose(); keys.dispose(); this.editors.delete(editor); };
   }
+  relativeRange(start: string, end: string) {
+    if (!this.initialized) return;
+    try {
+      const from = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(fromBase64(start)), this.doc)?.index;
+      const to = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(fromBase64(end)), this.doc)?.index;
+      if (from !== undefined && to !== undefined && to >= from) return { from, to };
+    } catch { /* Orphaned anchors are handled by the review panel. */ }
+  }
   peers() {
     return [...this.awareness.getStates()].filter(([id]) => id !== this.doc.clientID).flatMap(([id, state]) => {
       if (typeof state.user?.name !== "string") return [];
-      let offset: number | undefined;
+      let offset: number | undefined, anchor: number | undefined;
       try { if (typeof state.cursor?.head === "string") offset = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(fromBase64(state.cursor.head)), this.doc)?.index; } catch { /* Invalid remote cursor has no position. */ }
-      return [{ clientId: String(id), name: state.user.name as string, path: this.entry.session.path, ...(offset === undefined ? {} : { line: this.entry.model.getPositionAt(offset).lineNumber }) }];
+      try { if (typeof state.cursor?.anchor === "string") anchor = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(fromBase64(state.cursor.anchor)), this.doc)?.index; } catch { /* Ignore invalid selections. */ }
+      const color = /^#[0-9a-f]{6}$/i.test(state.user.color) ? state.user.color as string : "#2563eb";
+      return [{ clientId: String(id), color, ...(offset === undefined ? {} : { offset, anchor: anchor ?? offset }), name: state.user.name as string, path: this.entry.session.path, ...(offset === undefined ? {} : { line: this.entry.model.getPositionAt(offset).lineNumber }) }];
     });
   }
   dispose() {
+    clearTimeout(this.renewTimer);
     this.disposed = true; clearTimeout(this.reconnectTimer); clearTimeout(this.metadataTimer); window.removeEventListener("online", this.online);
     this.modelSubscription.dispose(); this.doc.getText("content").unobserve(this.onText); this.doc.off("update", this.onUpdate);
     this.doc.off("beforeAllTransactions", this.captureSelections);

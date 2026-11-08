@@ -41,7 +41,7 @@ export interface ReferencePaper {
   projectId: string;
   title: string;
   sourceName: string;
-  sourceKind: "pdf" | "tex-zip" | "pdf-zip";
+  sourceKind: "pdf" | "tex" | "tex-zip" | "pdf-zip";
   sourceHash: string;
   status: "parsing" | "needs-input" | "ready" | "failed";
   parseRevision: number;

@@ -14,3 +14,6 @@
 .pdf { display: flex; flex-direction: column; gap: 12px; max-height: 70vh; overflow: auto; align-items: center; }
 .tags { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; padding: 6px 12px; }
 .tag { border: 1px solid var(--border, #444); border-radius: 4px; padding: 3px 6px; max-width: 100%; overflow-wrap: anywhere; }
+
+.importForm { display: flex; flex-direction: column; min-width: 0; gap: 14px; }
+.importForm textarea { font-family: var(--font-mono, monospace); }

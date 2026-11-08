@@ -1,8 +1,11 @@
-import type { ReferenceSelection } from "@fastwrite/shared";
+import { userFacingError } from "../../lib/notifications";
+import type { CommentThreadView, ReferenceSelection } from "@fastwrite/shared";
 import type { NavigationRequest } from "../../lib/editor/navigationController";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type MutableRefObject } from "react";
 import * as monaco from "../../lib/editor/monacoRuntime";
-import { configureMonaco } from "../../lib/editor/monaco";
+import { compactGutterOptions, configureMonaco } from "../../lib/editor/monaco";
+import { ReviewEditor } from "./ReviewEditor";
+import type { ProjectAccess } from "@fastwrite/shared";
 import { Icon, icons } from "../ui";
 import type { CompletionKind, CompletionResponse, FileContentResponse, SourceLocation, TextSelection } from "@fastwrite/shared";
 import { api, ApiClientError } from "../../api/client";
@@ -27,7 +30,14 @@ function recordCompletionMetric(event: CompletionMetricEvent, kind: CompletionKi
   }
 }
 
+export type WritingMode = "editing" | "reviewing" | "viewing";
 interface SourceEditorProps {
+  writingMode?: WritingMode | "auto";
+  onModeChange?: (mode: WritingMode) => void;
+  comments?: CommentThreadView[];
+  activeCommentId?: string;
+  onCommentClick?: (id: string) => void;
+  onReviewSaved?: () => void;
   references?: ReferenceSelection[];
   completionEnabled: boolean;
   registry: DocumentRegistry;
@@ -45,7 +55,17 @@ export interface SourceEditorHandle {
   flush: () => Promise<void>;
 }
 
-export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ references, completionEnabled, registry, projectId, document, targetLine, targetSelection, onSelection, onCursor, onDirtyChange, onDocumentState }, ref) {
+export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ writingMode = "auto", comments = [], activeCommentId, onCommentClick, onReviewSaved, onModeChange, references, completionEnabled: completionsEnabled, registry, projectId, document, targetLine, targetSelection, onSelection, onCursor, onDirtyChange, onDocumentState }, ref) {
+  const [access, setAccess] = useState<ProjectAccess | null>(null);
+  const defaultMode = access?.canWrite ? "editing" : access?.canComment ? "reviewing" : "viewing";
+  const mode = writingMode === "auto" || (writingMode === "editing" && !access?.canWrite) || (writingMode === "reviewing" && !access?.canComment) ? defaultMode : writingMode;
+  useEffect(() => { onModeChange?.(mode); }, [mode, onModeChange]);
+  const completionEnabled = completionsEnabled && mode === "editing";
+  const reviewRef = useRef<{ flush: () => Promise<void> }>(null);
+  const modeRef = useRef(mode); modeRef.current = mode;
+  const commentRef = useRef({ comments, onCommentClick }); commentRef.current = { comments, onCommentClick };
+  const commentDecorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
+  const [readOnly, setReadOnly] = useState(true);
   const referenceKey = JSON.stringify(references ?? []);
   const referenceKeyRef = useRef(referenceKey);
   referenceKeyRef.current = referenceKey;
@@ -86,7 +106,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   const [completionLoading, setCompletionLoading] = useState(false);
   const [completionError, setCompletionError] = useState("");
   const [collaborationEnabled, setCollaborationEnabled] = useState(() => localStorage.getItem("fastwrite.collaboration.enabled") === "true");
-  const [collaborators, setCollaborators] = useState<Array<{ clientId: string; name: string; color?: string; path: string; line?: number }>>([]);
+  const [collaborators, setCollaborators] = useState<Array<{ clientId: string; name: string; color?: string; path: string; line?: number; offset?: number; anchor?: number }>>([]);
   const completionKind: CompletionKind = "auto";
 
   documentRef.current = document;
@@ -109,7 +129,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   };
   useEffect(() => { cancelCompletion(); setCompletion(null); setCompletionError(""); }, [referenceKey]);
 
-  const flush = () => registry.flush();
+  const flush = async () => { await registry.flush(); if (mode === "reviewing") await reviewRef.current?.flush(); };
 
   useImperativeHandle(ref, () => ({ flush }));
 
@@ -131,6 +151,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     configureMonaco();
     const editor = monaco.editor.create(host, {
       model: null,
+      readOnly: true,
       theme: currentTheme() === "dark" ? "fastwrite-github-dark" : "fastwrite-github",
       ariaLabel: `源文件编辑器： ${documentRef.current.file.path}`,
       automaticLayout: true,
@@ -143,7 +164,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       fontFamily: 'ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
       fontSize: 13,
       lineHeight: 22,
-      glyphMargin: false,
+      ...compactGutterOptions,
       folding: false,
       guides: { indentation: false, bracketPairs: true },
       renderLineHighlight: "line",
@@ -161,7 +182,14 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     decorationsRef.current = editor.createDecorationsCollection();
     completionDecorationsRef.current = editor.createDecorationsCollection();
     collaboratorDecorationsRef.current = editor.createDecorationsCollection();
+    commentDecorationsRef.current = editor.createDecorationsCollection();
     disposablesRef.current = [
+      editor.onMouseDown(event => {
+        if (event.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS || !event.target.position) return;
+        const model = editor.getModel(); if (!model) return;
+        const thread = commentRef.current.comments.find(item => item.path === currentPathRef.current && item.status !== "resolved" && item.from !== undefined && model.getPositionAt(item.from).lineNumber === event.target.position!.lineNumber);
+        if (thread) commentRef.current.onCommentClick?.(thread.id);
+      }),
       editor.onDidChangeModelContent(() => {
         if (!sessionsRef.current.get(activeKeyRef.current)?.applyingExternal) contentChangeRef.current();
       }),
@@ -179,6 +207,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       decorationsRef.current?.clear();
       completionDecorationsRef.current?.clear();
       collaboratorDecorationsRef.current?.clear();
+      commentDecorationsRef.current?.clear();
       const entry = sessionsRef.current.get(activeKeyRef.current);
       if (entry) entry.viewState = editor.saveViewState();
       editor.setModel(null);
@@ -194,13 +223,16 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   useEffect(() => registry.subscribe(entry => {
     if (entry.session.key !== activeKeyRef.current) return;
     const session = entry.session;
+    setAccess(entry.access ?? null);
+    setReadOnly(entry.readOnly);
+    editorRef.current?.updateOptions({ readOnly: entry.readOnly || modeRef.current !== "editing" });
     if (versionRef.current !== session.serverVersion) setSaveEpoch(value => value + 1);
     versionRef.current = session.serverVersion;
     setCollaborators(entry.collaboration?.peers() ?? []);
     setCollaborationEnabled(entry.mode === "collaboration");
     const error = session.error ?? entry.collaboration?.error ?? entry.draftError;
     setStatus(error ? error instanceof ApiClientError && error.status === 409 ? "conflict" : !navigator.onLine || error instanceof TypeError ? "offline" : "error" : session.saving ? "saving" : registry.dirtyEntry(entry) ? "dirty" : "saved");
-    setMessage(error instanceof Error ? error.message : "");
+    setMessage(userFacingError(error, ""));
   }), [registry]);
 
   useEffect(() => {
@@ -227,13 +259,15 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       decorationsRef.current?.clear();
       completionDecorationsRef.current?.clear();
     }
-    editor.updateOptions({ ariaLabel: `源文件编辑器： ${document.file.path}` });
+    setAccess(entry.access ?? null);
+    setReadOnly(entry.readOnly);
+    editor.updateOptions({ readOnly: entry.readOnly || modeRef.current !== "editing", ariaLabel: `源文件编辑器： ${document.file.path}` });
     versionRef.current = entry.session.serverVersion;
     setStatus(entry.session.error ? "error" : entry.session.saving ? "saving" : registry.dirtyEntry(entry) ? "dirty" : "saved");
-    setMessage(entry.session.error instanceof Error ? entry.session.error.message : "");
+    setMessage(userFacingError(entry.session.error, ""));
     setCompletion(null);
 
-    if (!shouldCompleteRef.current || !completionEnabled) return;
+    if (entry.readOnly || !shouldCompleteRef.current || !completionEnabled) return;
     shouldCompleteRef.current = false;
     const expected = { ...(references ? { references } : {}), path: document.file.path, cursor: cursorRef.current, fileVersion: versionRef.current, kind: completionKind };
     completionTimerRef.current = window.setTimeout(async () => {
@@ -251,7 +285,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       } catch (error) {
         const stillCurrent = expected.path === currentPathRef.current && expected.fileVersion === versionRef.current && expected.cursor === cursorRef.current;
         if (stillCurrent && (error as DOMException).name !== "AbortError" && !(error instanceof ApiClientError && error.status === 409)) {
-          setCompletionError(error instanceof Error ? error.message : "补全暂不可用");
+          setCompletionError(userFacingError(error, "补全暂不可用"));
           recordCompletionMetric("error", completionKind);
         }
       } finally {
@@ -262,6 +296,8 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       }
     }, 500);
   }, [completionEnabled, document.content, document.file.path, document.file.version, editorReady, projectId, saveEpoch, registry, collaborationEnabled, referenceKey]);
+
+  useEffect(() => { editorRef.current?.updateOptions({ readOnly: readOnly || mode !== "editing" }); onSelectionRef.current(null); }, [mode, readOnly]);
 
   useEffect(() => {
     const reconnect = () => { for (const { session } of sessionsRef.current.values()) if (session.dirty) void session.flush().catch(() => undefined); };
@@ -278,8 +314,25 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   useEffect(() => {
     const model = modelRef.current; const decorations = collaboratorDecorationsRef.current;
     if (!model || !decorations || !collaborationEnabled) { decorations?.clear(); return; }
-    decorations.set(collaborators.filter((item) => item.path === document.file.path && item.line).map((item) => { const lineNumber = Math.max(1, Math.min(item.line!, model.getLineCount())); return { range: new monaco.Range(lineNumber, 1, lineNumber, 1), options: { isWholeLine: true, className: "fastwrite-remote-line", glyphMarginClassName: "fastwrite-remote-cursor", hoverMessage: { value: `${item.name} 正在此处编辑` }, before: { content: `${item.name} `, inlineClassName: "fastwrite-remote-label" } } }; }));
+    const palette = ["#2563eb", "#059669", "#c2410c", "#7c3aed", "#be123c"];
+    decorations.set(collaborators.filter(item => item.path === document.file.path && item.offset !== undefined).flatMap(item => {
+      const head = model.getPositionAt(item.offset!);
+      const color = Math.max(0, palette.indexOf(item.color ?? ""));
+      const caret = { range: new monaco.Range(head.lineNumber, head.column, head.lineNumber, head.column), options: { beforeContentClassName: `fastwrite-remote-caret remote-color-${color}`, hoverMessage: { value: `${item.name} 正在此处阅读或编辑` }, showIfCollapsed: true, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } };
+      if (item.anchor === undefined || item.anchor === item.offset) return [caret];
+      const from = model.getPositionAt(Math.min(item.anchor, item.offset!)), to = model.getPositionAt(Math.max(item.anchor, item.offset!));
+      return [caret, { range: new monaco.Range(from.lineNumber, from.column, to.lineNumber, to.column), options: { className: `fastwrite-remote-selection remote-color-${color}`, hoverMessage: { value: item.name } } }];
+    }));
   }, [collaborationEnabled, collaborators, document.file.path, document.file.version, editorReady]);
+
+  useEffect(() => {
+    const model = modelRef.current, decorations = commentDecorationsRef.current;
+    if (!model || !decorations) return;
+    decorations.set(comments.filter(thread => thread.path === document.file.path && thread.status !== "resolved" && thread.from !== undefined && thread.to !== undefined).map(thread => ({
+      range: rangeFromOffsets(model, thread.from!, thread.to!),
+      options: { inlineClassName: thread.id === activeCommentId ? "fastwrite-comment-range is-active" : "fastwrite-comment-range", linesDecorationsClassName: "fastwrite-comment-glyph", linesDecorationsTooltip: thread.messages[0]?.body ?? "查看讨论", stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges }
+    })));
+  }, [comments, activeCommentId, document.file.path, editorReady]);
 
   useEffect(() => {
     const model = modelRef.current;
@@ -334,7 +387,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     const next = completionRef.current;
     const editor = editorRef.current;
     const model = modelRef.current;
-    if (!next || !editor || !model || next.path !== currentPathRef.current || next.fileVersion !== versionRef.current || next.cursor !== cursorRef.current) return;
+    if (readOnly || mode !== "editing" || !next || !editor || !model || next.path !== currentPathRef.current || next.fileVersion !== versionRef.current || next.cursor !== cursorRef.current) return;
     suppressNextCompletionRef.current = true;
     const suffix = completionSuffix(next.suggestion, model.getValueInRange(new monaco.Range(1, 1, model.getPositionAt(next.cursor).lineNumber, model.getPositionAt(next.cursor).column)));
     if (!suffix) { ignoreCompletion(); return; }
@@ -370,7 +423,9 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       if (event.key === "Escape" && completionRef.current) { event.preventDefault(); event.stopPropagation(); ignoreCompletion(); }
 
     }}>
-      <div ref={hostRef} className="monaco-editor-host" />
+      <div ref={hostRef} className="monaco-editor-host" hidden={mode === "reviewing"} />
+      {mode === "reviewing" && access?.userId ? <ReviewEditor key={`${projectId}:${document.file.path}:${access.userId}`} ref={reviewRef} projectId={projectId} path={document.file.path} userId={access.userId} onSaved={() => onReviewSaved?.()} /> : null}
+      {readOnly && mode !== "reviewing" ? <div className="editor-readonly-notice" role="status">只读模式 · 可选择文本、查看讨论，审阅者可发表评论和修改建议</div> : null}
       {completionLoading ? <span className="sr-only" role="status">正在生成写作补全…</span> : null}
       {completionError ? <div className="editor-message editor-message--error" role="alert">{completionError}</div> : null}
       {completion ? <span className="sr-only" role="status">有可用的写作建议，按 Tab 接受，按 Esc 忽略。</span> : null}

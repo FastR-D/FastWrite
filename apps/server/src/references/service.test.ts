@@ -29,6 +29,18 @@ async function importTex(f: Awaited<ReturnType<typeof fixture>>, bytes = texZip(
 }
 
 describe("reference writing resources", () => {
+  test("standalone LaTeX uploads and pasted source parse without changing the manuscript", async () => {
+    const f = await fixture(), version = f.workspaces.getProject(f.project.id).version;
+    const bytes = strToU8("\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nStandalone reference prose.\n\\end{document}");
+    const paper = await f.service.upload(f.project.id, "Standalone.latex", bytes);
+    await f.jobs.settled(paper.jobId!);
+    expect(f.service.get(f.project.id, paper.id)).toMatchObject({ sourceKind: "tex", status: "ready", title: "Standalone" });
+    expect((await f.service.parsed(f.project.id, paper.id)).text).toContain("Standalone reference prose.");
+    expect((await f.service.preview(f.project.id, paper.id)).type).toBe("text/plain; charset=utf-8");
+    expect((await f.service.upload(f.project.id, "Pasted.tex", bytes)).id).toBe(paper.id);
+    expect(f.workspaces.getProject(f.project.id).version).toBe(version);
+    await expect(f.service.upload(f.project.id, "Broken.tex", strToU8("<html>Not LaTeX</html>"))).rejects.toThrow("有效 LaTeX");
+  });
   test("task quota rejection preserves uploaded source so parsing can be retried", async () => {
     const f = await fixture();
     const jobs = new InProcessJobQueue({ limits: { total: 1 } });

@@ -1,3 +1,5 @@
+import { BrandMark } from "../components/BrandMark";
+import { userFacingError } from "../lib/notifications";
 import { statusLabel, roleLabel } from "../lib/labels";
 import { HarnessProfileEditor } from "../components/workspace/ProjectHarnessProfile";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
@@ -38,7 +40,7 @@ export function AdminPage() {
       setSupportAccess(nextSupportAccess);
       setPlatformRole(currentUser.platformRole);
     } catch (failure) {
-      setError(failure instanceof ApiClientError && failure.status === 403 ? "需要管理员权限。" : failure instanceof Error ? failure.message : "无法加载管理数据。");
+      setError(failure instanceof ApiClientError && failure.status === 403 ? "需要管理员权限。" : userFacingError(failure, "无法加载管理数据。"));
     } finally { setLoading(false); }
   }, []);
 
@@ -51,7 +53,7 @@ export function AdminPage() {
       if (operation === "disable") await api.admin.disableUser(userId, reason); else await api.admin.revokeSessions(userId, reason);
       setReason("");
       await load();
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "管理操作失败。"); }
+    } catch (failure) { setError(userFacingError(failure, "管理操作失败。")); }
     finally { setBusyUserId(""); }
   };
 
@@ -62,19 +64,19 @@ export function AdminPage() {
       await api.admin.updatePlatformRole(userId, role, reason);
       setReason("");
       await load();
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "管理操作失败。"); }
+    } catch (failure) { setError(userFacingError(failure, "管理操作失败。")); }
     finally { setBusyUserId(""); }
   };
 
   const canManageAccounts = platformRole === "platform_admin";
-  const retryJob = async (jobId: string) => { setRetryingJobId(jobId); setError(""); try { await api.admin.retryJob(jobId); await load(); } catch (failure) { setError(failure instanceof Error ? failure.message : "无法重试任务。"); } finally { setRetryingJobId(""); } };
-  const createBackup = async () => { setError(""); try { const result = await api.admin.createBackup(); setBackup(result); } catch (failure) { setError(failure instanceof Error ? failure.message : "备份失败。"); } };
-  const decideSupport = async (item: SupportAccessRequest, approved: boolean) => { setSupportBusyId(item.id); setError(""); try { const result = await api.admin.decideSupportAccess(item.id, approved); if (result.token) window.prompt("这是一次性支持访问令牌，请立即复制，之后不会再次显示。", result.token); await load(); } catch (failure) { setError(failure instanceof Error ? failure.message : "支持访问审批失败。"); } finally { setSupportBusyId(""); } };
-  const revokeSupport = async (item: SupportAccessRequest) => { setSupportBusyId(item.id); setError(""); try { await api.admin.revokeSupportAccess(item.id); await load(); } catch (failure) { setError(failure instanceof Error ? failure.message : "无法撤销支持访问。"); } finally { setSupportBusyId(""); } };
+  const retryJob = async (jobId: string) => { setRetryingJobId(jobId); setError(""); try { await api.admin.retryJob(jobId); await load(); } catch (failure) { setError(userFacingError(failure, "无法重试任务。")); } finally { setRetryingJobId(""); } };
+  const createBackup = async () => { setError(""); try { const result = await api.admin.createBackup(); setBackup(result); } catch (failure) { setError(userFacingError(failure, "备份失败。")); } };
+  const decideSupport = async (item: SupportAccessRequest, approved: boolean) => { setSupportBusyId(item.id); setError(""); try { const result = await api.admin.decideSupportAccess(item.id, approved); if (result.token) window.prompt("这是一次性支持访问令牌，请立即复制，之后不会再次显示。", result.token); await load(); } catch (failure) { setError(userFacingError(failure, "支持访问审批失败。")); } finally { setSupportBusyId(""); } };
+  const revokeSupport = async (item: SupportAccessRequest) => { setSupportBusyId(item.id); setError(""); try { await api.admin.revokeSupportAccess(item.id); await load(); } catch (failure) { setError(userFacingError(failure, "无法撤销支持访问。")); } finally { setSupportBusyId(""); } };
 
   return <main className="admin-page">
     <header className="admin-page__header">
-      <Link variant="inherit" className="brand" href="/"><span className="brand__mark">F</span><span>FastWrite</span></Link>
+      <Link variant="inherit" className="brand" href="/"><BrandMark /><span>FastWrite</span></Link>
       <div><ThemeToggle /><Link className="admin-page__back" href="/">项目</Link></div>
     </header>
     <section className="admin-page__intro"><div><span>平台管理</span><h1>操作记录</h1></div><Button variant="secondary" icon={<Icon name={icons.refresh} />} loading={loading} onClick={() => void load()}>刷新</Button></section>

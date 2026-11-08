@@ -3,7 +3,7 @@ import type { DatabaseState } from "../storage/database";
 
 export function createNotification(
   state: DatabaseState,
-  input: { userId: string; type: UserNotificationType; title: string; body?: string; projectId?: string; accessRequestId?: string }
+  input: { userId: string; type: UserNotificationType; title: string; body?: string; projectId?: string; accessRequestId?: string; threadId?: string }
 ): UserNotification {
   const now = new Date().toISOString();
   const preference = state.notificationPreferences.find((item) => item.userId === input.userId && item.type === input.type);
@@ -36,6 +36,6 @@ export function createNotification(
 }
 
 export function notificationPreferences(state: DatabaseState, userId: string) {
-  const types: UserNotificationType[] = ["access_request", "access_request_decision", "mention"];
+  const types: UserNotificationType[] = ["access_request", "access_request_decision", "mention", "discussion"];
   return types.map((type) => state.notificationPreferences.find((item) => item.userId === userId && item.type === type) ?? { userId, type, inApp: true, email: false, updatedAt: "" });
 }

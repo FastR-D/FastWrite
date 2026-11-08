@@ -30,7 +30,7 @@ try {
   await page.getByRole('navigation', { name: "工作区视图" }).getByRole('button', { name: '参考论文', exact: true }).click();
   const panel = page.locator('#sidebar-reference-style');
   const archive = await (await context.request.get(`${base}/__reference_e2e__/archive`)).body();
-  await panel.getByLabel('添加参考论文', { exact: true }).setInputFiles({ name: 'Structure-example.zip', mimeType: 'application/zip', buffer: archive });
+  await panel.getByLabel('参考论文文件', { exact: true }).setInputFiles({ name: 'Structure-example.zip', mimeType: 'application/zip', buffer: archive });
   await panel.getByRole('button', { name: '启用并保存参考范围', exact: true }).waitFor();
   await choose(panel, '参考论文范围', '指定章节');
   await panel.getByRole('checkbox', { name: 'Introduction', exact: true }).check();
@@ -88,7 +88,7 @@ try {
     await route.fulfill({ json: { ...expectedCompletion, suggestion: 'OLD_REFERENCE_STYLE' } }).catch(() => {});
   });
   await page.getByText("补全", { exact: true }).click();
-  assert.ok(await page.getByRole('checkbox', { name: "补全", exact: true }).isChecked());
+  assert.equal(await page.getByRole('button', { name: '补全', exact: true }).getAttribute('aria-pressed'), 'true');
   await editor.focus(); await editor.press('Control+End'); await editor.press('Space');
   await Promise.race([started, new Promise((_, reject) => setTimeout(() => reject(new Error('Completion did not start')), 10000))]);
   assert.equal(expectedCompletion.references.length, 1);

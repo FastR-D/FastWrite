@@ -13,7 +13,7 @@ export interface McpExecutionContext {
 }
 
 export class McpToolService {
-  constructor(private readonly registry: McpRegistry, private readonly workspaces: WorkspaceService, private readonly compiler?: LatexCompileService, private readonly database?: JsonDatabase) {}
+  constructor(private readonly registry: McpRegistry, private readonly workspaces: WorkspaceService, private readonly compiler?: Pick<LatexCompileService, "compile">, private readonly database?: JsonDatabase) {}
 
   async call(projectId: string, name: string, input: unknown, policy: McpPermissionPolicy, context: McpExecutionContext = {}): Promise<unknown> {
     const startedAt = Date.now();

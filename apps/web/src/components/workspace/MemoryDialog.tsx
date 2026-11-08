@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { statusLabel } from "../../lib/labels";
 import { useEffect, useMemo, useState } from "react";
 import type { PaperMemory, PaperProject } from "@fastwrite/shared";
@@ -111,4 +112,4 @@ function candidateEntries(memory: PaperMemory | null): Candidate[] {
   return entries.filter((entry) => !entry.current || entry.current !== entry.proposed);
 }
 
-function message(error: unknown) { return error instanceof Error ? error.message : "论文记忆请求失败"; }
+function message(error: unknown) { return userFacingError(error, "论文记忆请求失败"); }

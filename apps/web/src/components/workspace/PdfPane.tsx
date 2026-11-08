@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -8,7 +9,7 @@ import { parseLatexDiagnostics, parseSyncTex, pdfToSource, sourceToPdf, type Lat
  * a descendant selector outranks the component's own hashed rule.
  */
 import { Button, Icon, IconButton, TextField, icons } from "../ui";
-import { api } from "../../api/client";
+import { api, ApiClientError } from "../../api/client";
 import { fitPdfPageScale, MAX_PDF_SCALE, MIN_PDF_SCALE } from "./pdfScale";
 import { compilerLogExcerpt, shouldAutoCompile, type CompileFailureContext } from "./compileRepair";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -19,7 +20,9 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 export type CompileState = "idle" | "loading" | "compiling" | "success" | "error";
 export interface CompileStateReport { state: CompileState; compiledVersion: number | null; renderedPages?: number; failure?: CompileFailureContext; diagnostics: LatexDiagnostic[]; log: string; progress: string }
 
-export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile, mainDocument, tree, sourceLocation, compileRequest, onCompileState, onFixWithAgent, onSyncToSource }: { projectId: string; projectVersion: number; buffersDirty: boolean; beforeCompile: () => Promise<void>; mainDocument: string; tree: WorkspaceTreeNode[]; sourceLocation: SourceLocation | null; compileRequest: number; onCompileState: (report: CompileStateReport) => void; onFixWithAgent: (failure: CompileFailureContext) => void; onSyncToSource: (location: SourceLocation) => void }) {
+export function PdfPane({ canCompile = true, projectId, projectVersion, buffersDirty, beforeCompile, mainDocument, tree, sourceLocation, compileRequest, onCompileState, onFixWithAgent, onSyncToSource }: { canCompile?: boolean; projectId: string; projectVersion: number; buffersDirty: boolean; beforeCompile: () => Promise<void>; mainDocument: string; tree: WorkspaceTreeNode[]; sourceLocation: SourceLocation | null; compileRequest: number; onCompileState: (report: CompileStateReport) => void; onFixWithAgent: (failure: CompileFailureContext) => void; onSyncToSource: (location: SourceLocation) => void }) {
+  const sharedSnapshot = useRef("");
+  const compiledVersionRef = useRef<number | null>(null);
   const beforeCompileRef = useRef(beforeCompile);
   beforeCompileRef.current = beforeCompile;
   const paneRef = useRef<HTMLElement>(null);
@@ -83,6 +86,7 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
   }, []);
 
   const compile = useCallback(async () => {
+    if (!canCompile) return;
     hasCompiledRef.current = true;
     setLastAttemptedVersion(projectVersion);
     abortRef.current?.abort();
@@ -134,6 +138,8 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
       setPdfUrl(nextUrl);
       setPageCount(0);
       pageDimensions.current.clear();
+      compiledVersionRef.current = result.projectVersion;
+      sharedSnapshot.current = result.snapshotId;
       setCompiledVersion(result.projectVersion);
       setState("success");
       setResourcePercent(null);
@@ -158,25 +164,56 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
       runningRef.current = false;
       setState("error");
       setResourcePercent(null);
-      setProgress(error instanceof Error ? error.message : "编译失败");
+      setProgress(userFacingError(error, "编译失败"));
 
     }
-  }, [mainDocument, projectId, projectVersion]);
+  }, [canCompile, mainDocument, projectId, projectVersion]);
 
   useEffect(() => {
-    if (hasCompiledRef.current) return;
+    if (!canCompile || hasCompiledRef.current) return;
     void compile();
-  }, [compile]);
+  }, [canCompile, compile]);
 
   useEffect(() => {
-    if (buffersDirty || !shouldAutoCompile(hasCompiledRef.current, lastAttemptedVersion, projectVersion)) return;
+    if (!canCompile || buffersDirty || !shouldAutoCompile(hasCompiledRef.current, lastAttemptedVersion, projectVersion)) return;
     if (autoCompileTimerRef.current) window.clearTimeout(autoCompileTimerRef.current);
     setProgress("已保存更改 · 等待重新编译…");
     autoCompileTimerRef.current = window.setTimeout(() => void compile(), 1_200);
     return () => {
       if (autoCompileTimerRef.current) window.clearTimeout(autoCompileTimerRef.current);
     };
-  }, [buffersDirty, compile, lastAttemptedVersion, projectVersion]);
+  }, [canCompile, buffersDirty, compile, lastAttemptedVersion, projectVersion]);
+
+  useEffect(() => {
+    if (canCompile) return;
+    const controller = new AbortController();
+    let running = false;
+    const load = async () => {
+      if (running || document.visibilityState === "hidden") return;
+      running = true;
+      try {
+        const result = await api.compiledPreview(projectId, sharedSnapshot.current || undefined, controller.signal);
+        if (controller.signal.aborted) return;
+        if (!result?.pdfBase64) { if (!pdfUrlRef.current) setProgress("等待有编辑权限的成员编译论文"); return; }
+        if ((compiledVersionRef.current ?? 0) > result.projectVersion) return;
+        const next = URL.createObjectURL(new Blob([new Uint8Array(base64ToBytes(result.pdfBase64))], { type: "application/pdf" }));
+        if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+        pdfUrlRef.current = next; sharedSnapshot.current = result.snapshotId; compiledVersionRef.current = result.projectVersion;
+        setPdfUrl(next); setPageCount(0); pageDimensions.current.clear(); setCompiledVersion(result.projectVersion);
+        setCompiledWorkspacePaths(result.workspacePaths); setLog(result.log);
+        setSyncTex(result.syncTexData ? parseSyncTex(result.syncTexData, { mainDocument, workspacePaths: result.workspacePaths }) : null);
+        setState("success"); setProgress("项目共享 PDF");
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          if (error instanceof ApiClientError && [401, 403].includes(error.status)) { if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current); pdfUrlRef.current = null; sharedSnapshot.current = ""; compiledVersionRef.current = null; setPdfUrl(null); setCompiledVersion(null); setState("idle"); }
+          setProgress(userFacingError(error, "无法加载项目 PDF"));
+        }
+      }
+      finally { running = false; }
+    };
+    void load(); const interval = setInterval(() => { void load(); }, 3_000);
+    return () => { controller.abort(); clearInterval(interval); };
+  }, [canCompile, projectId, mainDocument]);
 
   useEffect(() => { onCompileState({ state, compiledVersion, diagnostics: visibleDiagnostics, log, progress, ...(pageCount > 0 ? { renderedPages: pageCount } : {}), ...(failure ? { failure } : {}) }); }, [compiledVersion, failure, log, onCompileState, pageCount, progress, state, visibleDiagnostics]);
 
@@ -246,7 +283,7 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
   const diagnosticLabel = diagnosticErrors ? `${diagnosticErrors} 项错误` : diagnosticWarnings ? `${diagnosticWarnings} 项警告` : "编译日志";
   const toggleFullscreen = () => {
     if (document.fullscreenElement) void document.exitFullscreen();
-    else void paneRef.current?.requestFullscreen().catch((error: unknown) => setProgress(error instanceof Error ? error.message : "无法进入 PDF 全屏"));
+    else void paneRef.current?.requestFullscreen().catch((error: unknown) => setProgress(userFacingError(error, "无法进入 PDF 全屏")));
   };
   return (
     <section ref={paneRef} className="pdf-pane" aria-label="PDF 预览">
@@ -270,7 +307,7 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
         <CompileStatusIcon state={state} />
         <span>{buffersDirty ? "有未保存的更改 · PDF 定位已过期" : progress}</span>
         {failure ? <Button variant="ghost" className="compile-fix-agent" icon={<Icon name={icons.tools} />} onClick={() => onFixWithAgent(failure)}>使用智能助手修复</Button> : null}
-        {isRunning ? <Button variant="ghost" onClick={cancel}>取消</Button> : <Button variant="ghost" onClick={() => void compile()}>{buffersDirty ? "保存并编译" : pdfUrl ? "重新编译" : "编译"}</Button>}
+        {canCompile ? isRunning ? <Button variant="ghost" onClick={cancel}>取消</Button> : <Button variant="ghost" onClick={() => void compile()}>{buffersDirty ? "保存并编译" : pdfUrl ? "重新编译" : "编译"}</Button> : null}
         {log ? <span className="compile-strip__diagnostics">{diagnosticLabel}</span> : null}
       </div>
       <div ref={containerRef} className={`pdf-canvas ${pdfUrl ? "" : "pdf-canvas--empty"}`} role="region" aria-label="PDF 预览" tabIndex={0} onScroll={(event) => {
@@ -289,10 +326,10 @@ export function PdfPane({ projectId, projectVersion, buffersDirty, beforeCompile
             loading={<PdfLoading label="正在加载 PDF…" />}
             error={<PdfError label={pdfError || "无法显示编译后的 PDF。"} />}
             onLoadSuccess={({ numPages }) => { setPdfError(""); setPageCount(numPages); setCurrentPage(1); }}
-            onLoadError={(error) => { const message = error instanceof Error ? error.message : String(error); setPdfError(message); setProgress(`PDF 预览失败： ${message}`); setLog((current) => current ? `${current}
+            onLoadError={(error) => { const message = userFacingError(error, String(error)); setPdfError(message); setProgress(`PDF 预览失败： ${message}`); setLog((current) => current ? `${current}
 
 PDF 预览错误： ${message}` : `PDF 预览错误： ${message}`); }}
-            onSourceError={(error) => { const message = error instanceof Error ? error.message : String(error); setPdfError(message); setProgress(`PDF 源文件加载失败： ${message}`); }}
+            onSourceError={(error) => { const message = userFacingError(error, String(error)); setPdfError(message); setProgress(`PDF 源文件加载失败： ${message}`); }}
           >
             {Array.from({ length: pageCount }, (_, index) => index + 1).map((page) => (
               <div className="pdf-page" key={page} title={activeSyncTex ? "双击打开源文件" : undefined} onDoubleClick={(event) => locatePdfPoint(event, page)} ref={(element) => { if (element) pageRefs.current.set(page, element); else pageRefs.current.delete(page); }}>
@@ -304,9 +341,9 @@ PDF 预览错误： ${message}` : `PDF 预览错误： ${message}`); }}
         ) : (
           <div className="pdf-empty">
             <span className={`pdf-empty__icon ${state === "error" ? "pdf-empty__icon--error" : ""}`}>{state === "error" ? <Icon name={icons.error} /> : <Icon name={icons.filePdf} />}</span>
-            <h3>{state === "error" ? "编译失败" : "编译论文"}</h3>
-            <p>{state === "error" ? progress : <><code>{mainDocument}</code> 将使用本地 LaTeX 工具链编译。</>}</p>
-            <Button variant="primary" icon={<Icon name={icons.refresh} />} loading={isRunning} onClick={() => void compile()}>{isRunning ? "正在编译" : "编译 PDF"}</Button>
+            <h3>{state === "error" ? "编译失败" : canCompile ? "编译论文" : "共享论文预览"}</h3>
+            <p>{state === "error" ? progress : canCompile ? <><code>{mainDocument}</code> 将使用本地 LaTeX 工具链编译。</> : progress}</p>
+            {canCompile ? <Button variant="primary" icon={<Icon name={icons.refresh} />} loading={isRunning} onClick={() => void compile()}>{isRunning ? "正在编译" : "编译 PDF"}</Button> : null}
           </div>
         )}
       </div>

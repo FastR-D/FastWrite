@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { Button, Dialog, Field, Icon, icons, TextField } from "../ui";
@@ -31,7 +32,7 @@ export function RenameFileDialog({ open, projectId, path, onClose, onRenamed }: 
       await api.projects.renameFile(projectId, path, normalized);
       await onRenamed(normalized);
     } catch (renameError) {
-      setError(renameError instanceof Error ? renameError.message : "无法重命名文件");
+      setError(userFacingError(renameError, "无法重命名文件"));
     } finally {
       setLoading(false);
     }

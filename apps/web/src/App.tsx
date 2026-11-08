@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { FASTWRITE_SAVE_EVENT, isSaveShortcut } from "./lib/keyboard";
 import { applyTheme, initialTheme } from "./lib/theme";
 import { api } from "./api/client";
+import { WorkbenchNotifications } from "./components/workbench/WorkbenchNotifications";
 
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const WorkspacePage = lazy(() => import("./pages/WorkspacePage").then((module) => ({ default: module.WorkspacePage })));
@@ -70,5 +71,5 @@ export function App() {
   }, []);
   if (!authenticationReady) return <main className="app-loading" aria-live="polite">正在完成登录…</main>;
   const page = route.name === "admin" ? <AdminPage /> : route.name === "workspace" ? <WorkspacePage projectId={route.projectId} /> : route.name === "shared" ? <SharedReviewPage token={route.token} /> : route.name === "access-request" ? <AccessRequestPage projectId={route.projectId} /> : route.name === "gallery" ? <GalleryPage /> : <ProjectsPage />;
-  return <Suspense fallback={<main className="app-loading" aria-live="polite">正在加载 FastWrite…</main>}>{page}</Suspense>;
+  return <><Suspense fallback={<main className="app-loading" aria-live="polite">正在加载 FastWrite…</main>}>{page}</Suspense><WorkbenchNotifications /></>;
 }

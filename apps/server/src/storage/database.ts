@@ -1,7 +1,7 @@
 import type { ReferencePaper, ReferenceSettings } from "@fastwrite/shared";
 import { mkdir, readFile, rename, writeFile, open, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { normalizePublicationTarget, paperSkillForProfile, type AccountUser, type AgentRun, type AgentTaskPlan, type AuditEvent, type ChangeSet, type ClaimEvidenceLink, type ClaimRelation, type CommentMessage, type CommentThread, type CompileRecord, type DraftPlan, type ExternalIdentity, type FastReadBundleReceipt, type GithubSyncRun, type HarnessProfile, type Invitation, type IssueResolution, type MetadataObservation, type PaperClaim, type PaperMemory, type PaperProject, type ProjectAclRule, type ProjectMember, type ProjectResearchWork, type ProjectShare, type ResearchIdentifier, type ResearchRun, type ResearchWork, type ReviewReport, type ReviewSnapshot, type ShareComment, type SourceEvidence, type Team, type TeamGroupBinding, type TeamMember, type UploadSession } from "@fastwrite/shared";
+import { normalizePublicationTarget, paperSkillForProfile, type AccountUser, type AgentRun, type AgentTaskPlan, type AuditEvent, type ChangeSet, type ClaimEvidenceLink, type ClaimRelation, type CommentMessage, type CommentThread, type CollaborationReviewSession, type CollaborationCheckpoint, type CompileRecord, type DraftPlan, type ExternalIdentity, type FastReadBundleReceipt, type GithubSyncRun, type HarnessProfile, type Invitation, type IssueResolution, type MetadataObservation, type PaperClaim, type PaperMemory, type PaperProject, type ProjectAclRule, type ProjectMember, type ProjectResearchWork, type ProjectShare, type ResearchIdentifier, type ResearchRun, type ResearchWork, type ReviewReport, type ReviewSnapshot, type ShareComment, type SourceEvidence, type Team, type TeamGroupBinding, type TeamMember, type UploadSession } from "@fastwrite/shared";
 import type { HarnessRun, HarnessSession, McpAuditRecord } from "@fastwrite/harness-protocol";
 import type { AccessRequest, NotificationDelivery, NotificationPreference, UserNotification, SupportAccessRequest } from "@fastwrite/shared";
 import type { JobRecord } from "../jobs/job-queue";
@@ -70,14 +70,16 @@ export interface DatabaseState {
   yDocumentUpdates: Array<{ documentId: string; sequence: number; update: string; bytes: number; createdAt: string }>;
   commentThreads: CommentThread[];
   commentMessages: CommentMessage[];
+  collaborationReviewSessions: CollaborationReviewSession[];
+  collaborationCheckpoints: CollaborationCheckpoint[];
   skillReleaseOverrides: Array<{ skillId: string; revoked: boolean; reason: string; actorUserId?: string; createdAt: string; eval?: { status: "not-run" | "passed" | "failed"; score?: number; message?: string; checkedAt: string } }>;
   jobs: JobRecord[];
   supportAccessRequests: SupportAccessRequest[];
   experimentRuns: Array<{ id: string; projectId: string; projectVersion: number; scriptPath: string; status: "queued" | "running" | "completed" | "failed" | "cancelled"; authorization: "user-approved"; inputSnapshotHash?: string; result?: { success: boolean; exitCode: number; log: string; artifactPaths: string[]; runId: string }; jobId?: string; createdAt: string; updatedAt: string }>;
 }
 
-export const CURRENT_SCHEMA_VERSION = 16;
-const EMPTY_DATABASE: DatabaseState = { referencePapers: [], referenceSettings: [], schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], researchScreening: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [], users: [], externalIdentities: [], fastcasTransactions: [], fastcasLinks: [], fastcasEvents: [], sessions: [], teams: [], teamMembers: [], teamGroupBindings: [], projectMembers: [], projectAclRules: [], invitations: [], accessRequests: [], notifications: [], notificationPreferences: [], notificationDeliveries: [], auditEvents: [], harnessProfiles: [], encryptedSecrets: [], localCredentials: [], collaborationDocuments: [], yDocumentSnapshots: [], yDocumentUpdates: [], commentThreads: [], commentMessages: [], skillReleaseOverrides: [], jobs: [], supportAccessRequests: [], experimentRuns: [] };
+export const CURRENT_SCHEMA_VERSION = 17;
+const EMPTY_DATABASE: DatabaseState = { referencePapers: [], referenceSettings: [], schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], researchScreening: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [], users: [], externalIdentities: [], fastcasTransactions: [], fastcasLinks: [], fastcasEvents: [], sessions: [], teams: [], teamMembers: [], teamGroupBindings: [], projectMembers: [], projectAclRules: [], invitations: [], accessRequests: [], notifications: [], notificationPreferences: [], notificationDeliveries: [], auditEvents: [], harnessProfiles: [], encryptedSecrets: [], localCredentials: [], collaborationDocuments: [], yDocumentSnapshots: [], yDocumentUpdates: [], commentThreads: [], commentMessages: [], collaborationReviewSessions: [], collaborationCheckpoints: [], skillReleaseOverrides: [], jobs: [], supportAccessRequests: [], experimentRuns: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
@@ -129,7 +131,7 @@ export class JsonDatabase {
         fastReadBundles: parsed.fastReadBundles ?? [],
         claimRelations: parsed.claimRelations ?? []
         ,projectShares: parsed.projectShares ?? [], shareComments: parsed.shareComments ?? [], skillReleaseOverrides: parsed.skillReleaseOverrides ?? [],
-        fastcasTransactions: parsed.fastcasTransactions ?? [], fastcasLinks: parsed.fastcasLinks ?? [], fastcasEvents: parsed.fastcasEvents ?? [], users: parsed.users ?? [], externalIdentities: parsed.externalIdentities ?? [], localCredentials: parsed.localCredentials ?? [], sessions: parsed.sessions ?? [], teams: parsed.teams ?? [], teamMembers: parsed.teamMembers ?? [], teamGroupBindings: parsed.teamGroupBindings ?? [], projectMembers: parsed.projectMembers ?? [], projectAclRules: parsed.projectAclRules ?? [], invitations: parsed.invitations ?? [], accessRequests: parsed.accessRequests ?? [], notifications: parsed.notifications ?? [], notificationPreferences: parsed.notificationPreferences ?? [], notificationDeliveries: parsed.notificationDeliveries ?? [], auditEvents: parsed.auditEvents ?? [], harnessProfiles: parsed.harnessProfiles ?? [], encryptedSecrets: parsed.encryptedSecrets ?? [], collaborationDocuments: parsed.collaborationDocuments ?? [], yDocumentSnapshots: parsed.yDocumentSnapshots ?? [], yDocumentUpdates: parsed.yDocumentUpdates ?? [], commentThreads: parsed.commentThreads ?? [], commentMessages: parsed.commentMessages ?? [], jobs: parsed.jobs ?? [], supportAccessRequests: parsed.supportAccessRequests ?? [], experimentRuns: parsed.experimentRuns ?? []
+        fastcasTransactions: parsed.fastcasTransactions ?? [], fastcasLinks: parsed.fastcasLinks ?? [], fastcasEvents: parsed.fastcasEvents ?? [], users: parsed.users ?? [], externalIdentities: parsed.externalIdentities ?? [], localCredentials: parsed.localCredentials ?? [], sessions: parsed.sessions ?? [], teams: parsed.teams ?? [], teamMembers: parsed.teamMembers ?? [], teamGroupBindings: parsed.teamGroupBindings ?? [], projectMembers: parsed.projectMembers ?? [], projectAclRules: parsed.projectAclRules ?? [], invitations: parsed.invitations ?? [], accessRequests: parsed.accessRequests ?? [], notifications: parsed.notifications ?? [], notificationPreferences: parsed.notificationPreferences ?? [], notificationDeliveries: parsed.notificationDeliveries ?? [], auditEvents: parsed.auditEvents ?? [], harnessProfiles: parsed.harnessProfiles ?? [], encryptedSecrets: parsed.encryptedSecrets ?? [], collaborationDocuments: parsed.collaborationDocuments ?? [], yDocumentSnapshots: parsed.yDocumentSnapshots ?? [], yDocumentUpdates: parsed.yDocumentUpdates ?? [], commentThreads: parsed.commentThreads ?? [], commentMessages: parsed.commentMessages ?? [], collaborationReviewSessions: parsed.collaborationReviewSessions ?? [], collaborationCheckpoints: parsed.collaborationCheckpoints ?? [], jobs: parsed.jobs ?? [], supportAccessRequests: parsed.supportAccessRequests ?? [], experimentRuns: parsed.experimentRuns ?? []
       };
       this.state = migrate(migratedState);
       let migrated = false;
@@ -250,6 +252,8 @@ export class JsonDatabase {
       state.yDocumentUpdates = state.yDocumentUpdates.filter((item) => !documentIds.has(item.documentId));
       const threadIds = new Set(state.commentThreads.filter((item) => item.projectId === projectId).map((item) => item.id));
       state.commentThreads = state.commentThreads.filter((item) => item.projectId !== projectId);
+      state.collaborationReviewSessions = state.collaborationReviewSessions.filter(item => item.projectId !== projectId);
+      state.collaborationCheckpoints = state.collaborationCheckpoints.filter(item => item.projectId !== projectId);
       state.commentMessages = state.commentMessages.filter((item) => !threadIds.has(item.threadId));
       delete state.fileVersions[projectId];
     });
@@ -312,6 +316,8 @@ function migrate(state: DatabaseState): DatabaseState {
   state.yDocumentSnapshots ??= [];
   state.yDocumentUpdates ??= [];
   state.commentThreads ??= [];
+  state.collaborationReviewSessions ??= [];
+  state.collaborationCheckpoints ??= [];
   state.commentMessages ??= [];
   state.skillReleaseOverrides ??= [];
   state.jobs ??= [];
@@ -350,6 +356,7 @@ function migrate(state: DatabaseState): DatabaseState {
   state.referenceSettings ??= [];
   if (state.schemaVersion < 16) state.schemaVersion = 16;
   state.researchScreening ??= [];
+  if (state.schemaVersion < 17) state.schemaVersion = 17;
   if (state.schemaVersion > CURRENT_SCHEMA_VERSION) throw new Error(`Unsupported database schema version ${state.schemaVersion}`);
   return state;
 }

@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { statusLabel } from "../../lib/labels";
 import { useEffect, useState } from "react";
 import type { TextChange } from "@fastwrite/shared";
@@ -19,7 +20,7 @@ export function ChangeHunkReview({ change, busy, readOnly = false, showToolbar =
     if (!editingHunk || !onEditHunk) return;
     setSaving(true); setError("");
     try { await onEditHunk(editingHunk, draft); setEditingHunk(null); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "无法保存修改块"); }
+    catch (failure) { setError(userFacingError(failure, "无法保存修改块")); }
     finally { setSaving(false); }
   };
   if (!hunks.length) return <div className="revision-diff">{diffWords(change.before, change.after).map((part, index) => part.type === "delete" ? <del key={index}>{part.value}</del> : part.type === "insert" ? <ins key={index}>{part.value}</ins> : <span key={index}>{part.value}</span>)}</div>;

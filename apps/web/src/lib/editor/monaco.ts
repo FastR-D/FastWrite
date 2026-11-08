@@ -8,6 +8,10 @@ declare global {
 
 let monacoConfigured = false;
 
+// Let Monaco grow the line numbers with the document instead of reserving five digits.
+// The narrow decoration lane also carries comment markers without a separate glyph column.
+export const compactGutterOptions = { glyphMargin: false, lineNumbersMinChars: 2, lineDecorationsWidth: 12 } as const;
+
 export function configureMonaco() {
   if (monacoConfigured) return;
   monacoConfigured = true;

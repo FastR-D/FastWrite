@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WorkingFile, WorkingStatus } from "@fastwrite/shared";
 import { api } from "../../api/client";
@@ -45,7 +46,7 @@ export function WorkingChangesView({ projectId, version, onCompare, onCommit, on
       const next = await api.projects.workingStatus(projectId);
       if (request === generation.current) { setStatus(next); setError(""); }
     } catch (failure) {
-      if (request === generation.current) setError(failure instanceof Error ? failure.message : "无法获取当前更改");
+      if (request === generation.current) setError(userFacingError(failure, "无法获取当前更改"));
     }
   }, [projectId]);
 
@@ -68,7 +69,7 @@ export function WorkingChangesView({ projectId, version, onCompare, onCommit, on
   const act = async (run: () => Promise<void>) => {
     setBusy(true); setError("");
     try { await onFlush(); await run(); await load(); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "Git 操作失败"); }
+    catch (failure) { setError(userFacingError(failure, "Git 操作失败")); }
     finally { setBusy(false); }
   };
 

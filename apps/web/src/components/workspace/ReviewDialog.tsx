@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { statusLabel } from "../../lib/labels";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentRun, PaperProject, ReviewIssue, ReviewReport } from "@fastwrite/shared";
@@ -115,7 +116,7 @@ export function ReviewDialog({ open, project, compileState, onRequestCompile, on
   </Dialog>;
 }
 
-function message(error: unknown) { return error instanceof Error ? error.message : "审稿请求失败"; }
+function message(error: unknown) { return userFacingError(error, "审稿请求失败"); }
 /*
  * The run's own vocabulary ("completed"/"running"/"failed") is translated here;
  * Stepper only knows complete/current/error/pending.

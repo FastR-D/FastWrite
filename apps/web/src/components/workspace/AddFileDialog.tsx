@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { Button, Dialog, Field, FileField, Icon, icons, TextField } from "../ui";
@@ -44,7 +45,7 @@ export function AddFileDialog({ open, projectId, onClose, onAdded, initialFiles,
       const added = await api.projects.addFile(projectId, path.trim(), file);
       await onAdded(added.path);
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : "无法添加文件");
+      setError(userFacingError(uploadError, "无法添加文件"));
     } finally {
       setLoading(false);
     }

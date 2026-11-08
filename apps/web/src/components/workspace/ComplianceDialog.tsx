@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useCallback, useEffect, useState } from "react";
 import type { ComplianceReport, PaperProject } from "@fastwrite/shared";
 import { api } from "../../api/client";
@@ -13,7 +14,7 @@ export function ComplianceDialog({ open, project, renderedPages, onClose }: { op
   const run = useCallback(async (signal?: AbortSignal) => {
     setLoading(true); setError("");
     try { const hasMainPages = mainBodyPages !== undefined && Number.isSafeInteger(mainBodyPages) && mainBodyPages > 0; const [compliance, writing] = await Promise.all([api.compliance.check(project.id, { ...(renderedPages ? { renderedPages } : {}), ...(hasMainPages ? { mainBodyPages } : {}), verifyCitationsOnline: online }, signal), api.claims.writingChecks(project.id, signal)]); setReport(compliance); setWritingFindings(writing.findings as Array<{ id: string; status: string; source: string; message: string }>); }
-    catch (failure) { if ((failure as DOMException).name !== "AbortError") setError(failure instanceof Error ? failure.message : "投稿检查失败"); }
+    catch (failure) { if ((failure as DOMException).name !== "AbortError") setError(userFacingError(failure, "投稿检查失败")); }
     finally { setLoading(false); }
   }, [mainBodyPages, online, project.id, renderedPages]);
   useEffect(() => { if (!open) return; const controller = new AbortController(); void run(controller.signal); return () => controller.abort(); }, [open, run]);

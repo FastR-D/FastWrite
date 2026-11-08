@@ -60,6 +60,12 @@ try {
   await scrollArea.press('PageDown');
   await expect.poll(() => scrollArea.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
   await skill('反防御性写作（中文）').check();
+  await panel.getByRole('button', { name: '查看 反防御性写作（中文） 详情', exact: true }).click();
+  const detail = page.getByRole('tabpanel', { name: 'Skill · 反防御性写作（中文）', exact: true });
+  await expect(detail.getByLabel('Skill 具体内容')).toContainText('---');
+  await expect(page.getByRole('tab', { name: /Skill · 反防御性写作（中文）/ })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('button', { name: '关闭 Skill · 反防御性写作（中文）', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '源文件编辑器： main.tex', exact: true })).toBeVisible();
   await page.reload();
   await expect(skill('反防御性写作（中文）')).toBeChecked();
   await open(second);
@@ -85,10 +91,14 @@ try {
   await open(first);
   await expect(skill('反防御性写作（中文）')).toBeChecked();
   for (const name of ['反防御性写作（英文）', '论断与证据核查', 'LaTeX 结构优化', '实验设计']) await skill(name).check();
-  await expect(skill('威胁模型')).toBeDisabled();
+  await expect(skill('威胁模型')).toBeEnabled();
+  await skill('威胁模型').check();
+  await expect(panel.locator('input:checked')).toHaveCount(6);
+  await page.reload();
+  await expect(panel.locator('input:checked')).toHaveCount(6);
   await panel.getByRole('button', { name: '清空选择' }).click();
   await skill('反防御性写作（中文）').check();
-  await panel.getByRole('button', { name: '用于智能助手' }).click();
+  await panel.getByRole('button', { name: '确定', exact: true }).click();
   const agent = page.getByRole('region', { name: '智能助手工作区' });
   await agent.getByLabel('希望智能助手做什么？').fill('Improve the wording while preserving the evidence.');
   const planned = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/api/projects/${first.id}/agent-tasks`));
@@ -105,6 +115,17 @@ try {
   for (const operation of ['plan', 'generate']) {
     assert.ok(calls.find(call => call.operation === operation).input.skillInstructions.includes('# Task Skill: anti-defensive-writing v1.0.0'));
   }
+
+  const manySkills = catalog.filter(skill => skill.allowedScope === 'project' && skill.supportedIntents.includes('revise')).slice(0, 7).map(skill => skill.id);
+  assert.ok(manySkills.length > 5);
+  const multiPlanResponse = await context.request.post(`${base}/api/projects/${first.id}/agent-tasks`, { data: { objective: 'Revise the wording while preserving supplied observations.', scope: { type: 'project' }, intent: 'revise', taskSkillIds: manySkills } });
+  assert.equal(multiPlanResponse.status(), 201, await multiPlanResponse.text());
+  const multiPlan = (await multiPlanResponse.json()).plan;
+  assert.deepEqual(multiPlan.taskSkills.map(skill => skill.id), manySkills);
+  const multiGenerated = await context.request.post(`${base}/api/projects/${first.id}/agent-tasks/${multiPlan.id}/confirm`);
+  assert.equal(multiGenerated.status(), 201, await multiGenerated.text());
+  const multiCalls = await (await context.request.get(`${base}/__reference_e2e__/calls`)).json();
+  for (const operation of ['plan', 'generate']) assert.ok(multiCalls.some(call => call.operation === operation && manySkills.every(id => call.input.skillInstructions.includes(`# Task Skill: ${id} v`))));
 
   // Each imported adaptation must reach both real application stages, not just the catalog.
   for (const skill of integrations) {
@@ -128,11 +149,11 @@ try {
 
   await open(second);
   await skill('威胁模型').check();
-  await expect(panel.getByRole('button', { name: '用于智能助手' })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: '确定', exact: true })).toBeDisabled();
   const editor = page.getByRole('textbox', { name: '源文件编辑器： main.tex', exact: true });
   await editor.focus(); await editor.press('Control+Home'); await editor.press('ArrowDown'); await editor.press('ArrowDown'); await editor.press('ArrowDown');
-  await expect(panel.getByRole('button', { name: '用于智能助手' })).toBeEnabled();
-  await panel.getByRole('button', { name: '用于智能助手' }).click();
+  await expect(panel.getByRole('button', { name: '确定', exact: true })).toBeEnabled();
+  await panel.getByRole('button', { name: '确定', exact: true }).click();
   await agent.getByLabel('希望智能助手做什么？').fill('Clarify the threat model for this section.');
   const sectionPlan = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/api/projects/${second.id}/agent-tasks`));
   await agent.getByRole('button', { name: '创建计划' }).click();
@@ -148,7 +169,7 @@ try {
   await scrollArea.evaluate(element => { element.scrollTop = 0; });
   await page.screenshot({ path: join(root, 'output/skills/writing-stages.png'), fullPage: true });
   assert.deepEqual(errors, []);
-  console.log(`PASS: ${integrations.length} writing Skills selected in UI and loaded into application planning/generation; scrolling, persistence/isolation, five-Skill limit and section scope`);
+  console.log(`PASS: ${integrations.length} writing Skills selected in UI and loaded into application planning/generation; scrolling, persistence/isolation, unlimited Skill selection and section scope`);
 } finally {
   await browser?.close();
   if (server.exitCode === null) {

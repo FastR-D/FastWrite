@@ -1,3 +1,4 @@
+import { userFacingError } from "../../lib/notifications";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as monaco from "../../lib/editor/monacoRuntime";
 import type { GithubSyncResolution, GithubSyncResolutionChoice, GithubSyncRun, PaperProject } from "@fastwrite/shared";
@@ -70,7 +71,7 @@ export function GithubSyncDialog({ open, project, compileState, onClose, onFlush
       setStage("syncing");
       await acceptRun(await api.github.startSync(project.id));
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "GitHub 同步失败");
+      setError(userFacingError(failure, "GitHub 同步失败"));
       setStage("error");
     }
   };
@@ -96,7 +97,7 @@ export function GithubSyncDialog({ open, project, compileState, onClose, onFlush
     if (compileState.state !== "success" || !run) return;
     setStage("finalizing");
     void api.github.finalizeSync(project.id, run.id).then(acceptRun).catch((failure) => {
-      setError(failure instanceof Error ? failure.message : "无法完成 GitHub 同步");
+      setError(userFacingError(failure, "无法完成 GitHub 同步"));
       setStage("error");
     });
   }, [compileState, project.id, run, stage]);
@@ -111,7 +112,7 @@ export function GithubSyncDialog({ open, project, compileState, onClose, onFlush
     try {
       await acceptRun(await api.github.resolveSync(project.id, run.id, body));
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "无法应用冲突解决结果");
+      setError(userFacingError(failure, "无法应用冲突解决结果"));
       setStage("conflicts");
     }
   };
