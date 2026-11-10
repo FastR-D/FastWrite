@@ -3,12 +3,13 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "@fastrd/ui-react/styles.css";
 import "@fastrd/ui-foundation/vscrui.css";
-import "./lib/theme";
+import { initTheme } from "./lib/theme";
 import "./styles/tokens.css";
 import "./styles.css";
 import "vscrui/dist/_name_.css";
 
 document.documentElement.classList.add("fastui-vscrui");
+initTheme();
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {

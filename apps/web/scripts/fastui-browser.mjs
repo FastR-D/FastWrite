@@ -39,6 +39,26 @@ await context.route('**/api/**', async route => {
   await route.fulfill({ status, json: value });
 });
 try {
+  for (const [mode, system] of [['dark', 'light'], ['light', 'dark']]) {
+    const cold = await context.newPage();
+    await cold.emulateMedia({ colorScheme: system });
+    await cold.addInitScript(mode => {
+      localStorage.setItem('fastwrite.theme', mode);
+      const observer = new MutationObserver(() => {
+        if (!document.getElementById('root')?.childElementCount) return;
+        window.firstRenderedTheme = { host: document.documentElement.dataset.theme, foundation: document.documentElement.dataset.fastuiTheme };
+        observer.disconnect();
+      });
+      observer.observe(document, { childList: true, subtree: true });
+    }, mode);
+    await cold.goto(`${base}/projects/ui-project`);
+    await expect(cold.getByRole('button', { name: '工作区设置', exact: true })).toBeVisible();
+    assert.deepEqual(await cold.evaluate(() => window.firstRenderedTheme), { host: mode, foundation: mode }, 'stored theme must apply before the first React render');
+    assert.equal(await cold.evaluate(() => localStorage.getItem('fastwrite.theme')), mode);
+    await cold.evaluate(() => localStorage.removeItem('fastwrite.theme'));
+    await cold.close();
+  }
+  scenarios.push('saved light/dark pin is applied before the first React render, independently of the OS');
   const page = await context.newPage();
   page.on('pageerror', error => { errors.push(error.message); console.error(error.stack); });
   await page.goto(`${base}/projects/ui-project`);
@@ -61,6 +81,16 @@ try {
   assert.equal(await original.evaluate(el => el.isConnected), true);
   await expect(name).toHaveCSS('background-color', 'rgb(23, 30, 39)');
   scenarios.push('real settings tab consumes ui-react; cross-tab theme preserves input node, focus and draft');
+  await peer.evaluate(() => localStorage.setItem('fastwrite.theme', 'system'));
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('html')).toHaveAttribute('data-fastui-theme', 'dark');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveAttribute('data-fastui-theme', 'light');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(name).toBeFocused();
+  await expect(name).toHaveValue('设置草稿保持');
+  assert.equal(await original.evaluate(el => el.isConnected), true);
+  scenarios.push('system preference changes retain focused settings input and draft');
   const navigation = panel.getByRole('navigation', { name: '设置类别' });
   await navigation.getByRole('button', { name: 'AI 与模型配置', exact: true }).click();
   const key = panel.getByLabel('API 密钥', { exact: true });
