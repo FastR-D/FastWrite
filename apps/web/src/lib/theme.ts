@@ -1,20 +1,23 @@
+import { initColorMode } from "@fastrd/ui-foundation";
+
 export type Theme = "light" | "dark";
 
 const STORAGE_KEY = "fastwrite.theme";
 export const THEME_CHANGE_EVENT = "fastwrite-theme-change";
+const colorMode = initColorMode({ storageKey: STORAGE_KEY });
+
+function syncTheme(): void {
+  // Existing editor/chrome selectors belong to the host; resolution belongs to foundation.
+  document.documentElement.dataset.theme = colorMode.resolved;
+  window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
+}
+syncTheme();
+colorMode.subscribe(syncTheme);
 
 export function currentTheme(): Theme {
-  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+  return colorMode.resolved;
 }
 
 export function applyTheme(theme: Theme): void {
-  document.documentElement.dataset.theme = theme;
-  localStorage.setItem(STORAGE_KEY, theme);
-  window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
-}
-
-export function initialTheme(): Theme {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored === "dark" || stored === "light") return stored;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  colorMode.setMode(theme);
 }

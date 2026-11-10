@@ -1,6 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { FASTWRITE_SAVE_EVENT, isSaveShortcut } from "./lib/keyboard";
-import { applyTheme, initialTheme } from "./lib/theme";
 import { api } from "./api/client";
 import { WorkbenchNotifications } from "./components/workbench/WorkbenchNotifications";
 
@@ -29,7 +28,6 @@ export function App() {
     const parameters = new URLSearchParams(window.location.search);
     return import.meta.env.VITE_FASTWRITE_DEVELOPMENT_ADMIN !== "true" && !["oidc", "cas", "fastcas"].some((provider) => parameters.get(provider) === "complete");
   });
-  useEffect(() => { applyTheme(initialTheme()); }, []);
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
     if (import.meta.env.VITE_FASTWRITE_DEVELOPMENT_ADMIN === "true") {

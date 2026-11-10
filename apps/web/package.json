@@ -8,9 +8,12 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "e2e:visual": "node ../../scripts/e2e-visual-baseline.mjs",
-    "e2e:components": "node ../../scripts/e2e-component-gallery.mjs"
+    "e2e:components": "node ../../scripts/e2e-component-gallery.mjs",
+    "test:fastui:browser": "node scripts/fastui-browser.mjs"
   },
   "dependencies": {
+    "@fastrd/ui-foundation": "https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-foundation-0.1.0.tgz",
+    "@fastrd/ui-react": "https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-react-0.1.0.tgz",
     "@fastwrite/shared": "workspace:*",
     "@siglum/engine": "^0.1.4",
     "@siglum/filesystem": "^0.2.1",
