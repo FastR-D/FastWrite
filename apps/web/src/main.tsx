@@ -1,10 +1,16 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import "@fastrd/ui-react/styles.css";
+import "@fastrd/ui-foundation/vscrui.css";
+import { initTheme } from "./lib/theme";
 import "./styles/typography.css";
 import "./styles/tokens.css";
 import "./styles.css";
 import "vscrui/dist/_name_.css";
+
+document.documentElement.classList.add("fastui-vscrui");
+initTheme();
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {

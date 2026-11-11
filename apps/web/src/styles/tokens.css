@@ -170,6 +170,37 @@
   --fw-danger-foreground: #ffffff;
 }
 
+/* Host design wins over the package defaults. Shared controls and the vscrui
+ * adapter consume these aliases; the palette stays defined once in styles.css.
+ * Keep the aliases one-way: host roles above never read --fastui-* colours. */
+:root.fastui-vscrui {
+  --fastui-font: var(--fw-font-ui);
+  --fastui-font-size: var(--vscode-font-size);
+  --fastui-radius-control: var(--fw-radius-control);
+  --fastui-radius-panel: var(--fw-radius-overlay);
+  --fastui-height-xs: var(--fw-control-height-small);
+  --fastui-height-sm: var(--fw-control-height-default);
+  --fastui-height-md: var(--fw-control-height-comfortable);
+  --fastui-page: var(--slate-50);
+  --fastui-workspace: var(--canvas);
+  --fastui-surface: var(--surface);
+  --fastui-raised: var(--vscode-button-secondaryBackground);
+  --fastui-text: var(--text);
+  --fastui-secondary: var(--text-secondary);
+  --fastui-muted: var(--text-muted);
+  --fastui-border: var(--border);
+  --fastui-border-strong: var(--fw-control-border);
+  --fastui-primary: var(--vscode-button-background);
+  --fastui-primary-hover: var(--vscode-button-hoverBackground);
+  --fastui-on-primary: var(--vscode-button-foreground);
+  --fastui-focus: var(--blue-500);
+  --fastui-selected: var(--blue-100);
+  --fastui-success: var(--green-600);
+  --fastui-warning: var(--amber-700);
+  --fastui-danger: var(--red-600);
+  --fastui-danger-fill: var(--fw-danger-background);
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root {
     --fw-duration-fast: 0ms;

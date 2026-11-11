@@ -8,9 +8,12 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "e2e:visual": "node ../../scripts/e2e-visual-baseline.mjs",
-    "e2e:components": "node ../../scripts/e2e-component-gallery.mjs"
+    "e2e:components": "node ../../scripts/e2e-component-gallery.mjs",
+    "test:fastui:browser": "node scripts/fastui-browser.mjs"
   },
   "dependencies": {
+    "@fastrd/ui-foundation": "0.1.2",
+    "@fastrd/ui-react": "0.1.2",
     "@fastwrite/shared": "workspace:*",
     "@fontsource-variable/geist": "5.3.0",
     "@fontsource-variable/ibm-plex-sans": "5.3.0",

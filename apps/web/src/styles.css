@@ -26,7 +26,7 @@
  */
 
 :root {
-  color-scheme: light;
+  color-scheme: var(--fastui-color-scheme);
   font-family: var(--fw-font-ui);
   font-synthesis: none;
   --blue-50: #eff6ff;
@@ -63,13 +63,12 @@
   --text: var(--slate-900);
   --text-secondary: var(--slate-600);
   --text-muted: var(--slate-500);
-  --focus: 0 0 0 3px rgba(40, 120, 208, 0.24);
+  --focus: 0 0 0 3px color-mix(in srgb, var(--fastui-focus) 24%, transparent);
   --shadow-popover: 0 16px 44px rgba(25, 35, 49, 0.18), 0 2px 8px rgba(25, 35, 49, 0.08);
   --topbar-height: 44px;
 }
 
 :root[data-theme="dark"] {
-  color-scheme: dark;
   --blue-50: #10243d;
   --blue-100: #16385f;
   --blue-200: #25558c;

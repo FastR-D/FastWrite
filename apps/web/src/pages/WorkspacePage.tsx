@@ -51,6 +51,7 @@ import type { SourceEditorHandle, WritingMode } from "../components/workspace/So
 import { AiWorkspace } from "../components/workspace/AiWorkspace";
 import { GithubSyncDialog } from "../components/workspace/GithubSyncDialog";
 import { ComplianceDialog } from "../components/workspace/ComplianceDialog";
+import { ProvenanceDialog } from "../components/workspace/ProvenanceDialog";
 import type {
   CompileFailureContext,
   CompileRepairRequest,
@@ -204,6 +205,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   useEffect(() => { setSettingsOpen(false); setSettingsActive(false); }, [projectId]);
   const [syncOpen, setSyncOpen] = useState(false);
   const [complianceOpen, setComplianceOpen] = useState(false);
+  const [provenanceOpen, setProvenanceOpen] = useState(false);
   const [settingsTree, setSettingsTree] = useState<WorkspaceTreeNode[]>([]);
   const [deleteError, setDeleteError] = useState("");
   const [compileRequest, setCompileRequest] = useState(0);
@@ -754,6 +756,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           >
             投稿检查
           </Button>
+          <Button size="small" variant="secondary" icon={<Icon name={icons.history} />} onClick={() => setProvenanceOpen(true)}>溯源记录</Button>
           {project.source.type === "github" ? (
             <Button
               className="workspace-sync-button"
@@ -1363,6 +1366,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
         onClose={() => setComplianceOpen(false)}
       />
       <QuickOpenDialog open={quickOpen} projectId={projectId} onClose={() => setQuickOpen(false)} onOpen={path => { closeHistoryDiff(); void navigateToPath(path); }} />
+      <ProvenanceDialog key={projectId} open={provenanceOpen} projectId={projectId} onClose={() => setProvenanceOpen(false)} />
       <ShareDialog
         open={shareOpen}
         projectId={projectId}
