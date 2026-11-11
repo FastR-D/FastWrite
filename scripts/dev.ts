@@ -1,4 +1,7 @@
 import { createServer } from "node:net";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const normalLogin = process.argv.includes("--main");
 // Explicit values override .env and inherited flags in both launch modes.
@@ -6,12 +9,14 @@ process.env.FASTWRITE_SERVER_AUTH = "true";
 process.env.FASTWRITE_DEVELOPMENT_ADMIN = String(!normalLogin);
 process.env.VITE_FASTWRITE_DEVELOPMENT_ADMIN = String(!normalLogin);
 
-const apiPort = numberEnvironment("FASTWRITE_PORT", 3003);
+const webPort = 3002;
+await assertPortAvailable(webPort);
+const socketDirectory = mkdtempSync(join(tmpdir(), "fastwrite-dev-"));
+process.env.FASTWRITE_DEV_SOCKET = join(socketDirectory, "api.sock");
+process.once("exit", () => rmSync(socketDirectory, { recursive: true, force: true }));
 const children: Bun.Subprocess[] = [];
 let shuttingDown = false;
 let shutdownPromise: Promise<never> | undefined;
-
-await assertPortAvailable(apiPort);
 
 const shared = start(["bun", "run", "--filter", "@fastwrite/shared", "dev"]);
 const server = start(["bun", "run", "--filter", "@fastwrite/server", "dev"]);
@@ -24,9 +29,9 @@ for (const child of children) void child.exited.then((code) => {
 });
 
 try {
-  await waitFor(`http://127.0.0.1:${apiPort}/api/health`);
+  await waitFor("http://localhost/api/health", process.env.FASTWRITE_DEV_SOCKET);
+  await waitFor(`http://127.0.0.1:${webPort}/api/health`);
   console.log(`\nFastWrite ${normalLogin ? "Main (login required)" : "Dev (administrator)"}: http://localhost:3002`);
-  console.log(`FastWrite API: http://localhost:${apiPort}\n`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Development services did not become ready.");
   await shutdown(1);
@@ -55,17 +60,17 @@ function start(command: string[]): Bun.Subprocess {
 async function assertPortAvailable(port: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const server = createServer();
-    server.once("error", () => reject(new Error(`Port ${port} is already in use. Stop the existing service or set FASTWRITE_PORT to another port.`)));
+    server.once("error", () => reject(new Error(`Port ${port} is already in use. Stop the existing FastWrite service before starting another one.`)));
     server.listen(port, "127.0.0.1", () => server.close((error) => error ? reject(error) : resolve()));
   });
 }
 
-async function waitFor(url: string): Promise<void> {
+async function waitFor(url: string, unix?: string): Promise<void> {
   const deadline = Date.now() + 30_000;
   let lastError = "not reachable";
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, unix ? { unix } : undefined);
       if (response.ok) return;
       lastError = `HTTP ${response.status}`;
     } catch (error) { lastError = error instanceof Error ? error.message : String(error); }
@@ -97,9 +102,4 @@ function signalGroup(child: Bun.Subprocess, signal: NodeJS.Signals): void {
   } catch {
     try { child.kill(signal); } catch { /* already gone */ }
   }
-}
-
-function numberEnvironment(name: string, fallback: number): number {
-  const value = Number.parseInt(process.env[name] ?? "", 10);
-  return Number.isInteger(value) && value > 0 && value < 65_536 ? value : fallback;
 }

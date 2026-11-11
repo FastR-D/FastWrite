@@ -17,7 +17,8 @@ concurrency:
 jobs:
   validate:
     name: Typecheck, test, build, and E2E
-    runs-on: ubuntu-latest
+    # Keep the TeX distribution stable across runner-image rollouts.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Check out repository
@@ -34,7 +35,11 @@ jobs:
       - name: Install browser and sandboxed LaTeX dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap latexmk texlive-latex-base texlive-latex-recommended texlive-fonts-recommended
+          sudo apt-get install -y --no-install-recommends bubblewrap latexmk texlive-latex-base texlive-latex-recommended texlive-fonts-recommended texlive-xetex texlive-luatex fonts-dejavu-core
+          for engine in pdflatex xelatex lualatex; do command -v "$engine"; done
+          kpsewhich article.cls
+          kpsewhich fontspec.sty
+          kpsewhich luaotfload-main.lua
           bunx playwright install --with-deps chromium
 
       - name: Verify real sandboxed compilation

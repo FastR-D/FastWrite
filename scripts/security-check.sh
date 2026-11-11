@@ -17,9 +17,6 @@ echo "[security] source secret patterns"
 bun test scripts/check-source-secrets.test.ts
 bun scripts/check-source-secrets.ts
 
-echo "[security] TypeScript verification"
-bun run typecheck
-
 echo "[security] source diff hygiene"
 git diff --check
 

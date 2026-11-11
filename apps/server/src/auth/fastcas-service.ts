@@ -3,7 +3,7 @@ import { FastCAS, type Configuration, type Link, type TransactionStore } from "@
 import type { JsonDatabase } from "../storage/database";
 import { ApiError } from "../http";
 import type { AuthResult, AuthService, Principal } from "./auth-service";
-export type FastCASConfiguration = Configuration & { allowRegistration?: boolean };
+export type FastCASConfiguration = Configuration & { allowRegistration?: boolean; loginEnabled?: boolean; linkEnabled?: boolean };
 
 export class FastCASTransactions implements TransactionStore {
   constructor(private readonly database: JsonDatabase) {}
@@ -34,22 +34,24 @@ export class FastCASService {
     this.sdk = new FastCAS(configuration, new FastCASTransactions(database));
   }
   status(principal: Principal) {
-    return { enabled: true, issuer: this.configuration.issuer, proof: this.auth.fastCASProofStatus(principal), links: this.database.snapshot().fastcasLinks.filter(item => item.userId === principal.user.id && item.issuer === this.configuration.issuer).map(item => item.link) };
+    return { enabled: true, loginEnabled: this.configuration.loginEnabled !== false, linkEnabled: this.configuration.linkEnabled !== false, issuer: this.configuration.issuer, proof: this.auth.fastCASProofStatus(principal), links: this.database.snapshot().fastcasLinks.filter(item => item.userId === principal.user.id && item.issuer === this.configuration.issuer).map(item => item.link) };
   }
   async setLocalPassword(principal: Principal, password: string) {
     return this.auth.setLocalPasswordFromFastCAS(principal, this.configuration.issuer, password);
   }
   async beginLogin(returnTo = "/projects") {
+    if (this.configuration.loginEnabled === false) throw new ApiError(403, "fastcas_login_disabled", "FastCAS login is disabled");
     const binding = randomBytes(32).toString("base64url");
     return { binding, url: await this.sdk.beginLogin({ browserBinding: binding, returnTo }) };
   }
   async beginRegistration(returnTo = "/projects") {
-    if (!this.configuration.allowRegistration) throw new ApiError(403, "fastcas_signup_disabled", "Creating accounts with FastCAS is not enabled");
+    if (this.configuration.loginEnabled === false || !this.configuration.allowRegistration) throw new ApiError(403, "fastcas_signup_disabled", "Creating accounts with FastCAS is not enabled");
     const binding = randomBytes(32).toString("base64url");
     const newLocalAccountRef = `user_${crypto.randomUUID()}`;
     return { binding, url: await this.sdk.beginRegistration({ browserBinding: binding, newLocalAccountRef, returnTo }) };
   }
   async beginLink(principal: Principal, password: string, returnTo = "/projects") {
+    if (this.configuration.linkEnabled === false) throw new ApiError(403, "fastcas_link_disabled", "New FastCAS account links are disabled");
     await this.auth.proveFastCASAccount(principal, password);
     if (this.database.snapshot().fastcasLinks.some(item => item.userId === principal.user.id && item.issuer === this.configuration.issuer && item.link.state !== "revoked")) throw new ApiError(409, "fastcas_link_exists", "An authentication is already active or pending; reconcile it first");
     const binding = randomBytes(32).toString("base64url");
@@ -58,6 +60,8 @@ export class FastCASService {
   async callback(url: URL, binding: string, refreshCookie: string): Promise<{ returnTo: string; result?: AuthResult }> {
     const tx = this.database.snapshot().fastcasTransactions.find(item => item.state === url.searchParams.get("state"));
     if (!tx) throw new ApiError(401, "fastcas_transaction_invalid", "Login expired or already used");
+    if ((tx.purpose === "login" || tx.purpose === "register") && this.configuration.loginEnabled === false) throw new ApiError(403, "fastcas_login_disabled", "FastCAS login is disabled");
+    if (tx.purpose === "link" && this.configuration.linkEnabled === false) throw new ApiError(403, "fastcas_link_disabled", "New FastCAS account links are disabled");
     if (tx.purpose === "register" && !this.configuration.allowRegistration) throw new ApiError(403, "fastcas_signup_disabled", "Creating accounts with FastCAS is not enabled");
     if (tx.purpose === "link") {
       const state = this.database.snapshot();
@@ -94,7 +98,7 @@ export class FastCASService {
     const pending = this.database.snapshot().fastcasLinks.find(item => item.issuer === this.configuration.issuer && item.link.subject === verified.identity.subject && item.link.state === "prepared");
     if (pending) {
       let remote = await this.sdk.getLink(pending.link.id);
-      if (remote.state === "prepared") remote = await this.sdk.activateLink(remote.id);
+      if (remote.state === "prepared") { if (this.configuration.linkEnabled === false) throw new ApiError(403, "fastcas_link_disabled", "New FastCAS account links are disabled"); remote = await this.sdk.activateLink(remote.id); }
       await this.saveLink(remote);
     }
     const link = await this.sdk.resolveLink(verified.identity.subject);
@@ -103,7 +107,7 @@ export class FastCASService {
   async reconcile(principal: Principal, id: string) {
     const existing = this.owned(principal, id);
     let remote = await this.sdk.getLink(existing.id);
-    if (remote.state === "prepared") remote = await this.sdk.activateLink(remote.id);
+    if (remote.state === "prepared") { if (this.configuration.linkEnabled === false) throw new ApiError(403, "fastcas_link_disabled", "New FastCAS account links are disabled"); remote = await this.sdk.activateLink(remote.id); }
     await this.saveLink(remote);
     return remote;
   }

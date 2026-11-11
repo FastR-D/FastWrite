@@ -23,14 +23,10 @@ page.on('pageerror', error => errors.push(error.stack));
 const cases = [];
 try {
   await page.goto(`${base}/components`);
-  await page.getByRole('heading', { name: "FastWrite 界面组件" }).waitFor();
+  await page.getByRole('heading', { name: "FastUI 组件目录" }).waitFor();
+  await page.evaluate(() => document.fonts.ready);
 
-  /*
-   * All four Button variants must render the same metrics. vscrui styles
-   * primary/secondary at runtime under compound selectors, which outrank the
-   * module's single classes, so anything NOT owned by vscrui (ghost, danger) has
-   * to copy those numbers — this is what stops them drifting apart again.
-   */
+  // All four variants must share geometry across the library and local renderers.
   const buttonMetrics = await page.evaluate(() => {
     const buttons = [...document.querySelectorAll('section button')];
     const pick = (text) => buttons.find((button) => button.textContent.trim() === text);
@@ -54,6 +50,48 @@ try {
     assert.deepEqual(buttonMetrics[name], buttonMetrics.primary, `${name} must render primary's metrics, got ${JSON.stringify(buttonMetrics[name])}`);
   }
   cases.push('all Button variants render the same metrics');
+
+  for (const [label, height] of [['紧凑密度示例', 28], ['舒适密度示例', 32]]) {
+    const sample = page.getByRole('group', { name: label, exact: true });
+    for (const control of [sample.getByRole('textbox'), sample.getByRole('combobox'), sample.getByRole('spinbutton'), sample.getByRole('button', { name: '检查表单' })]) {
+      assert.equal(await control.evaluate(element => element.getBoundingClientRect().height), height, `${label}: shared control height`);
+    }
+  }
+  cases.push('compact and comfortable density align buttons, inputs, selects and numbers');
+
+  const savePreview = page.getByRole('button', { name: '保存设置', exact: true });
+  const saveWidth = (await savePreview.boundingBox()).width;
+  await page.getByRole('checkbox', { name: '预览加载状态', exact: true }).check();
+  assert.equal((await savePreview.boundingBox()).width, saveWidth, 'loading preserves the button width');
+  assert.equal(await savePreview.getAttribute('aria-busy'), 'true');
+  assert.ok(await savePreview.isDisabled(), 'loading prevents duplicate submissions');
+  await page.getByRole('checkbox', { name: '预览加载状态', exact: true }).uncheck();
+  assert.ok(await savePreview.isEnabled());
+  cases.push('loading preserves the accessible name and width and prevents repeat actions');
+
+  const service = page.getByRole('combobox', { name: '工具栏服务', exact: true });
+  await service.click();
+  assert.equal(await page.getByRole('option', { name: 'Codex', exact: true }).getAttribute('aria-selected'), 'true');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  assert.ok((await service.textContent()).includes('Claude'));
+  await service.click();
+  await page.keyboard.press('Escape');
+  assert.equal(await service.getAttribute('aria-expanded'), 'false');
+  cases.push('toolbar service options retain selection, descriptions and keyboard navigation');
+
+  const editorTabs = page.getByRole('group', { name: '页签示例 controls', exact: true });
+  const dirtyMarker = editorTabs.getByRole('img', { name: '未保存的更改', exact: true });
+  assert.deepEqual(await dirtyMarker.evaluate(node => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height, text: node.textContent })), { width: 6, height: 6, text: '' }, 'unsaved marker has a fixed footprint independent of the font');
+  await editorTabs.getByRole('tab', { name: 'main.tex', exact: true }).focus();
+  await page.keyboard.press('End');
+  assert.equal(await editorTabs.getByRole('tab', { name: 'notes.md', exact: true }).evaluate(node => getComputedStyle(node).boxShadow), 'none', 'focused editor tabs do not inherit the global focus halo');
+  assert.equal(await editorTabs.getByRole('tab', { name: 'notes.md', exact: true }).getAttribute('aria-selected'), 'true');
+  await editorTabs.getByRole('button', { name: '关闭 notes.md', exact: true }).click();
+  assert.equal(await editorTabs.getByRole('tab').count(), 2);
+  await page.getByRole('button', { name: '重置页签示例', exact: true }).click();
+  assert.equal(await editorTabs.getByRole('tab').count(), 3);
+  cases.push('editor tabs navigate, close and reset in the catalogue');
 
   // The combobox exposes its expanded state and its active option.
   const project = page.getByRole('combobox', { name: "项目", exact: true });
@@ -221,6 +259,13 @@ try {
   await skills.getByRole('checkbox', { name: /续写/ }).check();
   assert.ok(await skills.getByRole('checkbox', { name: /续写/ }).isChecked(), 'checkbox list toggles');
   cases.push('multi-select toggles by checkbox');
+  const continueSkill = skills.getByRole('checkbox', { name: /续写/ });
+  await continueSkill.focus();
+  await page.keyboard.press('Space');
+  assert.equal(await continueSkill.isChecked(), false, 'Space clears a checked checkbox');
+  await page.keyboard.press('Space');
+  assert.equal(await continueSkill.isChecked(), true, 'Space checks it again');
+  cases.push('custom checkbox keeps native Space key interaction');
 
   /*
    * Field keeps the hint out of the control's accessible name: the name is
@@ -326,6 +371,35 @@ try {
   assert.deepEqual(violations, [], `axe violations:\n${violations.join('\n')}`);
   cases.push('axe wcag2a/2aa/21aa clean');
 
+  const input = page.getByRole('textbox', { name: '项目名称', exact: true });
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
+    await input.focus();
+    const controlMetrics = await input.evaluate(element => {
+      const style = getComputedStyle(element);
+      return { height: element.getBoundingClientRect().height, shadow: style.boxShadow, outline: style.outlineStyle, weight: style.fontWeight };
+    });
+    assert.equal(controlMetrics.height, await project.evaluate(element => element.getBoundingClientRect().height), 'text and select controls use one height');
+    assert.equal(controlMetrics.shadow, 'none', 'input focus uses a thin outline rather than a halo');
+    assert.equal(controlMetrics.outline, 'solid', 'keyboard focus stays visible');
+    assert.equal(controlMetrics.weight, '500', 'inputs use the medium body weight rather than inheriting the label weight');
+    await page.screenshot({ path: `/tmp/fastwrite-input-controls-${theme}.png` });
+    await project.click();
+    await page.screenshot({ path: `/tmp/fastwrite-selection-controls-${theme}.png` });
+    await page.keyboard.press('Escape');
+    await continueSkill.focus();
+    await page.screenshot({ path: `/tmp/fastwrite-checkbox-controls-${theme}.png` });
+    if (theme === 'dark') {
+      const darkViolations = await page.evaluate(async () => {
+        const result = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } });
+        return result.violations.filter(item => item.impact === 'critical' || item.impact === 'serious')
+          .map(item => `${item.id}: ${item.nodes.map(node => node.target.join(' ')).join(', ')}`);
+      });
+      assert.deepEqual(darkViolations, [], `dark theme axe violations:\n${darkViolations.join('\n')}`);
+      cases.push('dark theme axe wcag2a/2aa/21aa clean');
+    }
+  }
+  cases.push('input, select and checkbox states verified in light and dark themes');
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ result: 'pass', cases }));
 } finally {

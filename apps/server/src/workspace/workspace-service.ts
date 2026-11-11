@@ -1,3 +1,4 @@
+import { normalizeCompileSettings, type CompileSettings } from "@fastwrite/shared";
 import {
   cp,
   lstat,
@@ -504,7 +505,8 @@ export class WorkspaceService {
     });
   }
 
-  async updateProject(id: string, updates: { name?: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget | null }): Promise<PaperProject> {
+  async updateProject(id: string, updates: { name?: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget | null; compilation?: CompileSettings }): Promise<PaperProject> {
+    const compilation = updates.compilation === undefined ? undefined : (() => { try { return normalizeCompileSettings(updates.compilation); } catch { throw new ApiError(400, "compile_settings_invalid", "请选择有效的编译引擎和环境"); } })();
     return this.projectQueue.run(id, async () => {
       if (updates.mainDocument) {
         const normalizedMain = normalizeWorkspacePath(updates.mainDocument);
@@ -516,6 +518,7 @@ export class WorkspaceService {
       return this.database.mutate((state) => {
         const project = state.projects.find((candidate) => candidate.id === id);
         if (!project) throw new ApiError(404, "project_not_found", "Project not found");
+        if (compilation) project.compilation = compilation;
         if (updates.name?.trim()) project.name = updates.name.trim();
         if (updates.mainDocument) project.mainDocument = normalizeWorkspacePath(updates.mainDocument);
         if (updates.venue) project.skill = paperSkillForProfile(updates.venue);
@@ -872,11 +875,11 @@ export class WorkspaceService {
   }
 
   /** A consistent source copy and identity for compilation. */
-  async copySnapshot(id: string, destination: string): Promise<{ projectVersion: number; mainDocument: string }> {
+  async copySnapshot(id: string, destination: string): Promise<{ projectVersion: number; mainDocument: string; compilation?: CompileSettings }> {
     return this.projectQueue.run(id, async () => {
       const project = this.getProject(id);
       await cp(this.workspaceRoot(id), destination, { recursive: true, dereference: false });
-      return { projectVersion: project.version, mainDocument: project.mainDocument };
+      return { projectVersion: project.version, mainDocument: project.mainDocument, ...(project.compilation ? { compilation: project.compilation } : {}) };
     });
   }
 }

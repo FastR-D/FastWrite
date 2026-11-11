@@ -66,6 +66,10 @@ try {
   const panel = page.getByRole('tabpanel', { name: '设置', exact: true });
   const name = panel.getByLabel('项目名称', { exact: true });
   await expect(name).toHaveClass(/fastui-input/);
+  await expect(name).toHaveCSS('font-family', /IBM Plex Sans Variable/);
+  await expect(name).toHaveCSS('height', '28px');
+  await expect(name).toHaveCSS('border-radius', '4px');
+  await expect(name).toHaveCSS('border-color', 'rgb(130, 144, 163)');
   await name.fill(' ');
   await expect(panel.getByRole('button', { name: '保存更改', exact: true })).toBeDisabled();
   await name.fill('设置草稿保持');
@@ -92,6 +96,11 @@ try {
   assert.equal(await original.evaluate(el => el.isConnected), true);
   scenarios.push('system preference changes retain focused settings input and draft');
   const navigation = panel.getByRole('navigation', { name: '设置类别' });
+  await navigation.getByRole('button', { name: '编译环境', exact: true }).click();
+  await expect(panel.getByRole('combobox', { name: 'TeX 引擎' })).toBeVisible();
+  await navigation.getByRole('button', { name: '外部 MCP', exact: true }).click();
+  await expect(panel.getByRole('button', { name: '创建 30 天连接令牌' })).toBeVisible();
+  scenarios.push('main typography and compact geometry apply to shared inputs; compilation and MCP settings stay reachable');
   await navigation.getByRole('button', { name: 'AI 与模型配置', exact: true }).click();
   const key = panel.getByLabel('API 密钥', { exact: true });
   await key.fill('model-key-draft');
@@ -118,6 +127,11 @@ try {
     await page.setViewportSize({ width, height: 1000 });
     await peer.evaluate(mode => localStorage.setItem('fastwrite.theme', mode), mode);
     await expect(page.locator('html')).toHaveAttribute('data-fastui-theme', mode);
+    const primary = panel.getByRole('button', { name: '保存更改', exact: true });
+    await expect(primary).toHaveCSS('background-color', mode === 'dark' ? 'rgb(14, 99, 156)' : 'rgb(21, 95, 184)');
+    await expect(primary).toHaveCSS('color', 'rgb(255, 255, 255)');
+    await expect(name).toHaveCSS('font-family', /IBM Plex Sans Variable/);
+    await expect(name).toHaveCSS('background-color', mode === 'dark' ? 'rgb(23, 30, 39)' : 'rgb(255, 255, 255)');
     await expect(name).toHaveValue('设置草稿保持');
     assert.ok(await panel.evaluate(el => [...el.querySelectorAll('input')].filter(input => input.getClientRects().length).every(input => input.getBoundingClientRect().right <= el.getBoundingClientRect().right + 1)));
     await page.screenshot({ path: `${artifacts}/${mode}-${width}.png` });

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import ts from "typescript";
 
 const SOURCE_ROOT = join(import.meta.dir, "..", "..");
 const COMPONENT_ROOT = "components/ui";
@@ -142,6 +143,26 @@ describe("raw control guard", () => {
     const found = violations();
     const report = found.map(reportLine).join("\n");
     expect(found, `Raw controls must come from components/ui:\n${report}`).toEqual([]);
+  });
+
+  test("LaTeX service panels render all content through shared components", () => {
+    const found: string[] = [];
+    for (const name of ["LatexTools", "CompileAssistantDialog", "CompileEnvironmentPanel", "McpSettingsPanel"]) {
+      const file = join(SOURCE_ROOT, "components/workspace", `${name}.tsx`);
+      const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+      const visit = (node: ts.Node) => {
+        if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+          const tag = node.tagName.getText(source);
+          if (/^[a-z]/.test(tag)) {
+            const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+            found.push(`${name}.tsx:${line} <${tag}>`);
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
+    }
+    expect(found, "Use shared typography, layout, list, field and feedback components in LaTeX service panels").toEqual([]);
   });
 
   /*

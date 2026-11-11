@@ -1,9 +1,12 @@
+import { LatexIntelligence, installLatexProviders } from "../../lib/editor/latexIntelligence";
+import { LatexTools } from "./LatexTools";
 import { userFacingError } from "../../lib/notifications";
 import type { CommentThreadView, ReferenceSelection } from "@fastwrite/shared";
 import type { NavigationRequest } from "../../lib/editor/navigationController";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type MutableRefObject } from "react";
 import * as monaco from "../../lib/editor/monacoRuntime";
 import { compactGutterOptions, configureMonaco } from "../../lib/editor/monaco";
+import { editorTypography } from "../../lib/editor/typography";
 import { ReviewEditor } from "./ReviewEditor";
 import type { ProjectAccess } from "@fastwrite/shared";
 import { Icon, icons } from "../ui";
@@ -32,6 +35,7 @@ function recordCompletionMetric(event: CompletionMetricEvent, kind: CompletionKi
 
 export type WritingMode = "editing" | "reviewing" | "viewing";
 interface SourceEditorProps {
+  onNavigate?: (path: string, line?: number) => void;
   writingMode?: WritingMode | "auto";
   onModeChange?: (mode: WritingMode) => void;
   comments?: CommentThreadView[];
@@ -55,7 +59,7 @@ export interface SourceEditorHandle {
   flush: () => Promise<void>;
 }
 
-export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ writingMode = "auto", comments = [], activeCommentId, onCommentClick, onReviewSaved, onModeChange, references, completionEnabled: completionsEnabled, registry, projectId, document, targetLine, targetSelection, onSelection, onCursor, onDirtyChange, onDocumentState }, ref) {
+export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor({ onNavigate, writingMode = "auto", comments = [], activeCommentId, onCommentClick, onReviewSaved, onModeChange, references, completionEnabled: completionsEnabled, registry, projectId, document, targetLine, targetSelection, onSelection, onCursor, onDirtyChange, onDocumentState }, ref) {
   const [access, setAccess] = useState<ProjectAccess | null>(null);
   const defaultMode = access?.canWrite ? "editing" : access?.canComment ? "reviewing" : "viewing";
   const mode = writingMode === "auto" || (writingMode === "editing" && !access?.canWrite) || (writingMode === "reviewing" && !access?.canComment) ? defaultMode : writingMode;
@@ -99,6 +103,8 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   const shouldCompleteRef = useRef(false);
   const suppressNextCompletionRef = useRef(false);
   const versionRef = useRef(document.file.version);
+  const onNavigateRef = useRef(onNavigate); onNavigateRef.current = onNavigate;
+  const intelligenceRef = useRef<LatexIntelligence | null>(null);
   const [editorReady, setEditorReady] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("saved");
   const [message, setMessage] = useState("");
@@ -149,6 +155,8 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     const host = hostRef.current;
     if (!host) return;
     configureMonaco();
+    const intelligence = new LatexIntelligence(projectId, registry); intelligenceRef.current = intelligence;
+    const removeLatexProviders = installLatexProviders(projectId, intelligence);
     const editor = monaco.editor.create(host, {
       model: null,
       readOnly: true,
@@ -161,11 +169,12 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       scrollBeyondLastLine: false,
       smoothScrolling: true,
       roundedSelection: true,
-      fontFamily: 'ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
-      lineHeight: 22,
+      ...editorTypography(),
       ...compactGutterOptions,
-      folding: false,
+      folding: true,
+      quickSuggestions: { other: true, comments: false, strings: true },
+      suggestOnTriggerCharacters: true,
+      tabCompletion: "on",
       guides: { indentation: false, bracketPairs: true },
       renderLineHighlight: "line",
       renderWhitespace: "selection",
@@ -195,6 +204,12 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       }),
       editor.onDidChangeCursorSelection(() => { emitSelection(editor, decorationsRef.current, documentRef.current, versionRef.current, onSelectionRef.current, onCursorRef.current, cursorRef, completionRef, setCompletion, completionAbortRef); })
     ];
+    const opener = monaco.editor.registerEditorOpener({ openCodeEditor(_source, resource, location) {
+      if (resource.scheme !== "fastwrite" || resource.authority !== projectId || !onNavigateRef.current) return false;
+      const line = location ? "lineNumber" in location ? location.lineNumber : location.startLineNumber : 1;
+      onNavigateRef.current(resource.path.slice(1), line); return true;
+    } });
+    disposablesRef.current.push(opener);
     setEditorReady(true);
     const updateTheme = () => monaco.editor.setTheme(currentTheme() === "dark" ? "fastwrite-github-dark" : "fastwrite-github");
     window.addEventListener(THEME_CHANGE_EVENT, updateTheme);
@@ -214,6 +229,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       releaseModelRef.current?.();
       releaseModelRef.current = null;
       activeKeyRef.current = "";
+      removeLatexProviders(); intelligence.dispose(); intelligenceRef.current = null;
       editor.dispose();
       editorRef.current = null;
       modelRef.current = null;
@@ -297,7 +313,12 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
     }, 500);
   }, [completionEnabled, document.content, document.file.path, document.file.version, editorReady, projectId, saveEpoch, registry, collaborationEnabled, referenceKey]);
 
-  useEffect(() => { editorRef.current?.updateOptions({ readOnly: readOnly || mode !== "editing" }); onSelectionRef.current(null); }, [mode, readOnly]);
+  useEffect(() => {
+    const editor = editorRef.current;
+    editor?.updateOptions({ readOnly: readOnly || mode !== "editing" });
+    if (readOnly || mode !== "editing") onSelectionRef.current(null);
+    else if (editor) emitSelection(editor, decorationsRef.current, documentRef.current, versionRef.current, onSelectionRef.current, onCursorRef.current, cursorRef, completionRef, setCompletion, completionAbortRef);
+  }, [mode, readOnly]);
 
   useEffect(() => {
     const reconnect = () => { for (const { session } of sessionsRef.current.values()) if (session.dirty) void session.flush().catch(() => undefined); };
@@ -419,10 +440,11 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
   return (
     <div className="source-editor" onKeyDownCapture={(event) => {
       if (event.nativeEvent.isComposing) return;
-      if (event.key === "Tab" && completionRef.current) { event.preventDefault(); event.stopPropagation(); acceptCompletion(); }
+      if (event.key === "Tab" && completionRef.current && !(editorRef.current?.getDomNode()?.querySelector(".suggest-widget.visible"))) { event.preventDefault(); event.stopPropagation(); acceptCompletion(); }
       if (event.key === "Escape" && completionRef.current) { event.preventDefault(); event.stopPropagation(); ignoreCompletion(); }
 
     }}>
+      {mode === "editing" && /\.(tex|bib|sty|cls)$/i.test(document.file.path) ? <LatexTools editor={editorRef.current} intelligence={intelligenceRef.current} editable={!readOnly && editorReady} /> : null}
       <div ref={hostRef} className="monaco-editor-host" hidden={mode === "reviewing"} />
       {mode === "reviewing" && access?.userId ? <ReviewEditor key={`${projectId}:${document.file.path}:${access.userId}`} ref={reviewRef} projectId={projectId} path={document.file.path} userId={access.userId} onSaved={() => onReviewSaved?.()} /> : null}
       {readOnly && mode !== "reviewing" ? <div className="editor-readonly-notice" role="status">只读模式 · 可选择文本、查看讨论，审阅者可发表评论和修改建议</div> : null}

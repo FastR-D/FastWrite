@@ -1,12 +1,12 @@
+import { CompileAssistantDialog } from "./CompileAssistantDialog";
 import { userFacingError } from "../../lib/notifications";
 import { statusLabel } from "../../lib/labels";
 import type { AgentTaskRequest, AgentTaskSkillDescriptor, ReferencePaper, ReferenceSettings } from "@fastwrite/shared";
 import type { ReferenceWriteAction } from "./ReferenceStylePanel";
 import { ReferenceTags } from "./ReferenceTags";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeSet, PaperProject, ReviewIssue, ReviseCommandId, ReviseTurn, TextSelection, TableEquationCandidate } from "@fastwrite/shared";
 import { api } from "../../api/client";
-import { diffWords } from "../../lib/wordDiff";
 import { Button, Dialog, Field, Icon, IconButton, icons, QuickPick, Select, SegmentedControl, Tag, TextArea } from "../ui";
 import { ReviewDialog } from "./ReviewDialog";
 import { MemoryDialog } from "./MemoryDialog";
@@ -15,6 +15,12 @@ import { AgentTaskWorkspace, type AgentTaskSeed } from "./AgentTaskDialog";
 import type { CompileStateReport } from "./PdfPane";
 import { compileRepairObjective, compileRepairPath, type CompileRepairRequest } from "./compileRepair";
 import { responseLanguage } from "../../lib/responseLanguage";
+import { AiThread } from "./ai/AiThread";
+import { AiComposer } from "./ai/AiComposer";
+import { AiContextBar } from "./ai/AiContextBar";
+import { ChangeSetCard } from "./ai/ChangeSetCard";
+import { useRevisionRequest } from "./ai/useRevisionRequest";
+import type { AiChatMessage as ChatMessage, AiPanelState as PanelState } from "./ai/AiMessage";
 
 interface AiWorkspaceProps {
   taskSkills: AgentTaskSkillDescriptor[];
@@ -40,6 +46,7 @@ interface AiWorkspaceProps {
   onRestoreSelection: (selection: TextSelection) => Promise<boolean>;
   onFileChanged: (path: string, range?: { from: number; to: number }) => void | Promise<void>;
   onNavigate: (path: string, line?: number) => void;
+  beforeCompile: () => Promise<void>;
   onWorkspaceChanged: () => void | Promise<void>;
   onPrepareLocalRevision: (issue: ReviewIssue) => Promise<TextSelection | null>;
   compileState: CompileStateReport;
@@ -61,10 +68,7 @@ const SHORTCUTS: ReadonlyArray<{ id: ReviseCommandId; label: string }> = [
   { id: "limitations", label: "局限性" }
 ];
 
-type PanelState = "idle" | "running" | "applying" | "accepted" | "error";
-interface ChatMessage { id: string; role: "user" | "assistant"; content: string; rationale?: string }
-
-export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTaskSkillIdsChange, skillTaskRequest, referenceSettings = null, referencePapers = [], referenceAction, onRemoveReference = () => {}, project, selection, paragraphSelection, sectionSelection, completionEnabled, onCompletionEnabledChange, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onWorkspaceChanged, onPrepareLocalRevision, compileState, compileRepairRequest, onRequestCompile }: AiWorkspaceProps) {
+export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTaskSkillIdsChange, skillTaskRequest, referenceSettings = null, referencePapers = [], referenceAction, onRemoveReference = () => {}, project, selection, paragraphSelection, sectionSelection, completionEnabled, onCompletionEnabledChange, fullscreen, onToggleFullscreen, onUseSelection, onClearSelection, onRestoreSelection, onFileChanged, onNavigate, onWorkspaceChanged, beforeCompile, onPrepareLocalRevision, compileState, compileRepairRequest, onRequestCompile }: AiWorkspaceProps) {
   const [instruction, setInstruction] = useState("");
   const [state, setState] = useState<PanelState>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -87,12 +91,15 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
   const [selectedHarness, setSelectedHarness] = useState<"codex" | "claude">(() => localStorage.getItem("fastwrite.selected-harness") === "claude" ? "claude" : "codex");
   const [agentSeed, setAgentSeed] = useState<AgentTaskSeed>({});
   const [editingProposal, setEditingProposal] = useState(false);
+  const [compileAssistantOpen, setCompileAssistantOpen] = useState(false);
+  const [compileAssistantLightweight, setCompileAssistantLightweight] = useState(false);
   const [editedAfter, setEditedAfter] = useState("");
   const [fullscreenWidth, setFullscreenWidth] = useState(() => Number.parseInt(localStorage.getItem("fastwrite.ai-fullscreen-width") ?? "", 10) || 800);
   const [resizingWidth, setResizingWidth] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const messagesRef = useRef<HTMLDivElement>(null);
-  const requestRef = useRef<AbortController | null>(null);
+  const revisionRequest = useRevisionRequest();
+  const submittedInstruction = useRef("");
+  const [loadedSelectionKey, setLoadedSelectionKey] = useState("");
   const selectionKeyRef = useRef("");
   const preserveNextSelectionRef = useRef(false);
   const restoredKeyRef = useRef("");
@@ -108,18 +115,14 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
     setActiveTab("agent");
   }, [skillTaskRequest]);
 
-  useEffect(() => () => { requestRef.current?.abort(); resizeCleanupRef.current?.(); }, []);
+  useEffect(() => () => resizeCleanupRef.current?.(), []);
   useEffect(() => { const controller = new AbortController(); void api.harness.list(controller.signal).then(setHarnesses).catch(() => setHarnesses([])).finally(() => { if (!controller.signal.aborted) setHarnessLoading(false); }); return () => controller.abort(); }, []);
   useEffect(() => {
     if (!compileRepairRequest || appliedCompileRepairRef.current === compileRepairRequest.id) return;
     appliedCompileRepairRef.current = compileRepairRequest.id;
-    setAgentSeed({
-      objective: compileRepairObjective(compileRepairRequest.failure),
-      path: compileRepairPath(compileRepairRequest.failure)
-    });
-    setActiveTab("agent");
+    setCompileAssistantLightweight(true);
+    setCompileAssistantOpen(true);
   }, [compileRepairRequest]);
-  useEffect(() => { messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight }); }, [messages, state, editingProposal]);
   useEffect(() => {
     if (!fullscreen) return;
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onToggleFullscreen(); };
@@ -140,22 +143,24 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
     if (!selectionKey || restoredKeyRef.current === selectionKey) return;
     if (selectionKeyRef.current && selectionKeyRef.current !== selectionKey) {
       if (preserveNextSelectionRef.current) preserveNextSelectionRef.current = false;
-      else resetChat();
+      else resetChat(selectionKeyRef.current, false);
     }
     selectionKeyRef.current = selectionKey;
     restoredKeyRef.current = selectionKey;
+    setLoadedSelectionKey(selectionKey);
     const stored = readConversation(project.id, selectionKey);
     if (!stored || !selection) return;
     setMessages(stored.messages);
     setChangeSet(stored.changeSet);
-    setEditedAfter(stored.workingText || stored.changeSet?.changes[0]?.after || "");
+    setEditedAfter(stored.workingText ?? stored.changeSet?.changes[0]?.after ?? "");
+    setEditingProposal(stored.changeSet?.status === "proposed" && typeof stored.workingText === "string" && stored.workingText !== stored.changeSet.changes[0]?.after);
     setInstruction(stored.instruction || "");
   }, [project.id, selection, selectionKey]);
 
   useEffect(() => {
-    if (!selectionKey || selectionKeyRef.current !== selectionKey) return;
+    if (!selectionKey || loadedSelectionKey !== selectionKey || selectionKeyRef.current !== selectionKey) return;
     if (selection) writeConversation(project.id, selectionKey, { selection, messages, changeSet, workingText: editingProposal ? editedAfter : changeSet?.changes[0]?.after ?? "", instruction });
-  }, [changeSet, editingProposal, editedAfter, instruction, messages, project.id, selection, selectionKey]);
+  }, [changeSet, editingProposal, editedAfter, instruction, loadedSelectionKey, messages, project.id, selection, selectionKey]);
 
   const handledReferenceAction = useRef<string | null>(null);
   useEffect(() => {
@@ -181,9 +186,9 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
     }
   }, [referenceAction, state, selection, sectionSelection, paragraphSelection, onUseSelection]);
 
-  const resetChat = () => {
-    requestRef.current?.abort();
-    if (changeSet?.status === "proposed") void api.revisions.reject(project.id, changeSet.id).catch(() => undefined);
+  const resetChat = (keyToClear = selectionKey, discard = true) => {
+    revisionRequest.cancel();
+    if (discard && changeSet?.status === "proposed") void api.revisions.reject(project.id, changeSet.id).catch(() => undefined);
     setMessages([]);
     setChangeSet(null);
     setEditedAfter("");
@@ -191,8 +196,10 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
     setInstruction("");
     setError("");
     setState("idle");
-    if (selectionKey) localStorage.removeItem(conversationStorageKey(project.id, selectionKey));
-    localStorage.removeItem(latestConversationStorageKey(project.id));
+    if (discard) {
+      if (keyToClear) localStorage.removeItem(conversationStorageKey(project.id, keyToClear));
+      localStorage.removeItem(latestConversationStorageKey(project.id));
+    }
   };
 
   const proposeStructured = async () => {
@@ -222,9 +229,8 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
     if (!selection || state === "running" || state === "applying") return;
     const prompt = command ? SHORTCUTS.find((item) => item.id === command)?.label ?? command : instruction.trim();
     if (!prompt) return;
-    requestRef.current?.abort();
-    const controller = new AbortController();
-    requestRef.current = controller;
+    const request = revisionRequest.begin();
+    submittedInstruction.current = prompt;
     const workingText = changeSet ? (editingProposal ? editedAfter : changeSet.changes[0]!.after) : selection.text;
     const history: ReviseTurn[] = messages.map(({ role, content }) => ({ role, content }));
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: prompt };
@@ -240,18 +246,27 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
         ...(workingText !== selection.text ? { workingText } : {}),
         ...(history.length ? { history } : {})
         ,responseLanguage: responseLanguage()
-      }, controller.signal);
+      }, request.signal);
+      if (!request.isCurrent()) return;
       if (changeSet?.status === "proposed") await api.revisions.reject(project.id, changeSet.id).catch(() => undefined);
+      if (!request.isCurrent()) return;
       setChangeSet(result.changeSet);
       setEditedAfter(result.changeSet.changes[0]!.after);
       setEditingProposal(false);
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: result.changeSet.changes[0]!.after, rationale: result.changeSet.rationale }]);
       setState("idle");
     } catch (failure) {
-      if ((failure as DOMException).name === "AbortError") return;
+      if (!request.isCurrent() || (failure as DOMException).name === "AbortError") return;
       setError(userFacingError(failure, "修改失败"));
       setState("error");
-    }
+    } finally { request.finish(); }
+  };
+
+  const stopRevision = () => {
+    revisionRequest.cancel();
+    setInstruction(submittedInstruction.current);
+    setState("stopped");
+    setError("");
   };
 
   const decide = async (decision: "accept" | "reject") => {
@@ -311,10 +326,7 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
     window.setTimeout(() => inputRef.current?.focus(), 120);
   };
 
-  const proposedAfter = editingProposal ? editedAfter : changeSet?.changes[0]?.after ?? "";
-  const diff = useMemo(() => changeSet ? diffWords(changeSet.changes[0]!.before, proposedAfter) : [], [changeSet, proposedAfter]);
   const busy = state === "running" || state === "applying";
-  const canDecide = changeSet?.status === "proposed";
   const updateFullscreenWidth = (next: number) => {
     const width = Math.round(Math.min(Math.max(560, next), Math.max(560, window.innerWidth)));
     setFullscreenWidth(width);
@@ -349,19 +361,23 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
             className="ai-workspace__mode"
             label="AI 写作模式"
             value={activeTab}
-            onChange={(mode) => { if (mode === "agent") setAgentSeed(selection?.path ? { path: selection.path } : {}); setActiveTab(mode); }}
+            onChange={(mode) => { if (state === "running") stopRevision(); if (mode === "agent") setAgentSeed(selection?.path ? { path: selection.path } : {}); setActiveTab(mode); }}
             options={[
-              { value: "revise", label: "修改", icon: <Icon name={icons.sparkle} /> },
-              { value: "agent", label: "智能助手", icon: <Icon name={icons.typeHierarchy} /> }
+              { value: "revise", label: "修改", disabled: state === "applying", icon: <Icon name={icons.sparkle} /> },
+              { value: "agent", label: "智能助手", disabled: state === "applying", icon: <Icon name={icons.typeHierarchy} /> }
             ]}
           />
           <div className="ai-workspace__harness">
-            <Select aria-label="智能助手服务" value={selectedHarness} onChange={(kind) => { setSelectedHarness(kind as "codex" | "claude"); localStorage.setItem("fastwrite.selected-harness", kind); }} options={[{ value: "codex", label: "Codex" }, { value: "claude", label: "Claude" }]} />
+            <Select appearance="toolbar" aria-label="智能助手服务" value={selectedHarness} onChange={(kind) => { setSelectedHarness(kind as "codex" | "claude"); localStorage.setItem("fastwrite.selected-harness", kind); }} options={[
+              { value: "codex", label: "Codex", description: "OpenAI", icon: <Icon name={icons.robot} size={14} /> },
+              { value: "claude", label: "Claude", description: "Anthropic", icon: <Icon name={icons.sparkle} size={14} /> }
+            ]} />
             <span role="status" aria-label="智能助手服务状态"><Tag tone={harnessState === "ready" ? "success" : harnessState === "degraded" ? "warning" : "neutral"} title={harnessStatus?.message ?? harnessStatus?.version ?? "智能助手服务可用性"}>{harnessLoading ? "检查中" : harnessState === "ready" ? "就绪" : harnessState === "degraded" ? "受限" : "不可用"}</Tag></span>
           </div>
         </div>
         <div className="ai-workspace__tools">
           <Button className="ai-workspace__completion" size="small" variant={completionEnabled ? "secondary" : "ghost"} type="button" aria-pressed={completionEnabled} title="技能指导的写作补全" icon={<Icon name={icons.sparkle} />} onClick={() => onCompletionEnabledChange(!completionEnabled)}>补全</Button>
+          <IconButton label="编译助手与待审核修改" icon={<Icon name={icons.tools} />} onClick={() => { setCompileAssistantLightweight(false); setCompileAssistantOpen(true); }} />
           <IconButton label="论文记忆" icon={<Icon name={icons.database} />} onClick={() => setMemoryOpen(true)} />
           <IconButton label="文献研究" icon={<Icon name={icons.search} />} onClick={() => setResearchOpen(true)} />
           <IconButton label="表格或公式助手" icon={<Icon name={icons.listTree} />} onClick={() => setStructuredOpen(true)} />
@@ -370,32 +386,19 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
           <IconButton label={fullscreen ? "退出全屏" : "全屏"} icon={<Icon name={fullscreen ? icons.screenNormal : icons.screenFull} />} onClick={onToggleFullscreen} />
         </div>
       </header>
-      <ReferenceTags settings={referenceSettings} papers={referencePapers} onRemove={onRemoveReference} />
+      {activeTab === "agent" ? <ReferenceTags settings={referenceSettings} papers={referencePapers} onRemove={onRemoveReference} /> : null}
       <div className={`ai-workspace__body${resizingWidth ? " is-resizing-width" : ""}`} style={fullscreen ? { width: `min(${fullscreenWidth}px, 100%)` } : undefined}>
       <div hidden={activeTab !== "revise"} className="revise-chat">
-        {selection ? <aside className="revise-context-strip"><span>{selection.path} · 行 {selection.startLine}–{selection.endLine}</span><p title={selection.text}>{selection.text}</p><IconButton label="清除所选上下文" icon={<Icon name={icons.close} />} onClick={onClearSelection} /></aside> : null}
-        <div ref={messagesRef} className="revise-chat__messages" aria-live="polite">
-          {!selection ? <div className="revise-chat__empty"><Icon name={icons.sparkle} /><strong>在编辑器中选择文本</strong><span>选择句子、使用光标所在段落，或修改当前章节。对话期间将保留所选上下文。</span><div className="revise-chat__targets">{paragraphSelection ? <Button size="small" variant="primary" onClick={() => onUseSelection(paragraphSelection)}>使用当前段落</Button> : null}{sectionSelection ? <Button size="small" variant="secondary" onClick={() => onUseSelection(sectionSelection)}>使用当前章节</Button> : null}</div></div> : null}
-          {messages.map((message, index) => <article className={`revise-message revise-message--${message.role}`} key={message.id}>
-            <span>{message.role === "assistant" ? <><Icon name={icons.robot} /> {project.skill.name}</> : "你"}</span>
-            {message.role === "assistant" && index === messages.length - 1 && changeSet ? <>
-              {editingProposal ? <TextArea className="revision-edit-textarea" aria-label="可编辑的修改文本" value={editedAfter} onChange={setEditedAfter} spellCheck={false} autoFocus /> : <div className="revision-diff" aria-label="建议的逐词更改">{diff.map((part, partIndex) => part.type === "delete" ? <del key={partIndex}>{part.value}</del> : part.type === "insert" ? <ins key={partIndex}>{part.value}</ins> : <span key={partIndex}>{part.value}</span>)}</div>}
-              {message.rationale ? <p className="revision-rationale">{message.rationale}</p> : null}
-              <div className="revision-inline-actions">
-                {changeSet.status === "accepted" ? <><span className="revision-accepted"><Icon name={icons.check} /> 已应用</span><Button size="small" variant="ghost" icon={<Icon name={icons.discard} />} disabled={busy} onClick={() => void rollback()}>回滚</Button></> : canDecide ? <><Button size="small" variant="ghost" icon={<Icon name={icons.close} />} disabled={busy} onClick={() => void decide("reject")}>拒绝</Button>{editingProposal ? <Button size="small" variant="ghost" onClick={() => { setEditedAfter(changeSet.changes[0]!.after); setEditingProposal(false); }}>取消编辑</Button> : <Button size="small" variant="secondary" icon={<Icon name={icons.edit} />} disabled={busy} onClick={() => setEditingProposal(true)}>编辑</Button>}<Button size="small" variant="primary" icon={<Icon name={icons.check} />} disabled={busy || (editingProposal && (!editedAfter.trim() || editedAfter === changeSet.changes[0]!.before))} onClick={() => void decide("accept")}>{editingProposal && editedAfter !== changeSet.changes[0]!.after ? "保存并接受" : "接受"}</Button></> : null}
-              </div>
-            </> : <p>{message.content}</p>}
-          </article>)}
-          {state === "running" ? <article className="revise-message revise-message--assistant revise-message--status"><span><Icon name={icons.robot} /> {project.skill.name}</span><p><Icon name={icons.loading} spin /> 正在优化当前候选内容…</p></article> : null}
-          {error ? <div className="revision-error" role="alert">{error}</div> : null}
-        </div>
-        <form className="revise-composer" onSubmit={(event) => { event.preventDefault(); void propose(); }}>
-          <div className="revise-shortcuts" role="group" aria-label="快捷修改指令">
-            {SHORTCUTS.slice(0, 3).map((shortcut) => <Button variant="secondary" className="revise-shortcut" key={shortcut.id} disabled={!selection || busy} onClick={() => void propose(shortcut.id)}>{shortcut.label}</Button>)}
-            <Button variant="ghost" className="revise-shortcut" icon={<Icon name={icons.ellipsis} />} disabled={!selection || busy} onClick={() => setActionsOpen(true)}>更多操作</Button>
-          </div>
-          <div className="revise-composer__input"><TextArea ref={inputRef} rows={2} value={instruction} onChange={setInstruction} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (selection && instruction.trim() && !busy) void propose(); } }} placeholder={selection ? "提出进一步修改要求…" : "在编辑器中选择文本以开始…"} disabled={!selection || busy} aria-label="修改要求" /><Button variant="primary" size="small" icon={<Icon name={icons.send} />} loading={busy} disabled={!selection || !instruction.trim() || busy} type="submit">发送</Button></div>
-        </form>
+        <AiThread conversationKey={`${project.id}:${selectionKey}`} active={activeTab === "revise"} messages={messages} assistantName={project.skill.name} state={state} error={error} proposalVersion={`${changeSet?.id ?? ""}:${changeSet?.status ?? ""}:${editingProposal}:${editingProposal ? editedAfter : ""}`}
+          empty={!selection ? <div className="revise-chat__empty"><Icon name={icons.sparkle} /><strong>在编辑器中选择文本</strong><span>选择句子、使用光标所在段落，或修改当前章节。对话期间将保留所选上下文。</span><div className="revise-chat__targets">{paragraphSelection ? <Button size="small" variant="primary" onClick={() => onUseSelection(paragraphSelection)}>使用当前段落</Button> : null}{sectionSelection ? <Button size="small" variant="secondary" onClick={() => onUseSelection(sectionSelection)}>使用当前章节</Button> : null}</div></div> : undefined}
+          proposal={changeSet ? <ChangeSetCard changeSet={changeSet} rationale={changeSet.rationale} editing={editingProposal} editedAfter={editedAfter} busy={busy}
+            onEdit={() => setEditingProposal(true)} onEditText={setEditedAfter} onCancelEdit={() => { setEditedAfter(changeSet.changes[0]!.after); setEditingProposal(false); }}
+            onDecide={decision => void decide(decision)} onRollback={() => void rollback()} /> : undefined}
+        />
+        <AiComposer instruction={instruction} state={state} hasSelection={!!selection} inputRef={inputRef} shortcuts={SHORTCUTS.slice(0, 3)}
+          context={<AiContextBar selection={selection} settings={referenceSettings} papers={referencePapers} disabled={state === "applying"} onClear={() => { if (state === "running") stopRevision(); onClearSelection(); }} onRemoveReference={onRemoveReference} />}
+          onChange={setInstruction} onSubmit={() => void propose()} onShortcut={command => void propose(command)} onMore={() => setActionsOpen(true)} onStop={stopRevision}
+        />
       </div>
       <div hidden={activeTab !== "agent"} className="agent-workspace-slot"><AgentTaskWorkspace key={agentSeed.planId ?? "default"} open={activeTab === "agent"} project={project} taskSkills={taskSkills} taskSkillsLoading={taskSkillsLoading} taskSkillIds={taskSkillIds} onTaskSkillIdsChange={onTaskSkillIdsChange} references={referenceSettings?.selections ?? []} seed={{ ...agentSeed, harness: selectedHarness, scope: taskScope }} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setActiveTab("revise")} onAccepted={onFileChanged} onNavigate={onNavigate} /></div>
       {fullscreen ? <div className="ai-workspace__width-handle" role="separator" aria-label="调整最大化 AI 工作区大小" aria-orientation="vertical" aria-valuemin={Math.min(560, window.innerWidth)} aria-valuemax={window.innerWidth} aria-valuenow={Math.min(fullscreenWidth, window.innerWidth)} tabIndex={0} onPointerDown={startWidthResize} onKeyDown={(event) => {
@@ -409,6 +412,7 @@ export function AiWorkspace({ taskSkills, taskSkillsLoading, taskSkillIds, onTas
     <Dialog open={actionsOpen} title="修改操作" description="为所选文本选择操作。" width="small" onClose={() => setActionsOpen(false)}>
       <QuickPick label="修改操作" filterLabel="查找修改操作" items={SHORTCUTS.slice(3)} onSelect={(command) => { setActionsOpen(false); void propose(command as ReviseCommandId); }} />
     </Dialog>
+    <CompileAssistantDialog open={compileAssistantOpen} projectId={project.id} initialLightweight={compileAssistantLightweight} {...(compileRepairRequest?.diagnosticId && compileAssistantLightweight ? { initialDiagnosticId: compileRepairRequest.diagnosticId } : {})} diagnostics={compileState.diagnostics} beforeRun={beforeCompile} onAccepted={async path => { await onFileChanged(path); await onWorkspaceChanged(); onRequestCompile(); }} onClose={() => setCompileAssistantOpen(false)} />
     <ReviewDialog open={reviewOpen} project={project} compileState={compileState} onRequestCompile={onRequestCompile} onClose={() => setReviewOpen(false)} onNavigate={onNavigate} onReviseLocally={(issue) => void beginLocalRevision(issue)} onReviseWithAgent={(issueIds, objective) => { setAgentSeed({ issueIds, objective }); setReviewOpen(false); setActiveTab("agent"); }} />
     <Dialog open={structuredOpen} width="wide" title="表格与公式助手" description="生成可审核的 LaTeX 候选内容，审核更改集后再应用。" onClose={() => setStructuredOpen(false)}>
       <div className="structured-assistant"><div className="form-grid"><Field label="类型"><Select value={structuredKind} onChange={(value) => { setStructuredKind(value as "table" | "equation"); setStructuredFormat(value === "table" ? "csv" : "latex"); }} options={[{ value: "table", label: "表格" }, { value: "equation", label: "公式" }]} /></Field><Field label="输入格式"><Select value={structuredFormat} onChange={(value) => setStructuredFormat(value as typeof structuredFormat)} options={structuredKind === "table" ? [{ value: "csv", label: "CSV" }, { value: "natural-language", label: "自然语言" }, { value: "latex", label: "LaTeX" }] : [{ value: "latex", label: "LaTeX" }, { value: "natural-language", label: "自然语言" }]} /></Field><Field label="目标 .tex 文件路径"><TextArea rows={1} value={structuredPath} onChange={setStructuredPath} /></Field></div><Field label="来源"><TextArea value={structuredSource} onChange={setStructuredSource} placeholder={structuredKind === "table" ? "方法,准确率\nA,0.9" : "x = y + 1"} /></Field><Button loading={structuredBusy} disabled={!structuredSource.trim() || !structuredPath.trim()} onClick={() => void proposeStructured()}>生成候选内容</Button>{structuredCandidate ? <section className="structured-candidate"><header><strong>候选内容预览</strong><span>{statusLabel(structuredCandidate.compileCheck.status)}</span></header><pre>{structuredCandidate.preview}</pre><p>{structuredCandidate.compileCheck.message ?? "编译整个项目之前，请先检查候选内容。"}</p><div><Button size="small" variant="secondary" loading={structuredBusy} onClick={() => void compileStructured()}>检查候选内容</Button><Button size="small" variant="ghost" onClick={() => { setStructuredOpen(false); setStructuredCandidate(null); }}>关闭</Button></div></section> : null}</div>

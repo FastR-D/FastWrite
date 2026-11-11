@@ -1,4 +1,5 @@
 import { createApplication, type ApplicationFetch } from "./app";
+import { rmSync } from "node:fs";
 import { config } from "./config";
 import { lockDataDirectory } from "./storage/data-directory-lock";
 import type { Server, ServerWebSocket } from "bun";
@@ -19,7 +20,15 @@ export async function startServer() {
   const release = lockDataDirectory(config.dataDirectory);
   let fetch: ApplicationFetch;
   let server: ReturnType<typeof Bun.serve>;
-  try { fetch = await createApplication(); server = Bun.serve(createServerOptions(fetch)); }
+  try {
+    fetch = await createApplication();
+    const { hostname, port, idleTimeout, ...options } = createServerOptions(fetch);
+    const unix = process.env.FASTWRITE_DEV_SOCKET;
+    // The watcher closes the old listener but can leave its socket file behind.
+    // The data-directory lock above guarantees this instance owns the service.
+    if (unix) rmSync(unix, { force: true });
+    server = Bun.serve(unix ? { ...options, unix } : { ...options, hostname, port, idleTimeout });
+  }
   catch (error) { release(); throw error; }
   process.once("exit", release);
   // A stopped listener can still have background writers. Hold the lock until process exit.
@@ -28,7 +37,7 @@ export async function startServer() {
   mailTimer.unref?.();
   const historyTimer = setInterval(() => { void fetch.checkpointCollaborations().catch(error => logServerError("automatic collaboration checkpoint failed", error)); }, 60_000);
   historyTimer.unref?.();
-  console.log(`FastWrite server: http://localhost:${config.port}`);
+  console.log(process.env.FASTWRITE_DEV_SOCKET ? "FastWrite API: local development socket" : `FastWrite server: http://localhost:${config.port}`);
   console.log(`Workspace data: ${config.dataDirectory}`);
   if (config.features.multiNodeCollaboration && !config.redisUrl) console.warn("FASTWRITE_MULTI_NODE_COLLABORATION is enabled but FASTWRITE_REDIS_URL is not configured; collaboration remains single-node.");
   return server;

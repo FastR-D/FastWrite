@@ -1,0 +1,8 @@
+.section { display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; gap: 16px; font-family: var(--vscode-font-family); color: var(--vscode-foreground); }
+.section[hidden] { display: none; }
+.surface { padding: 16px; border: 1px solid var(--vscode-border); border-radius: var(--fw-radius-surface); background: var(--vscode-editor-background); }
+.header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.titles { min-width: 0; flex: 1 1 180px; }
+.title { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.description { margin: 5px 0 0; font-size: var(--vscode-font-size); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--vscode-panelTitle-inactiveForeground); }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

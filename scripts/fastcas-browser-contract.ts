@@ -10,7 +10,7 @@ assert.ok(issuer&&origin);
 const directory=await mkdtemp(join(tmpdir(),"fastwrite-browser-contract-"));
 let server:ReturnType<typeof Bun.serve>|undefined;
 try {
- const app=await createApplication(directory,{features:{serverAuth:true},fastcasConfiguration:{
+ const app=await createApplication(directory,{features:{serverAuth:true},bootstrapAdmin:{email:"bootstrap@example.test",password:"isolated-contract-admin-password"},fastcasConfiguration:{
   issuer,clientId:"write",clientSecret:"integration-client-secret-32-characters-long",
   redirectUri:origin+"/api/auth/fastcas/callback",allowLoopbackHTTP:true,allowRegistration:false,
  }});

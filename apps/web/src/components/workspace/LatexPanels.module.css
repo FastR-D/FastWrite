@@ -1,0 +1,13 @@
+.stack { gap: 16px; }
+.row { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
+.footerHint { margin-right: auto; align-self: center; }
+.citationList { max-height: 40vh; overflow: auto; border: 1px solid var(--vscode-border); border-radius: 4px; }
+.citationRow { display: flex; flex-direction: column; align-items: stretch; gap: 5px; padding: 12px; border-bottom: 1px solid var(--vscode-border); }
+.citationRow:last-child { border-bottom: 0; }
+.symbols { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 8px; }
+.review :global(.text-model-comparison) { flex: 0 0 auto; height: 300px; min-height: 240px; }
+.code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.6; }
+.tokenRow { display: flex; flex-direction: row; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--vscode-border); }
+.tokenRow:last-child { border-bottom: 0; }
+.tokenInfo { flex: 1; gap: 5px; }
+.statusRow { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 7px 0; }

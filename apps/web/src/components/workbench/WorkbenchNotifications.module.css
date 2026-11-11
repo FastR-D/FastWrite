@@ -1,5 +1,5 @@
 .stack { position: fixed; z-index: 1000; right: 16px; bottom: 28px; width: min(420px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-.notification { min-width: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr) 24px; align-items: start; gap: 10px; padding: 12px; color: var(--vscode-foreground); background: var(--vscode-panel, var(--surface)); border: 1px solid var(--border-strong); border-radius: 4px; box-shadow: 0 4px 20px rgba(0, 0, 0, .22); pointer-events: auto; }
-.notification > svg { color: var(--red-600); margin-top: 2px; }
+.notification { min-width: 0; display: grid; grid-template-columns: 24px minmax(0, 1fr) 26px; align-items: start; gap: 10px; padding: 12px; color: var(--vscode-foreground); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--fw-radius-overlay); box-shadow: var(--shadow-popover); pointer-events: auto; }
+.notification > :first-child { color: var(--red-600); background: var(--red-50); box-sizing: content-box; padding: 4px; border-radius: var(--fw-radius-control); }
 .notification strong { font-size: 12px; font-weight: 600; }
-.notification p { margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: var(--text-secondary); overflow-wrap: anywhere; }
+.notification p { margin: 5px 0 0; font-size: 12px; line-height: 1.6; color: var(--text-secondary); overflow-wrap: anywhere; }

@@ -68,6 +68,9 @@ export function Checkbox({
         aria-invalid={resolvedInvalid || undefined}
         onChange={(event) => onChange?.(event.target.checked)}
       />
+      {!pill ? <span className={`${styles.box} ${resolvedInvalid ? styles.invalid : ""}`} aria-hidden="true">
+        <svg className={styles.check} width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8.5 6.25 11.5 13 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </span> : null}
       {pill ? <span className={styles.pillLabel}>{icon}{children}</span> : children}
     </label>
   );

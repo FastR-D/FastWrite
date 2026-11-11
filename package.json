@@ -21,7 +21,7 @@
     "papers:compile": "bun scripts/papers-compile.ts",
     "latex:check": "bash scripts/check-latex-linux.sh",
     "latex:setup": "bash scripts/setup-latex-linux.sh --install",
-    "e2e:smoke": "sh scripts/e2e-smoke.sh",
+    "e2e:smoke": "node scripts/e2e-smoke.mjs",
     "e2e:cross-browser": "sh scripts/e2e-cross-browser.sh",
     "llm:smoke": "bun scripts/llm-smoke.ts",
     "ci:check": "sh scripts/ci-check.sh",
@@ -32,6 +32,11 @@
     "worker:mail": "bun apps/server/src/notifications/mail-worker.ts",
     "storage:postgres:migrate": "bun scripts/postgres-migrate.ts",
     "e2e:editor": "node scripts/e2e-editor-reliability.mjs",
+    "e2e:ai-workspace": "node scripts/e2e-ai-workspace.mjs",
+    "e2e:workbench-ui": "node scripts/e2e-workbench-ui.mjs",
+    "e2e:projects-ui": "node scripts/e2e-projects-ui.mjs",
+    "e2e:typography": "node scripts/e2e-typography.mjs",
+    "e2e:sidebar-evidence": "node scripts/e2e-sidebar-evidence.mjs",
     "e2e:compile-snapshot": "node scripts/e2e-compile-snapshot.mjs",
     "e2e:workbench": "node scripts/e2e-workbench.mjs",
     "e2e:settings-editor": "node scripts/e2e-settings-editor.mjs",
@@ -48,7 +53,8 @@
     "e2e:workbench-performance": "node scripts/e2e-workbench-performance.mjs",
     "e2e:large-document": "node scripts/e2e-large-document.mjs",
     "e2e:paper-collaboration": "node scripts/e2e-paper-collaboration.mjs",
-    "e2e:sidebar-workflow": "node scripts/e2e-sidebar-workflow.mjs"
+    "e2e:sidebar-workflow": "node scripts/e2e-sidebar-workflow.mjs",
+    "e2e:latex-services": "node scripts/e2e-latex-services.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

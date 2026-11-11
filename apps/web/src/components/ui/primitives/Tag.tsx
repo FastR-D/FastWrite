@@ -4,7 +4,7 @@ import styles from "./Tag.module.css";
 export interface TagProps {
   children: ReactNode;
   /** Status colour. Always paired with text — never colour alone. */
-  tone?: "neutral" | "success" | "danger" | "warning" | "info";
+  tone?: "neutral" | "success" | "danger" | "warning" | "info" | "ai";
   icon?: ReactNode;
   title?: string;
   className?: string;

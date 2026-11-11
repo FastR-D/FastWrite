@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import type { SourceTab } from "../../lib/editor/tabState";
 import type { DiffRequest } from "./SourceControlView";
 import { Icon, icons, TabBar, type TabItem } from "../ui";
+import styles from "./EditorTabs.module.css";
 
 export const diffRequestKey = (request: DiffRequest) => encodeURIComponent(JSON.stringify([request.baseRef, request.targetRef, request.path, request.oldPath ?? "", request.projectVersion ?? null]));
 export interface ComparisonTab { key: string; request: DiffRequest; }
@@ -31,7 +32,7 @@ export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, 
         label: tabs.filter(item => item.path.split("/").pop() === name).length > 1 ? tab.path : name,
         title: tab.path,
         controls: "source-editor-area",
-        icon: <Icon name={icons.fileText} aria-hidden />,
+        icon: <Icon name={/\.(tex|sty|cls)$/i.test(tab.path) ? icons.fileCode : icons.fileText} className={styles.file ?? ""} size={14} aria-hidden />,
         preview: !tab.pinned,
         dirty: !!dirty[tab.path],
         active: activePath === tab.path,
@@ -49,7 +50,7 @@ export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, 
         label,
         title: label,
         controls: `comparison-${tab.key}`,
-        icon: <Icon name={icons.gitCompare} aria-hidden />,
+        icon: <Icon name={icons.gitCompare} className={styles.comparison ?? ""} size={14} aria-hidden />,
         preview: false,
         dirty: request.targetRef === "working" && !!dirty[request.path],
         active: activeComparison === tab.key,
@@ -59,7 +60,7 @@ export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, 
         close: () => onCloseComparison?.(tab.key)
       };
     }),
-    ...documents.map(document => ({ ...document, title: document.label, controls: document.id, icon: <Icon name={icons.book} aria-hidden />, preview: false, dirty: false, closeLabel: `关闭 ${document.label}`, pin: () => undefined })),
+    ...documents.map(document => ({ ...document, title: document.label, controls: document.id, icon: <Icon name={icons.book} className={styles.document ?? ""} size={14} aria-hidden />, preview: false, dirty: false, closeLabel: `关闭 ${document.label}`, pin: () => undefined })),
     ...(settings ? [{
       id: "settings",
       label: "设置",

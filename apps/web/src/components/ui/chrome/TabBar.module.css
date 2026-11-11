@@ -9,8 +9,9 @@
 
 .bar::-webkit-scrollbar { display: none; }
 
-/* Simple variant: no close buttons, used for dialogs. */
-.simple { gap: 2px; padding: 4px 6px; }
+/* Tabs without close buttons keep the same flat surface and top marker. */
+.simple { gap: 0; padding: 0; border-bottom: 0; }
+.simple .item { height: var(--fw-tab-height, 28px); }
 
 /*
  * `max-width` keeps one very long file path from stretching its tab across the
@@ -30,6 +31,7 @@
 .bar:not(.simple) .item:has([aria-selected="true"]) {
   background: var(--surface);
   border-top-color: var(--accent);
+  box-shadow: inset 0 1px var(--accent);
 }
 
 .bar:not(.simple) .tab { height: 100%; border: 0; background: transparent; }
@@ -38,16 +40,19 @@
   display: inline-flex;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   height: 34px;
   padding: 0 10px;
   border: 0;
+  border-radius: 0;
   border-right: 1px solid var(--vscode-border);
   border-top: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);
   font-family: var(--vscode-font-family);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 18px;
+  box-shadow: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -55,7 +60,7 @@
 }
 
 .tab:hover { background: var(--vscode-hover); }
-.tab:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.tab:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -2px; box-shadow: none; }
 
 /* An active tab is the surface the editor below it uses. */
 .active {
@@ -70,7 +75,7 @@
 .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tab > :not(.label) { flex-shrink: 0; }
 
-.dirty { color: var(--accent); font-size: 14px; line-height: 1; }
+.dirty { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
 
 .close {
   display: inline-flex;
@@ -82,7 +87,7 @@
   padding: 0;
   margin-right: 6px;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--fw-radius-control);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -91,3 +96,10 @@
 
 .item:hover .close, .item:focus-within .close, .active + .close { opacity: 1; }
 .close:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
+.close:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; box-shadow: none; }
+.simple .tab { height: 100%; border: 0; border-radius: 0; padding: 0 12px; justify-content: center; text-align: center; }
+.simple .active, .simple .active:hover { color: var(--vscode-foreground); background: var(--surface); box-shadow: inset 0 2px var(--accent); }
+
+@media (hover: none) {
+  .close { opacity: 1; }
+}

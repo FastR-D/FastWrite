@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as monaco from "../../lib/editor/monacoRuntime";
-import { configureMonaco } from "../../lib/editor/monaco";
+import { compactGutterOptions, configureMonaco } from "../../lib/editor/monaco";
+import { editorTypography } from "../../lib/editor/typography";
 import { Button, Checkbox } from "../ui";
 
 export const textModelComparisonStats = { created: 0, disposed: 0 };
@@ -15,7 +16,7 @@ export function TextModelComparison({ original, modified, originalLabel, modifie
     // previous pair can already be disposed until its state update rerenders us.
     if (!host.current || original.isDisposed() || modified.isDisposed()) return;
     configureMonaco();
-    const instance = monaco.editor.createDiffEditor(host.current, { automaticLayout: true, readOnly, originalEditable: false, originalAriaLabel: originalLabel, modifiedAriaLabel: modifiedLabel, wordWrap: "on", minimap: { enabled: false }, scrollBeyondLastLine: false });
+    const instance = monaco.editor.createDiffEditor(host.current, { ...compactGutterOptions, ...editorTypography(), automaticLayout: true, readOnly, originalEditable: false, originalAriaLabel: originalLabel, modifiedAriaLabel: modifiedLabel, wordWrap: "on", minimap: { enabled: false }, scrollBeyondLastLine: false });
     textModelComparisonStats.created += 1;
     // Parent effects may release owned models before this child's React cleanup runs.
     // Register before setModel so the diff detaches before its disposal guard fires.

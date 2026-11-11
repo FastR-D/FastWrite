@@ -1,3 +1,9 @@
+import { inspectProjectEnvironment } from "./compiler/tex-environment-service";
+import { normalizeCompileSettings } from "@fastwrite/shared";
+import { ProjectIntelligence } from "./latex/project-intelligence";
+import { CompileAssistantService } from "./agent/compile-assistant-service";
+import { McpAccessTokens } from "./mcp/access-tokens";
+import { handleProjectMcp } from "./mcp/project-server";
 import { ReferencePaperService, readReferenceUpload } from "./references/service";
 import type { ReferenceDownloader } from "./references/importer";
 import type { ReferenceSelection } from "@fastwrite/shared";
@@ -106,7 +112,8 @@ interface Services {
   agentTasks: AgentTaskService;
   completions: CompletionService;
   texPackages: TexPackageProvider;
-  latexCompiler: Pick<LatexCompileService, "compile">;
+  latexCompiler: LatexCompileService;
+  compileAssistant: CompileAssistantService;
   skillRegistry: SkillRegistry;
   compliance: ComplianceService;
   latexTemplates: LatexTemplateService;
@@ -241,7 +248,7 @@ function harnessProvider(runs: HarnessRunService, kind: "codex" | "claude", cwd:
     const adapter = runs.adapter(kind);
     if (!adapter) throw new ApiError(503, "harness_unavailable", `Harness '${kind}' is unavailable`);
     const session = await adapter.createSession({ cwd, title: `FastWrite ${method}` });
-    const schema = method === "analyzeReferenceStyle" ? '{"features":[string]}' : method === "planAgentTask" ? '{"steps":[string],"affectedFiles":[string],"risks":[string],"validation":[string]}' : method === "generateAgentTask" ? '{"files":[{"path":string,"content":string,"rationale":string}]}' : method === "planDraft" ? '{"outline":[{"path":string,"title":string,"purpose":string}]}' : method === "generateDraft" ? '{"files":[{"path":string,"content":string,"rationale":string}]}' : method === "revise" ? '{"replacement":string,"rationale":string}' : method === "complete" ? '{"suggestion":string}' : '{"result":object}';
+    const schema = method === "assistantStep" ? '{"action":"read_file|compile|propose_edit|finish","path":string,"oldText":string,"newText":string,"explanation":string}' : method === "analyzeReferenceStyle" ? '{"features":[string]}' : method === "planAgentTask" ? '{"steps":[string],"affectedFiles":[string],"risks":[string],"validation":[string]}' : method === "generateAgentTask" ? '{"files":[{"path":string,"content":string,"rationale":string}]}' : method === "planDraft" ? '{"outline":[{"path":string,"title":string,"purpose":string}]}' : method === "generateDraft" ? '{"files":[{"path":string,"content":string,"rationale":string}]}' : method === "revise" ? '{"replacement":string,"rationale":string}' : method === "complete" ? '{"suggestion":string}' : '{"result":object}';
     const scoped = typeof input === "object" && input !== null && "scope" in input && (input as { scope?: { type?: string; section?: unknown } }).scope?.type === "section";
     const responseLanguage = typeof input === "object" && input !== null && "responseLanguage" in input ? (input as { responseLanguage?: string }).responseLanguage : undefined;
     const languageRule = responseLanguage === "zh-CN" ? "Respond to the user-facing explanation in Simplified Chinese; do not translate or change manuscript text unless the task explicitly requests it." : responseLanguage === "en-US" ? "Respond to the user-facing explanation in English; do not change manuscript text language unless the task explicitly requests it." : "Use the user's language for explanations when clear, while preserving the manuscript language requested by the task.";
@@ -349,7 +356,9 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const sharedProvider = runtimeAgentProvider(activeProvider);
   const providers = { completion: sharedProvider, agent: sharedProvider, revise: sharedProvider, review: sharedProvider, memory: sharedProvider };
   const harnessSessions = new HarnessSessionService(database);
-  const latexCompiler = options.latexCompiler ?? new LatexCompileService(dataDirectory, workspaces, { mode: features.serverAuth || process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host" });
+  const latexCompiler = new LatexCompileService(dataDirectory, workspaces, { mode: features.serverAuth || process.env.FASTWRITE_COMPILE_SANDBOX === "bubblewrap" ? "bubblewrap" : "host" });
+  if (options.latexCompiler) latexCompiler.compile = options.latexCompiler.compile.bind(options.latexCompiler);
+  const compileAssistant = new CompileAssistantService(database, workspaces, latexCompiler, providers.agent);
   const mcpTools = new McpToolService(mcpRegistry, workspaces, latexCompiler, database);
   const latexTemplates = new LatexTemplateService(dataDirectory, fetch, config.templateDirectory);
   const memories = new MemoryService(database, workspaces, skillRegistry, asGateway(providers.memory));
@@ -394,7 +403,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const alignment = new AlignmentService(workspaces);
   const agentTasks = new AgentTaskService(database, workspaces, skillRegistry, asGateway(providers.agent), memories, asGateway(providers.review), compliance, referencePapers);
   const completions = new CompletionService(workspaces, skillRegistry, asGateway(providers.completion), memories, referencePapers);
-  const services: Services = { referencePapers, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, collaborationHistory, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
+  const services: Services = { referencePapers, database, workspaces, projectSearch: new ProjectSearchService(workspaces, authorization), uploads, github: new GithubService(dataDirectory, workspaces), githubSync: new GithubSyncService(dataDirectory, database, workspaces), revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, compileAssistant, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, collaborationHistory, comments, mailDelivery, externalAdapters, jobs, experiments, backups };
   const routes = buildRoutes(services, {
     status: () => {
       const activeConfiguration = runtimeConfiguration ?? config.agentProviders.agent;
@@ -471,6 +480,7 @@ async function configuredPostgresRepository(initialState: import("./storage/data
 
 function projectActionFor(pathname: string, method: string): ProjectAction {
   if (/\/shares(?:\/|$)/.test(pathname)) return "project:manage";
+  if (/\/compile-assistant$/.test(pathname)) return "agent:propose";
   if (method === "GET") return "project:read";
   if ((method === "DELETE" || method === "PATCH") && /^\/api\/projects\/[^/]+$/.test(pathname)) return "project:manage";
   if (/\/collaboration\/presence(?:\/|$)/.test(pathname)) return "project:read";
@@ -485,6 +495,7 @@ function projectActionFor(pathname: string, method: string): ProjectAction {
 }
 
 function pathAuthorizesIndividually(pathname: string): boolean {
+  if (/^\/api\/projects\/[^/]+\/mcp$/.test(pathname)) return true;
   return /\/api\/projects\/[^/]+\/(?:file|asset|files|assets)$/.test(pathname) || /\/api\/projects\/[^/]+\/(?:comments|checkpoints|review-sessions|shared-comments|collaboration|access)(?:\/|$)/.test(pathname);
 }
 
@@ -497,8 +508,10 @@ function requireHarnessAccess(auth: AuthService, request: Request, authEnabled: 
   return actor;
 }
 
-function buildRoutes({ referencePapers, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, collaborationHistory, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry(), fastcas?: FastCASService): Route[] {
+function buildRoutes({ referencePapers, database, workspaces, projectSearch, uploads, github, githubSync, revisions, drafts, reviews, memories, agentTasks, completions, texPackages, latexCompiler, compileAssistant, skillRegistry, compliance, latexTemplates, research, claims, alignment, harnessRegistry, mcpRegistry, harnessRuns, harnessSessions, mcpTools, auth, authorization, teams, harnessProfiles, collaboration, collaborationHistory, comments, mailDelivery, externalAdapters, jobs, experiments, backups }: Services, agentSettings: { status: () => { configured: boolean; source: "runtime" | "environment" | "none"; baseURL?: string; model?: string; wireAPI: AgentWireApi }; configure: (input: AgentSettingsInput) => void; postgresMirror?: () => { configured: boolean; healthy: boolean; failures: number; lastError?: string }; postgresCompare?: () => Promise<{ equal: boolean; legacyHash: string; normalizedHash: string; mismatches: string[] }> }, authEnabled = config.features.serverAuth, oidc?: IdentityProvider, cas?: IdentityProvider, metrics = new MetricsRegistry(), fastcas?: FastCASService): Route[] {
   const presence = new PresenceService(authorization);
+  const intelligence = new ProjectIntelligence(workspaces, authorization, latexCompiler.environments);
+  const mcpTokens = new McpAccessTokens(database, authorization);
   const principal = (request: Request, required = authEnabled): Principal | undefined => auth.principal(request, required);
   const harnessRoute = (method: string, path: string, handler: Handler, adminOnly = true): Route => route(method, path, (request, params, url) => {
     requireHarnessAccess(auth, request, authEnabled, adminOnly);
@@ -533,12 +546,45 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     return selected;
   };
   return [
+    route("GET", "/api/tex-environments", async (request) => { principal(request); return json(await latexCompiler.environments.status()); }),
+    route("GET", "/api/projects/:projectId/pending-proposals", async (request, params) => {
+      const projectId = required(params, "projectId"), actor = principal(request);
+      workspaces.getProject(projectId);
+      const proposals = database.snapshot().changeSets.filter(item => item.projectId === projectId && ["proposed", "partially-accepted"].includes(item.status));
+      return json(proposals.filter(item => !actor || item.changes.every(change => authorization.projectPathDecision(actor, projectId, change.path, "project:read").allowed)).slice(-100).reverse());
+    }),
+    route("GET", "/api/projects/:projectId/compile-environment", async (request, params) => {
+      const projectId = required(params, "projectId"), actor = principal(request);
+      if (actor) await requireWorkspacePathAccess(projectId, actor, authorization, "compile:run", workspaces);
+      const project = workspaces.getProject(projectId), index = await intelligence.index(projectId, actor);
+      return json(await inspectProjectEnvironment(latexCompiler.environments, normalizeCompileSettings(project.compilation ?? { engine: "pdflatex", environmentId: "system" }), index.documents));
+    }),
+    route("GET", "/api/projects/:projectId/latex-index", async (request, params) => json(await intelligence.index(required(params, "projectId"), principal(request)))),
+    route("GET", "/api/projects/:projectId/compiler-diagnostics", async (request, params) => {
+      const projectId = required(params, "projectId"); const actor = principal(request);
+      if (actor) await requireWorkspacePathAccess(projectId, actor, authorization, "compile:run", workspaces);
+      const result = latexCompiler.latest(projectId);
+      return json(result ? { ...result, log: result.log.slice(-32_000), stale: result.projectVersion !== workspaces.getProject(projectId).version } : { available: false });
+    }),
+    route("POST", "/api/projects/:projectId/compile-assistant", async (request, params) => {
+      const projectId = required(params, "projectId"); await collaboration.flushProject(projectId);
+      const body = await readJson<{ objective?: string; diagnosticId?: string; lightweight?: boolean; expectedVersion: number }>(request);
+      if (!Number.isSafeInteger(body.expectedVersion) || typeof body.lightweight !== "undefined" && typeof body.lightweight !== "boolean" || body.objective !== undefined && typeof body.objective !== "string" || body.diagnosticId !== undefined && typeof body.diagnosticId !== "string") throw new ApiError(400, "compile_assistant_invalid", "编译助手请求无效");
+      const validate = async () => { const actor = principal(request); if (actor) { await requireWorkspacePathAccess(projectId, actor, authorization, "agent:propose", workspaces); await requireWorkspacePathAccess(projectId, actor, authorization, "compile:run", workspaces); } };
+      await validate();
+      return json(await compileAssistant.run(projectId, body, AbortSignal.any([request.signal, AbortSignal.timeout(300_000)]), validate, principal(request)?.user.id), 201);
+    }),
+    route("GET", "/api/projects/:projectId/mcp-tokens", async (request, params) => json(mcpTokens.list(required(params, "projectId"), principal(request, true)!))),
+    route("POST", "/api/projects/:projectId/mcp-tokens", async (request, params) => json(await mcpTokens.issue(required(params, "projectId"), principal(request, true)!, await readJson(request)), 201, { "cache-control": "no-store" })),
+    route("DELETE", "/api/projects/:projectId/mcp-tokens/:tokenId", async (request, params) => { await mcpTokens.revoke(required(params, "projectId"), required(params, "tokenId"), principal(request, true)!); return new Response(null, { status: 204 }); }),
+    route("POST", "/api/projects/:projectId/mcp", (request, params) => handleProjectMcp(request, required(params, "projectId"), { tokens: mcpTokens, workspaces, authorization, collaboration, compiler: latexCompiler, intelligence, database, comments })),
+    ...["GET", "DELETE"].map(method => route(method, "/api/projects/:projectId/mcp", async (request, params) => { mcpTokens.authenticate(request, required(params, "projectId")); return json({ jsonrpc: "2.0", error: { code: -32000, message: "Stateless MCP endpoint supports POST only" }, id: null }, 405, { Allow: "POST" }); })),
     route("GET", "/api/health", async () => json({ status: "ok", version: "0.1.0" })),
     route("GET", "/api/metrics", async () => new Response(metrics.prometheus(), { headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8" } })),
     route("POST", "/api/auth/register", async (request) => { const result = await auth.register(await readJson<{ email: string; password: string; displayName?: string }>(request)); await teams.personalWorkspace({ user: result.user, sessionId: "register" }); return authResponse(result, 201); }),
     route("POST", "/api/auth/login", async (request) => authResponse(await auth.login(await readJson<{ email: string; password: string }>(request)))),
     route("POST", "/api/auth/dev-session", async (request) => { requireSameOrigin(request); return json(await auth.developmentSession(), 200, { "cache-control": "no-store" }); }),
-    route("GET", "/api/auth/providers", async () => json({ local: true, oidc: Boolean(oidc), cas: Boolean(cas), fastcas: Boolean(fastcas), fastcasSignup: Boolean(fastcas?.configuration.allowRegistration) })),
+    route("GET", "/api/auth/providers", async () => json({ local: true, oidc: Boolean(oidc), cas: Boolean(cas), fastcas: Boolean(fastcas && fastcas.configuration.loginEnabled !== false), fastcasSignup: Boolean(fastcas?.configuration.allowRegistration && fastcas.configuration.loginEnabled !== false) })),
     route("GET", "/api/auth/fastcas/signup", async (_request, _params, url) => {
       if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
       const signup = await fastcas.beginRegistration(url.searchParams.get("returnTo") ?? "/projects");
@@ -1017,7 +1063,8 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     route("GET", "/api/projects/:projectId", async (request, params) => { const projectId = required(params, "projectId"); const current = principal(request, authEnabled); if (current) authorization.requireProject(current, projectId, "project:read"); return json(workspaces.getProject(projectId)); }),
     route("POST", "/api/projects/:projectId/transfer", async (request, params) => { const body = await readJson<{ teamId?: string; personalOwnerUserId?: string }>(request); await teams.transferProject(required(params, "projectId"), principal(request)!, body); return json(workspaces.getProject(required(params, "projectId"))); }),
     route("PATCH", "/api/projects/:projectId", async (request, params) => {
-      const body = await readJson<{ name?: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget | null }>(request);
+      const body = await readJson<{ name?: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget | null; compilation?: import("@fastwrite/shared").CompileSettings }>(request);
+      if (body.compilation !== undefined) { try { await latexCompiler.environments.validate(normalizeCompileSettings(body.compilation)); } catch (error) { if (error instanceof ApiError) throw error; throw new ApiError(400, "compile_settings_invalid", "无效的编译环境设置"); } }
       return json(await workspaces.updateProject(required(params, "projectId"), body));
     }),
     route("DELETE", "/api/projects/:projectId", async (request, params) => {

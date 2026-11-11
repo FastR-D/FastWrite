@@ -181,3 +181,18 @@ test("identity disable event revokes only FastCAS sourced sessions", async () =>
   expect(database.snapshot().fastcasLinks[0]?.link.state).toBe("active");
   expect(database.snapshot().fastcasEvents).toHaveLength(1);
 });
+
+test("login and linking can be independently disabled without changing local authentication", async () => {
+  const {database}=await fixture(); const auth=new AuthService(database);
+  const signedIn=await auth.register({email:"modes@example.test",password:"original-password-at-least-12"});
+  const principal=auth.principal(new Request("https://write.test",{headers:{authorization:`Bearer ${signedIn.token}`}}))!;
+  const configuration={issuer:"https://cas.test",clientId:"write",clientSecret:"isolated-test-secret",redirectUri:"https://write.test/callback",allowRegistration:true};
+  const service=new FastCASService({...configuration,loginEnabled:false,linkEnabled:false},database,auth);
+  expect(service.status(principal)).toMatchObject({enabled:true,loginEnabled:false,linkEnabled:false});
+  await expect(service.beginLogin()).rejects.toMatchObject({status:403});
+  await expect(service.beginRegistration()).rejects.toMatchObject({status:403});
+  await expect(service.beginLink(principal,"original-password-at-least-12")).rejects.toMatchObject({status:403});
+  expect((await auth.login({email:"modes@example.test",password:"original-password-at-least-12"})).user.id).toBe(signedIn.user.id);
+  const defaults=new FastCASService(configuration,database,auth);
+  expect(defaults.status(principal)).toMatchObject({loginEnabled:true,linkEnabled:true});
+});

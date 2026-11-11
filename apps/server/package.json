@@ -10,17 +10,19 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fastrd/fastcas": "^0.1.1",
+    "@fastrd/fastcas": "0.1.2",
     "@fastwrite/harness-claude": "workspace:*",
     "@fastwrite/harness-codex": "workspace:*",
     "@fastwrite/harness-core": "workspace:*",
     "@fastwrite/harness-protocol": "workspace:*",
     "@fastwrite/shared": "workspace:*",
-    "fast-xml-parser": "^5.11.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "fast-xml-parser": "^5.12.0",
     "fflate": "^0.8.2",
     "nodemailer": "^10.1.4",
     "openai": "^7.3.0",
-    "pdfjs-dist": "^5.4.296"
+    "pdfjs-dist": "^5.4.296",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

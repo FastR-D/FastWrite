@@ -233,12 +233,13 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     [],
   );
   const fixCompileWithAgent = useCallback(
-    (failure: CompileFailureContext) => {
+    (failure: CompileFailureContext, diagnosticId?: string) => {
       setBottomPanelTab("ai");
       setPanelCollapsed(false);
       setCompileRepairRequest((current) => ({
         id: (current?.id ?? 0) + 1,
         failure,
+        ...(diagnosticId ? { diagnosticId } : {}),
       }));
       setAiHeight(Math.max(aiHeight, 380));
     },
@@ -928,7 +929,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 </Field>
               </div>
               {claims.length ? (
-                <div className="claim-ledger-list">
+                <div className="claim-ledger-list" role="region" aria-label="论断列表" tabIndex={0}>
                   {(
                     [
                       "supported",
@@ -964,8 +965,8 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                               `${claim.anchor.path} · 已保存版本${claim.anchor.fileVersion} · ${claim.anchorStatus === "current" ? "锚点已核实" : "打开前请核实并重新定位"}`
                             }
                           >
-                            <span>{claim.semanticType ?? "claim"}</span>
-                            <em>
+                            <span className="claim-ledger-kind">{claim.semanticType ?? "claim"}</span>
+                            <em className="claim-ledger-excerpt">
                               {claim.anchor.exactText.slice(0, 72)}
                               {claim.anchorStatus === "current" ? ` · ${claim.anchor.path} · 已保存版本${claim.anchor.fileVersion}` : claim.anchorStatus === "orphaned" ? " · 源文件缺失" : " · 请核实位置"}
                             </em>
@@ -1067,6 +1068,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 }
               >
                 <SourceEditor
+                  onNavigate={(path, line) => { void navigateToPath(path, line); }}
                   ref={editorRef}
                   completionEnabled={completionEnabled}
                   comments={collaboration.threads}
@@ -1139,6 +1141,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           />
           <div className="bottom-panel-content" role="tabpanel" hidden={bottomPanelTab !== "ai"}>
           <AiWorkspace
+            key={project.id}
             project={project}
             taskSkills={taskSkills.skills}
             taskSkillsLoading={taskSkills.loading}
@@ -1207,6 +1210,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             onNavigate={(path, line) => {
               void navigateToPath(path, line);
             }}
+            beforeCompile={prepareCompile}
             onWorkspaceChanged={async () => {
               await refreshWorkspace(undefined, selectedPath ?? undefined);
             }}
@@ -1233,8 +1237,14 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           />
           </div>
           <div className="bottom-panel-content bottom-panel-problems" role="tabpanel" hidden={bottomPanelTab !== "problems"}>
-            <header><span>{compileState.state === "error" ? "编译失败" : compileState.diagnostics.length ? "编译诊断" : "没有编译问题"}</span><small>{compileState.progress}</small></header>
-            {compileState.diagnostics.length ? <div className="diagnostic-list">{compileState.diagnostics.map(diagnostic => <div className={`diagnostic-row diagnostic-row--${diagnostic.severity}`} key={diagnostic.id}><Button variant="ghost" disabled={!diagnostic.path || !diagnostic.line} onClick={() => { if (diagnostic.path && diagnostic.line) void navigateToPath(diagnostic.path, diagnostic.line); }}><Icon name={icons.warning} /><span><strong>{diagnostic.message}</strong>{diagnostic.path ? <code>{diagnostic.path}{diagnostic.line ? `:${diagnostic.line}` : ""}</code> : null}</span></Button>{compileState.failure ? <Button size="small" variant="secondary" icon={<Icon name={icons.tools} />} onClick={() => { setBottomPanelTab("ai"); setPanelCollapsed(false); fixCompileWithAgent(compileState.failure!); }}>使用智能助手修复</Button> : null}</div>)}</div> : <div className="bottom-panel-empty"><Icon name={icons.passFilled} />{compileState.state === "error" ? "编译器未提供源文件位置。" : "编译项目后即可查看诊断信息。"}</div>}
+            <header><Icon name={compileState.state === "error" ? icons.error : icons.checklist} /><span>{compileState.state === "error" ? "编译失败" : compileState.diagnostics.length ? "编译诊断" : "没有编译问题"}</span><small title={compileState.progress}>{compileState.diagnostics.length ? `${compileState.diagnostics.length} 项诊断` : compileState.state === "error" ? "查看输出获取详细日志" : compileState.progress}</small></header>
+            {compileState.diagnostics.length ? <div className="diagnostic-list">{compileState.diagnostics.map(diagnostic => <div className={`diagnostic-row diagnostic-row--${diagnostic.severity}`} key={diagnostic.id}>
+              <Button className="diagnostic-row__location" variant="ghost" disabled={!diagnostic.path || !diagnostic.line} onClick={() => { if (diagnostic.path && diagnostic.line) void navigateToPath(diagnostic.path, diagnostic.line); }}>
+                <Icon name={diagnostic.severity === "error" ? icons.error : diagnostic.severity === "warning" ? icons.warning : icons.info} />
+                <span className="diagnostic-row__text"><strong>{diagnostic.message}</strong>{diagnostic.path ? <code>{diagnostic.path}{diagnostic.line ? `:${diagnostic.line}` : ""}</code> : null}</span>
+              </Button>
+              {compileState.failure ? <Button size="small" variant="ghost" aria-label="使用智能助手修复" icon={<Icon name={icons.tools} />} onClick={() => { setBottomPanelTab("ai"); setPanelCollapsed(false); fixCompileWithAgent(compileState.failure!, diagnostic.id); }}>助手修复</Button> : null}
+            </div>)}</div> : <div className="bottom-panel-empty"><Icon name={compileState.state === "error" ? icons.warning : icons.passFilled} /><span>{compileState.state === "error" ? "编译器未提供源文件位置。" : "编译项目后即可查看诊断信息。"}</span>{compileState.state === "error" ? <Button size="small" variant="ghost" onClick={() => setBottomPanelTab("output")}>查看编译输出</Button> : null}</div>}
           </div>
           <div className="bottom-panel-content bottom-panel-output" role="tabpanel" hidden={bottomPanelTab !== "output"}>
             <header><Icon name={icons.filePdf} /><span>编译输出</span><small>{compileState.compiledVersion === null ? "尚未编译" : `工作区版本 ${compileState.compiledVersion}`}</small></header>
@@ -1274,6 +1284,8 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 compileRequest={compileRequest}
                 onCompileState={handleCompileState}
                 onFixWithAgent={fixCompileWithAgent}
+                onShowProblems={() => { setBottomPanelTab("problems"); setPanelCollapsed(false); }}
+                onShowOutput={() => { setBottomPanelTab("output"); setPanelCollapsed(false); }}
                 onSyncToSource={(location) => {
                   void navigateToPath(location.path, location.line);
                 }}

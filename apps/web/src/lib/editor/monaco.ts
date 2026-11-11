@@ -8,13 +8,15 @@ declare global {
 
 let monacoConfigured = false;
 
-// Let Monaco grow the line numbers with the document instead of reserving five digits.
-// The narrow decoration lane also carries comment markers without a separate glyph column.
-export const compactGutterOptions = { glyphMargin: false, lineNumbersMinChars: 2, lineDecorationsWidth: 12 } as const;
+// Monaco adds a 16px folding lane. Keep 8px after it as a text inset; the
+// gutter surface/divider in styles.css ends before that inset.
+export const compactGutterOptions = { glyphMargin: false, lineNumbersMinChars: 4, lineDecorationsWidth: 8 } as const;
 
 export function configureMonaco() {
   if (monacoConfigured) return;
   monacoConfigured = true;
+  // Webfonts can finish after the editor mounts; discard fallback glyph widths.
+  document.fonts.addEventListener("loadingdone", () => monaco.editor.remeasureFonts());
   window.MonacoEnvironment = { getWorker: () => new EditorWorker() };
   if (!monaco.languages.getLanguages().some((language) => language.id === "latex")) {
     monaco.languages.register({ id: "latex", extensions: [".tex", ".sty", ".cls", ".bib"] });

@@ -4,6 +4,7 @@ import { App } from "./App";
 import "@fastrd/ui-react/styles.css";
 import "@fastrd/ui-foundation/vscrui.css";
 import { initTheme } from "./lib/theme";
+import "./styles/typography.css";
 import "./styles/tokens.css";
 import "./styles.css";
 import "vscrui/dist/_name_.css";

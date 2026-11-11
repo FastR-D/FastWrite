@@ -1,0 +1,6 @@
+.text { min-width: 0; font-family: var(--vscode-font-family); line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+.default { color: var(--vscode-foreground); }
+.muted { color: var(--vscode-panelTitle-inactiveForeground); }
+.normal { font-size: var(--vscode-font-size); }
+.small { font-size: 11px; }
+.mono { font-family: var(--fw-font-mono); }

@@ -18,7 +18,9 @@ export { Badge, type BadgeProps } from "./primitives/Badge";
 export { Divider, type DividerProps } from "./primitives/Divider";
 export { Loader, type LoaderProps } from "./primitives/Loader";
 export { Label, type LabelProps } from "./primitives/Label";
-export { View, type ViewProps } from "./primitives/View";
+export { View, type ViewProps, type ControlDensity } from "./primitives/View";
+export { Text, type TextProps } from "./primitives/Text";
+export { Section, type SectionProps } from "./chrome/Section";
 export { Table, TableRow, TableCell, type TableProps, type TableRowProps, type TableCellProps } from "./primitives/Table";
 
 export { Field, type FieldProps, type FieldRenderProps } from "./controls/Field";

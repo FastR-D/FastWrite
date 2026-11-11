@@ -1,12 +1,13 @@
 .iconButton {
+  transition: background-color var(--fw-duration-fast) var(--fw-ease), border-color var(--fw-duration-fast) var(--fw-ease), color var(--fw-duration-fast) var(--fw-ease);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: var(--fw-control-height);
+  height: var(--fw-control-height);
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: var(--fw-radius-control);
   background: transparent;
   color: var(--vscode-icon-foreground);
   cursor: pointer;
@@ -22,7 +23,7 @@
   outline-offset: -1px;
 }
 
-.iconButton:disabled { opacity: 0.38; cursor: not-allowed; }
+.iconButton:disabled { opacity: var(--fw-disabled-opacity); cursor: not-allowed; }
 
 .bordered { border-color: var(--vscode-dropdown-border); }
 .danger { color: var(--red-600); }

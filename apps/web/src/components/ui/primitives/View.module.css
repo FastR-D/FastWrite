@@ -1,2 +1,14 @@
 .view { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .hidden { display: none; }
+
+.compact {
+  --fw-control-height: var(--fw-control-height-default);
+  --fw-control-padding-inline: 6px;
+  --fw-button-padding-inline: 11px;
+}
+
+.comfortable {
+  --fw-control-height: var(--fw-control-height-comfortable);
+  --fw-control-padding-inline: 10px;
+  --fw-button-padding-inline: 12px;
+}

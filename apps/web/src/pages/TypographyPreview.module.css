@@ -1,0 +1,20 @@
+.section { padding: 26px 0; border-bottom: 1px solid var(--border); }
+.heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.heading h2 { margin: 0 0 6px; font-size: 15px; font-weight: 650; }
+.heading p { max-width: 620px; margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 14px; }
+.sample { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--fw-radius-overlay); background: var(--surface); font-family: var(--vscode-font-family); font-weight: var(--fw-font-weight-body); }
+.plex { --vscode-font-family: "IBM Plex Sans Variable", "Noto Sans SC Variable", sans-serif; }
+.geist { --vscode-font-family: var(--fw-font-ui-geist); }
+.system { --vscode-font-family: var(--fw-font-ui-system); }
+.sample header { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-secondary); font-size: 11px; }
+.sample h3 { margin: 16px 0 6px; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+.description { margin: 0 0 18px; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.chinese, .english { margin: 0 0 7px; font-size: 14px; line-height: 1.75; }
+.small { margin: 8px 0 16px; color: var(--text-secondary); font-size: 11px; line-height: 1.75; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.code { margin: 16px 0 0; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--fw-radius-surface); background: var(--slate-50); color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--fw-font-mono); font-size: 12px; font-weight: var(--fw-font-weight-code); line-height: 1.8; }
+
+@media (max-width: 480px) {
+  .sample { padding: 12px; }
+}

@@ -53,6 +53,7 @@ export function TextArea({
   resize = "vertical",
   growWithContent = false,
   fill = false,
+  readonly = false,
   invalid,
   id,
   "aria-describedby": describedBy,
@@ -93,6 +94,7 @@ export function TextArea({
     <textarea
       {...rest}
       ref={attach}
+      readOnly={readonly}
       id={resolvedId}
       aria-describedby={resolvedDescribedBy}
       className={classes}

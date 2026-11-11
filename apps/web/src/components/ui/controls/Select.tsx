@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { icons } from "../icons";
 import { Icon } from "../primitives/Icon";
 import { useFieldWiring } from "./Field";
@@ -8,6 +8,8 @@ export interface SelectOption {
   value: string;
   label: string;
   disabled?: boolean;
+  icon?: ReactNode;
+  description?: string;
 }
 
 export interface SelectOptionGroup {
@@ -34,6 +36,7 @@ export interface SelectProps {
   searchable?: boolean;
   /** Render the list above the trigger instead of below. */
   position?: "above" | "below";
+  appearance?: "field" | "toolbar";
   id?: string;
   name?: string;
   invalid?: boolean;
@@ -59,6 +62,7 @@ export function Select({
   disabled = false,
   searchable,
   position = "below",
+  appearance = "field",
   id,
   invalid,
   "aria-describedby": describedBy,
@@ -260,7 +264,7 @@ export function Select({
   return (
     <div
       ref={wrapperRef}
-      className={`${styles.wrapper} ${position === "above" ? styles.above : ""} ${className}`.trim()}
+      className={`${styles.wrapper} ${position === "above" ? styles.above : ""} ${appearance === "toolbar" ? styles.toolbar : ""} ${className}`.trim()}
       onKeyDown={onKeyDown}
     >
       <button
@@ -280,7 +284,8 @@ export function Select({
         onClick={() => (open ? close() : setOpen(true))}
       >
         <span className={`${styles.value} ${selected ? "" : styles.placeholder}`.trim()}>
-          {selected ? selected.label : placeholder}
+          {selected?.icon ? <span className={styles.optionIcon} aria-hidden="true">{selected.icon}</span> : null}
+          <span className={styles.valueText}>{selected ? selected.label : placeholder}</span>
         </span>
         <span className={styles.chevron} aria-hidden="true"><Icon name={icons.chevronDown} size={14} /></span>
       </button>
@@ -352,11 +357,20 @@ export function Select({
         className={`${styles.option} ${index === activeIndex ? styles.active : ""}`.trim()}
         role="option"
         aria-selected={option.value === value}
+        aria-label={option.description ? option.label : undefined}
+        aria-describedby={option.description ? `${optionId(index)}-description` : undefined}
         aria-disabled={option.disabled || undefined}
         onMouseEnter={() => setActiveIndex(index)}
         onClick={() => commit(option)}
       >
-        {option.label}
+        <span className={styles.optionContent}>
+          {option.icon ? <span className={styles.optionIcon} aria-hidden="true">{option.icon}</span> : null}
+          <span className={styles.optionText}>
+            <span className={styles.optionLabel}>{option.label}</span>
+            {option.description ? <span className={styles.description} id={`${optionId(index)}-description`}>{option.description}</span> : null}
+          </span>
+        </span>
+        {option.value === value ? <Icon name={icons.check} size={14} /> : null}
       </div>
     );
   }
