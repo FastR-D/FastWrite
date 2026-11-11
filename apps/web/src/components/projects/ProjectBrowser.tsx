@@ -3,6 +3,8 @@ import type { PaperProject } from "@fastwrite/shared";
 import { publicationTargetAbbreviation } from "../../lib/labels";
 import { projectPath } from "../../lib/navigation";
 import { Button, Icon, IconButton, Link, Select, Table, TableCell, TableRow, TextField, icons } from "../ui";
+import { ProjectActionDialog, type ProjectAction } from "./ProjectActionDialog";
+import { TeamsPanel } from "./TeamsPanel";
 import styles from "./ProjectBrowser.module.css";
 
 type SourceFilter = "all" | "local" | "github";
@@ -21,12 +23,14 @@ interface ProjectBrowserProps {
   notice: ReactNode;
   onNew: () => void;
   onImport: () => void;
-  onTeams: () => void;
   onRetry: () => void;
   onDelete: (project: PaperProject) => void;
+  onUpdated: (project: PaperProject) => void;
 }
 
-export function ProjectBrowser({ projects, loading, error, deleting, notice, onNew, onImport, onTeams, onRetry, onDelete }: ProjectBrowserProps) {
+export function ProjectBrowser({ projects, loading, error, deleting, notice, onNew, onImport, onRetry, onDelete, onUpdated }: ProjectBrowserProps) {
+  const [activeAction, setActiveAction] = useState<{ project: PaperProject; action: ProjectAction } | null>(null);
+  const [teamsView, setTeamsView] = useState(false);
   const [source, setSource] = useState<SourceFilter>("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ProjectSort>("updated");
@@ -58,21 +62,20 @@ export function ProjectBrowser({ projects, loading, error, deleting, notice, onN
             key={filter.value}
             variant="ghost"
             className={styles.filter}
-            aria-current={source === filter.value ? "page" : undefined}
+            aria-current={!teamsView && source === filter.value ? "page" : undefined}
             icon={<Icon name={filter.icon} />}
-            onClick={() => setSource(filter.value)}
+            onClick={() => { setTeamsView(false); setSource(filter.value); }}
           >
             <span className={styles.filterLabel}>{filter.label}</span>
             <span className={styles.filterCount}>{loading ? "—" : projects.filter(project => filter.value === "all" || project.source.type === filter.value).length}</span>
           </Button>)}
+          <div className={styles.navDivider} />
+          <Button variant="ghost" className={styles.filter} aria-current={teamsView ? "page" : undefined} icon={<Icon name={icons.organization} />} onClick={() => setTeamsView(true)}><span className={styles.filterLabel}>团队与协作</span></Button>
         </nav>
-        <div className={styles.sidebarFooter}>
-          <Button variant="ghost" className={styles.teamButton} icon={<Icon name={icons.organization} />} onClick={onTeams}>团队与协作</Button>
-          <span>FastWrite 工作区</span>
-        </div>
       </aside>
 
-      <main className={styles.main} aria-labelledby="projects-title">
+      <main className={styles.main} aria-labelledby={teamsView ? "teams-title" : "projects-title"}>
+        {teamsView ? <TeamsPanel /> : <>
         <header className={styles.heading}>
           <div className={styles.title}>
             <h1 id="projects-title">{title}</h1>
@@ -116,7 +119,12 @@ export function ProjectBrowser({ projects, loading, error, deleting, notice, onN
             </span></TableCell>
             <TableCell><span className={styles.target}>{publicationTargetAbbreviation(project.publicationTarget, project.skill.id)}</span></TableCell>
             <TableCell><time className={styles.updated} dateTime={project.updatedAt} title={new Date(project.updatedAt).toLocaleString("zh-CN")}>{relativeTime(project.updatedAt)}</time></TableCell>
-            <TableCell><IconButton className={styles.deleteButton} label={`删除 ${project.name}`} title="将项目移入回收站" icon={<Icon name={deleting === project.id ? icons.loading : icons.trash} spin={deleting === project.id} />} disabled={deleting === project.id} onClick={() => onDelete(project)} /></TableCell>
+            <TableCell><div className={styles.rowActions}>
+              <Button size="small" variant="ghost" aria-label={`编辑 ${project.name}`} title="编辑项目信息" icon={<Icon name={icons.edit} />} disabled={deleting === project.id} onClick={() => setActiveAction({ project, action: "edit" })}><span className={styles.actionLabel}>编辑</span></Button>
+              <Button size="small" variant="ghost" aria-label={`转移团队 ${project.name}`} title="转移团队" icon={<Icon name={icons.arrowBoth} />} disabled={deleting === project.id} onClick={() => setActiveAction({ project, action: "transfer" })}><span className={styles.actionLabel}>转移团队</span></Button>
+              <Button size="small" variant="ghost" aria-label={`邀请 ${project.name}`} title="邀请协作者" icon={<Icon name={icons.personAdd} />} disabled={deleting === project.id} onClick={() => setActiveAction({ project, action: "invite" })}><span className={styles.actionLabel}>邀请</span></Button>
+              <IconButton className={styles.deleteButton} label={`删除 ${project.name}`} title="将项目移入回收站" icon={<Icon name={deleting === project.id ? icons.loading : icons.trash} spin={deleting === project.id} />} disabled={deleting === project.id} onClick={() => onDelete(project)} />
+            </div></TableCell>
           </TableRow>)}
         </Table> : !error ? <div className={styles.empty}>
           <Icon name={filtered ? icons.search : icons.files} size={32} />
@@ -124,8 +132,9 @@ export function ProjectBrowser({ projects, loading, error, deleting, notice, onN
           <p>{filtered ? "试试其他关键词，或查看全部项目。" : "新建论文，或导入本地目录与 GitHub 仓库。"}</p>
           {filtered ? <Button variant="secondary" onClick={() => { setQuery(""); setSource("all"); }}>清除筛选</Button> : <Button variant="primary" icon={<Icon name={icons.add} />} onClick={onNew}>新建论文</Button>}
         </div> : null}
-        <footer className={styles.footer} role="status">{loading ? "正在同步项目…" : `显示 ${visibleProjects.length} 个项目${filtered ? `，共 ${projects.length} 个` : ""}`}</footer>
+        </>}
       </main>
+      {activeAction ? <ProjectActionDialog key={`${activeAction.project.id}:${activeAction.action}`} project={activeAction.project} action={activeAction.action} onClose={() => setActiveAction(null)} onUpdated={onUpdated} /> : null}
     </div>
   );
 }

@@ -37,7 +37,7 @@ describe("workspace API", () => {
 
   test("serves the single-page client for invitation links", async () => {
     const request = await testApplication();
-    const response = await request("/projects?invite=one-time-token");
+    const response = await request("/panel?invite=one-time-token");
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
   });
@@ -414,6 +414,9 @@ describe("workspace API", () => {
     const member = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-governance-member@example.test", password: "correct-horse-battery-staple", displayName: "Lab member" }) })).json() as { token: string; user: { id: string } };
     const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
     const team = await (await request("/api/teams", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Governance lab" }) })).json() as { id: string };
+    await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Team manuscript", teamId: team.id }) });
+    await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Personal manuscript" }) });
+    expect(await (await request("/api/teams", { headers: ownerHeaders })).json()).toEqual(expect.arrayContaining([expect.objectContaining({ id: team.id, role: "owner", memberCount: 1, projectCount: 1 })]));
     const expiry = new Date(Date.now() + 3 * 86400_000).toISOString();
     const invitationResponse = await request(`/api/teams/${team.id}/invitations`, {
       method: "POST",
@@ -439,6 +442,8 @@ describe("workspace API", () => {
     const roster = await request(`/api/teams/${team.id}/members`, { headers: ownerHeaders });
     const rosterBody = await roster.json() as { canManage: boolean; members: Array<{ userId: string; role: string; user: { displayName: string } }> };
     expect(rosterBody.canManage).toBe(true);
+    expect(await (await request("/api/teams", { headers: ownerHeaders })).json()).toEqual(expect.arrayContaining([expect.objectContaining({ id: team.id, memberCount: 2, projectCount: 1 })]));
+    expect(await (await request("/api/teams", { headers: { authorization: `Bearer ${member.token}` } })).json()).toEqual(expect.arrayContaining([expect.objectContaining({ id: team.id, role: "member", memberCount: 2, projectCount: 1 })]));
     expect(rosterBody.members.some((item) => item.userId === member.user.id && item.role === "member" && item.user.displayName === "Lab member")).toBe(true);
     expect((await request(`/api/teams/${team.id}/members/${member.user.id}`, { method: "PATCH", headers: ownerHeaders, body: JSON.stringify({ role: "admin" }) })).status).toBe(200);
     const adminRoster = await request(`/api/teams/${team.id}/members`, { headers: { authorization: `Bearer ${member.token}` } });

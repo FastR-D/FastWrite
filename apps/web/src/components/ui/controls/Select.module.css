@@ -127,3 +127,10 @@
 .option[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
 
 .empty { padding: 8px; color: var(--vscode-panelTitle-inactiveForeground); font-family: var(--vscode-font-family); font-size: 11px; }
+
+.breadcrumb .trigger { width: auto; max-width: 100%; padding: 4px 6px; border-color: transparent; background: transparent; font-size: 12px; font-weight: 500; }
+.breadcrumb .trigger:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground); }
+.breadcrumb .trigger[aria-expanded="true"] { background: var(--surface); }
+.portalPopover { z-index: 60; display: flex; flex-direction: column; overflow: hidden; }
+.portalPopover .listbox { flex: 1; min-height: 0; max-height: none; }
+.portalPopover .search { flex-shrink: 0; }

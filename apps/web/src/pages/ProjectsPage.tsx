@@ -1,21 +1,18 @@
 import { BrandMark } from "../components/BrandMark";
 import { userFacingError } from "../lib/notifications";
 import { ProductLanding } from "../components/projects/ProductLanding";
-import { roleLabel, modelProviderLabel } from "../lib/labels";
-import { HarnessProfileEditor } from "../components/workspace/ProjectHarnessProfile";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import type {
   PaperProject,
   PublicationTarget,
   PublicationVenueOption,
   WritingProfile,
 } from "@fastwrite/shared";
-import { WRITING_PROFILES } from "@fastwrite/shared";
 import { api } from "../api/client";
 import { ImportDialog } from "../components/import/ImportDialog";
 import { FastCASDialog } from "../components/FastCASDialog";
-import { Button, Checkbox, Dialog, Field, Icon, Link, MultiSelect, NumberField, Select, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
-import { PublicationTargetFields } from "../components/ui/PublicationTargetFields";
+import { Button, Checkbox, Dialog, Field, Icon, Link, Select, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
+import { PublicationTargetPicker } from "../components/ui/PublicationTargetPicker";
 import { navigate, projectPath } from "../lib/navigation";
 import { ProjectBrowser } from "../components/projects/ProjectBrowser";
 import styles from "./ProjectsPage.module.css";
@@ -32,7 +29,6 @@ export function ProjectsPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [fastcasOpen, setFastcasOpen] = useState(false);
-  const [teamsOpen, setTeamsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [account, setAccount] = useState<{
     displayName: string;
@@ -89,7 +85,7 @@ export function ProjectsPage() {
     try {
       await api.invitations.accept(invitationToken);
       setInvitationState("accepted");
-      window.history.replaceState({}, "", "/projects");
+      window.history.replaceState({}, "", "/panel");
       await loadProjects();
     } catch (failure) {
       setInvitationState("error");
@@ -141,19 +137,11 @@ export function ProjectsPage() {
   return (
     <div className={styles.page}>
       <header className={`projects-topbar ${styles.topbar}`}>
-        <Link variant="inherit" className="brand" href="/projects">
+        <Link variant="inherit" className="brand" href="/panel">
           <BrandMark />
           <span>FastWrite</span>
         </Link>
         <div className="topbar-actions">
-          <Button
-            size="small"
-            variant="ghost"
-            icon={<Icon name={icons.organization} />}
-            onClick={() => setTeamsOpen(true)}
-          >
-            团队
-          </Button>
           {account ? (
             <Button
               size="small"
@@ -192,9 +180,9 @@ export function ProjectsPage() {
         deleting={deleting}
         onNew={() => setNewOpen(true)}
         onImport={() => setImportOpen(true)}
-        onTeams={() => setTeamsOpen(true)}
         onRetry={() => void loadProjects()}
         onDelete={(project) => void deleteProject(project)}
+        onUpdated={updated => setProjects(current => current.map(project => project.id === updated.id ? updated : project))}
         notice={invitationToken ? (
           <div
             className={invitationState === "error" ? "page-error" : "form-notice"}
@@ -225,7 +213,6 @@ export function ProjectsPage() {
           void loadProjects();
         }}
       />
-      <TeamsDialog open={teamsOpen} onClose={() => setTeamsOpen(false)} />
       <NotificationsDialog
         open={notificationsOpen}
         onClose={() => setNotificationsOpen(false)}
@@ -308,11 +295,11 @@ function AccountDialog({
     >
       <form id="account-auth-form" className="form-stack" onSubmit={(event) => { event.preventDefault(); if (!loading && email.trim() && password) void submit(); }}>
         {mode === "login" && (providers.oidc || providers.cas || providers.fastcas) ? <div className="form-stack">
-          {providers.fastcas ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/login?returnTo=/projects")}>使用 FastCAS 登录</Button> : null}
+          {providers.fastcas ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/login?returnTo=/panel")}>使用 FastCAS 登录</Button> : null}
           {providers.oidc ? <Button type="button" variant="secondary" onClick={() => { window.location.assign(`/api/auth/oidc/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`); }}>使用机构账号登录</Button> : null}
           {providers.cas ? <Button type="button" variant="secondary" onClick={() => { window.location.assign("/api/auth/cas/login"); }}>使用校园 CAS 登录</Button> : null}
         </div> : null}
-        {mode === "register" && providers.fastcasSignup ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/signup?returnTo=/projects")}>通过 FastCAS 创建新账号</Button> : null}
+        {mode === "register" && providers.fastcasSignup ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/signup?returnTo=/panel")}>通过 FastCAS 创建新账号</Button> : null}
         {mode === "register" ? (
           <Field label="名称">
             <TextField
@@ -349,501 +336,6 @@ function AccountDialog({
           </div>
         ) : null}
       </form>
-    </Dialog>
-  );
-}
-
-type HarnessProvider = "codex" | "claude" | "openai-compatible";
-const HARNESS_PROVIDERS: HarnessProvider[] = ["codex", "claude", "openai-compatible"];
-
-function TeamsDialog({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const [teams, setTeams] = useState<
-    Array<{ id: string; name: string; slug: string; personalUserId?: string }>
-  >([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"admin" | "member">("member");
-  const [inviteExpiresAt, setInviteExpiresAt] = useState("");
-  const [inviteMessage, setInviteMessage] = useState("");
-  const [policy, setPolicy] = useState<{
-    personalHarness: boolean;
-    allowedProviders?: Array<"codex" | "claude" | "openai-compatible">;
-    maxConcurrentRuns?: number;
-    dailyBudgetUsd?: number;
-  }>({ personalHarness: false });
-  const [invitationLink, setInvitationLink] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [members, setMembers] = useState<
-    Array<{
-      userId: string;
-      role: "owner" | "admin" | "member";
-      user: { displayName: string; emailNormalized: string };
-    }>
-  >([]);
-  const [canManageMembers, setCanManageMembers] = useState(false);
-  const [canManageInvitations, setCanManageInvitations] = useState(false);
-  const [invitations, setInvitations] = useState<
-    Array<{
-      id: string;
-      emailNormalized: string;
-      role: string;
-      expiresAt: string;
-      message?: string;
-      acceptedAt?: string;
-      revokedAt?: string;
-    }>
-  >([]);
-  const [groupBindings, setGroupBindings] = useState<Array<{ id: string; idpGroup: string; role: "admin" | "member" }>>([]);
-  const [groupValue, setGroupValue] = useState("");
-  const [groupRole, setGroupRole] = useState<"admin" | "member">("member");
-  const [groupPreview, setGroupPreview] = useState<Array<{ id: string; idpGroup: string; role: "admin" | "member" }>>([]);
-  const selected = teams.find((team) => team.id === selectedId);
-  const load = useCallback(async () => {
-    try {
-      const items = await api.teams.list();
-      setTeams(items);
-      setSelectedId(
-        (current) =>
-          current || items.find((team) => !team.personalUserId)?.id || "",
-      );
-      setError("");
-    } catch (failure) {
-      setError(
-        userFacingError(failure, "无法加载团队"),
-      );
-    }
-  }, []);
-  useEffect(() => {
-    if (open) {
-      setInvitationLink("");
-      void load();
-    }
-  }, [load, open]);
-  useEffect(() => {
-    if (!selected || selected.personalUserId) return;
-    api.teams
-      .policy(selected.id)
-      .then(setPolicy)
-      .catch((failure) =>
-        setError(
-          userFacingError(failure, "无法加载团队策略"),
-        ),
-      );
-  }, [selected?.id, selected?.personalUserId]);
-  const loadGovernance = useCallback(async () => {
-    if (!selected || selected.personalUserId) {
-      setMembers([]);
-      setInvitations([]);
-      setGroupBindings([]);
-      return;
-    }
-    try {
-      const [roster, pending, bindings] = await Promise.all([
-        api.teams.members(selected.id),
-        api.teams.invitations(selected.id),
-        api.teams.groupBindings(selected.id),
-      ]);
-      setMembers(roster.members);
-      setCanManageMembers(roster.canManage);
-      setCanManageInvitations(roster.canManageInvitations);
-      setInvitations(pending);
-      setGroupBindings(bindings);
-    } catch (failure) {
-      setError(
-        userFacingError(failure, "无法加载团队管理信息"),
-      );
-    }
-  }, [selected?.id, selected?.personalUserId]);
-  useEffect(() => {
-    void loadGovernance();
-  }, [loadGovernance]);
-  const create = async () => {
-    if (!name.trim()) return;
-    setBusy(true);
-    try {
-      const created = await api.teams.create(name.trim());
-      setName("");
-      await load();
-      setSelectedId(created.id);
-    } catch (failure) {
-      setError(
-        userFacingError(failure, "无法创建团队"),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  const savePolicy = async () => {
-    if (!selected || selected.personalUserId) return;
-    setBusy(true);
-    try {
-      await api.teams.updatePolicy(selected.id, policy);
-    } catch (failure) {
-      setError(
-        userFacingError(failure, "无法保存团队策略"),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  const invite = async () => {
-    if (!selected || selected.personalUserId || !email.trim()) return;
-    setBusy(true);
-    try {
-      const result = await api.teams.invite(selected.id, {
-        email: email.trim(),
-        role,
-        ...(inviteExpiresAt
-          ? { expiresAt: new Date(inviteExpiresAt).toISOString() }
-          : {}),
-        ...(inviteMessage.trim() ? { message: inviteMessage.trim() } : {}),
-      });
-      setInvitationLink(
-        `${window.location.origin}/projects?invite=${encodeURIComponent(result.token)}`,
-      );
-      setEmail("");
-      setInviteExpiresAt("");
-      setInviteMessage("");
-    } catch (failure) {
-      setError(
-        userFacingError(failure, "无法邀请团队成员"),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  const changeMemberRole = async (
-    userId: string,
-    nextRole: "admin" | "member",
-  ) => {
-    if (!selected) return;
-    setBusy(true);
-    try {
-      await api.teams.updateMember(selected.id, userId, nextRole);
-      await loadGovernance();
-    } catch (failure) {
-      setError(
-        userFacingError(failure, "无法更新团队成员"),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  const removeMember = async (userId: string) => {
-    if (!selected || !window.confirm("从团队中移除此成员？"))
-      return;
-    setBusy(true);
-    try {
-      await api.teams.removeMember(selected.id, userId);
-      await loadGovernance();
-    } catch (failure) {
-      setError(
-        userFacingError(failure, "无法移除团队成员"),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  const manageInvitation = async (id: string, action: "resend" | "revoke") => {
-    if (!selected) return;
-    setBusy(true);
-    try {
-      if (action === "resend") {
-        const result = await api.teams.resendInvitation(id);
-        setInvitationLink(
-          `${window.location.origin}/projects?invite=${encodeURIComponent(result.token)}`,
-        );
-      } else await api.teams.revokeInvitation(id);
-      await loadGovernance();
-    } catch (failure) {
-      setError(
-        userFacingError(failure, "无法更新邀请"),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  const saveGroupBinding = async () => {
-    if (!selected || !groupValue.trim()) return;
-    setBusy(true);
-    try { await api.teams.saveGroupBinding(selected.id, "new", { idpGroup: groupValue.trim(), role: groupRole }); setGroupValue(""); await loadGovernance(); }
-    catch (failure) { setError(userFacingError(failure, "无法保存身份服务用户组绑定")); }
-    finally { setBusy(false); }
-  };
-  const previewGroupBinding = async () => {
-    if (!selected || !groupValue.trim()) return;
-    setBusy(true);
-    try { setGroupPreview(await api.teams.previewGroupBindings(selected.id, [groupValue.trim()])); }
-    catch (failure) { setError(userFacingError(failure, "无法预览身份服务用户组绑定")); }
-    finally { setBusy(false); }
-  };
-  const removeGroupBinding = async (id: string) => {
-    if (!selected) return;
-    setBusy(true);
-    try { await api.teams.deleteGroupBinding(selected.id, id); await loadGovernance(); }
-    catch (failure) { setError(userFacingError(failure, "无法移除身份服务用户组绑定")); }
-    finally { setBusy(false); }
-  };
-  const setAllowedProviders = (providers: string[]) =>
-    setPolicy((current) => {
-      const next = { ...current };
-      const allowed = HARNESS_PROVIDERS.filter((provider) => providers.includes(provider));
-      if (allowed.length) next.allowedProviders = allowed;
-      else delete next.allowedProviders;
-      return next;
-    });
-  return (
-    <Dialog
-      open={open}
-      title="团队"
-      description="创建科研团队、设置默认模型策略并邀请成员。"
-      onClose={onClose}
-      footer={
-        <Button variant="ghost" onClick={onClose}>
-          关闭
-        </Button>
-      }
-    >
-      <div className="form-stack">
-        <Field label="团队">
-          <Select
-            aria-label="团队"
-            value={selectedId}
-            onChange={setSelectedId}
-            options={[{ value: "", label: "选择团队" }, ...teams.map((team) => ({ value: team.id, label: team.personalUserId ? `${team.name} （个人工作区）` : team.name }))]}
-          />
-        </Field>
-        <Field label="新团队">
-          <TextField
-            value={name}
-            onChange={setName}
-            placeholder="应用密码学实验室"
-          />
-        </Field>
-        <Button
-          size="small"
-          variant="secondary"
-          disabled={busy || !name.trim()}
-          onClick={() => void create()}
-        >
-          创建团队
-        </Button>
-        {selected && !selected.personalUserId ? (
-          <>
-            <Checkbox
-              checked={policy.personalHarness}
-              onChange={(checked) =>
-                setPolicy((current) => ({
-                  ...current,
-                  personalHarness: checked,
-                }))
-              }
-            >
-              允许个人模型配置
-            </Checkbox>
-            <Field label="允许的模型服务">
-              <MultiSelect
-                label="允许的模型服务"
-                value={policy.allowedProviders ?? []}
-                onChange={setAllowedProviders}
-                options={HARNESS_PROVIDERS.map((provider) => ({ value: provider, label: modelProviderLabel(provider) }))}
-              />
-            </Field>
-            <Field label="最大并发任务数">
-              <NumberField
-                min={1}
-                max={100}
-                value={policy.maxConcurrentRuns}
-                onChange={(next) =>
-                  setPolicy((current) => {
-                    const updated = { ...current };
-                    if (next !== undefined)
-                      updated.maxConcurrentRuns = next;
-                    else delete updated.maxConcurrentRuns;
-                    return updated;
-                  })
-                }
-              />
-            </Field>
-            <Field label="每日预算（美元）">
-              <NumberField
-                min={0}
-                step={0.01}
-                value={policy.dailyBudgetUsd}
-                onChange={(next) =>
-                  setPolicy((current) => {
-                    const updated = { ...current };
-                    if (next !== undefined)
-                      updated.dailyBudgetUsd = next;
-                    else delete updated.dailyBudgetUsd;
-                    return updated;
-                  })
-                }
-              />
-            </Field>
-            <Button
-              size="small"
-              variant="secondary"
-              disabled={busy}
-              onClick={() => void savePolicy()}
-            >
-              保存模型策略
-            </Button>
-            {canManageMembers ? <HarnessProfileEditor key={selected.id} scope="team" teamId={selected.id}/> : null}
-            {canManageMembers ? <div className="field" role="group" aria-labelledby="idp-group-bindings-title">
-              <span id="idp-group-bindings-title">身份服务用户组绑定</span>
-              <Field label="包含身份服务来源的用户组"><TextField value={groupValue} onChange={(next) => { setGroupValue(next); setGroupPreview([]); }} placeholder="https://idp.example:lab-members" /></Field>
-              <Field label="映射角色"><Select aria-label="映射角色" value={groupRole} onChange={(next) => setGroupRole(next as "admin" | "member")} options={[{ value: "member", label: "成员" }, { value: "admin", label: "管理员" }]} /></Field>
-              <div className="settings-agent__actions"><Button size="small" variant="secondary" disabled={busy || !groupValue.trim()} onClick={() => void previewGroupBinding()}>预览</Button><Button size="small" variant="secondary" disabled={busy || !groupValue.trim()} onClick={() => void saveGroupBinding()}>添加绑定</Button></div>
-              {groupPreview.length ? <small>匹配人数： {groupPreview.map((binding) => `${binding.idpGroup} (${roleLabel(binding.role)})`).join(", ")}</small> : null}
-              {groupBindings.map((binding) => <div className="team-governance-row" key={binding.id}><span>{binding.idpGroup} <small>{roleLabel(binding.role)}</small></span><Button size="small" variant="ghost" disabled={busy} onClick={() => void removeGroupBinding(binding.id)}>移除</Button></div>)}
-            </div> : null}
-            <Field label="邀请团队成员">
-              <TextField
-                type="email"
-                value={email}
-                onChange={setEmail}
-                placeholder="researcher@university.edu"
-              />
-            </Field>
-            <Field label="团队角色">
-              <Select
-                aria-label="团队角色"
-                value={role}
-                onChange={(next) => setRole(next as typeof role)}
-                options={[{ value: "member", label: "成员" }, { value: "admin", label: "管理员" }]}
-              />
-            </Field>
-            <Field label="到期时间（可选）">
-              <TextField type="datetime-local" value={inviteExpiresAt} onChange={setInviteExpiresAt} />
-            </Field>
-            <Field label="留言（可选）">
-              <TextArea rows={3} maxLength={2000} value={inviteMessage} onChange={setInviteMessage} />
-            </Field>
-            <Button
-              size="small"
-              variant="secondary"
-              disabled={busy || !email.trim()}
-              onClick={() => void invite()}
-            >
-              创建邀请
-            </Button>
-            {invitationLink ? (
-              <Field label="邀请链接（仅显示一次）">
-                <TextField
-                  readonly
-                  value={invitationLink}
-                />
-              </Field>
-            ) : null}
-            <div className="field" role="group" aria-labelledby="team-members-title">
-              <span id="team-members-title">成员</span>
-              {members.map((member) => (
-                <div className="team-governance-row" key={member.userId}>
-                  <span>
-                    {member.user.displayName}{" "}
-                    <small>{member.user.emailNormalized}</small>
-                  </span>
-                  {member.role === "owner" ? (
-                    <strong>所有者</strong>
-                  ) : canManageMembers ? (
-                    <>
-                      <Select
-                        aria-label={`成员角色： ${member.user.displayName}`}
-                        value={member.role}
-                        disabled={busy}
-                        onChange={(next) =>
-                          void changeMemberRole(
-                            member.userId,
-                            next as "admin" | "member",
-                          )
-                        }
-                        options={[{ value: "member", label: "成员" }, { value: "admin", label: "管理员" }]}
-                      />
-                      <Button
-                        size="small"
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() => void removeMember(member.userId)}
-                      >
-                        移除
-                      </Button>
-                    </>
-                  ) : (
-                    <strong>{roleLabel(member.role)}</strong>
-                  )}
-                </div>
-              ))}
-              {!members.length ? <small>暂无成员。</small> : null}
-            </div>
-            <div className="field" role="group" aria-labelledby="team-invitations-title">
-              <span id="team-invitations-title">邀请</span>
-              {invitations.map((invitation) => (
-                <div className="team-governance-row" key={invitation.id}>
-                  <span>
-                    {invitation.emailNormalized}{" "}
-                    <small>
-                      {roleLabel(invitation.role)} ·{" "}
-                      {invitation.acceptedAt
-                        ? "accepted"
-                        : invitation.revokedAt
-                          ? "revoked"
-                          : "待处理"}
-                    </small>
-                    {invitation.message ? <small>{invitation.message}</small> : null}
-                  </span>
-                  {canManageInvitations &&
-                  !invitation.acceptedAt &&
-                  !invitation.revokedAt ? (
-                    <>
-                      <Button
-                        size="small"
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() =>
-                          void manageInvitation(invitation.id, "resend")
-                        }
-                      >
-                        重新发送
-                      </Button>
-                      <Button
-                        size="small"
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() =>
-                          void manageInvitation(invitation.id, "revoke")
-                        }
-                      >
-                        撤销
-                      </Button>
-                    </>
-                  ) : null}
-                </div>
-              ))}
-              {!invitations.length ? (
-                <small>暂无邀请。</small>
-              ) : null}
-            </div>
-          </>
-        ) : selected ? (
-          <p className="dialog-copy">
-            个人工作区不提供共享模型策略或团队邀请。
-          </p>
-        ) : null}
-        {error ? (
-          <div className="form-error" role="alert">
-            {error}
-          </div>
-        ) : null}
-      </div>
     </Dialog>
   );
 }
@@ -964,6 +456,7 @@ function NewPaperDialog({
   onClose: () => void;
   onCreated: (project: PaperProject) => void;
 }) {
+  const formId = useId();
   const [name, setName] = useState("");
   const [profile, setProfile] = useState<WritingProfile>(
     "network-information-security",
@@ -982,21 +475,17 @@ function NewPaperDialog({
   const [error, setError] = useState("");
   useEffect(() => {
     if (!open) return;
-    api.teams
-      .list()
-      .then((items) => {
-        setTeams(items);
-        setTeamId(
-          (current) =>
-            current || items.find((team) => team.personalUserId)?.id || "",
-        );
-      })
-      .catch(() => {
-        setTeams([]);
-        setTeamId("");
-      });
+    const controller = new AbortController();
+    void api.teams.list(controller.signal).then(items => {
+      if (controller.signal.aborted) return;
+      const available = items.filter(team => !team.personalUserId && (team.role === "owner" || team.role === "admin"));
+      setTeams(available);
+      setTeamId(current => available.some(team => team.id === current) ? current : "");
+    }).catch(() => { if (!controller.signal.aborted) { setTeams([]); setTeamId(""); } });
+    return () => controller.abort();
   }, [open]);
   const create = async () => {
+    if (loading || !name.trim()) return;
     setLoading(true);
     setError("");
     try {
@@ -1025,65 +514,34 @@ function NewPaperDialog({
     <Dialog
       open={open}
       title="创建新论文"
-      description={
-        selectedVenue?.template
-          ? "使用所选会议或期刊的完整 LaTeX 模板开始写作。"
-          : "使用可编译的最简 LaTeX 文档开始写作。"
-      }
-      onClose={onClose}
+      className={styles.newPaperDialog!}
+      onClose={() => { if (!loading) onClose(); }}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" disabled={loading} onClick={onClose}>
             取消
           </Button>
           <Button
             variant="primary"
             loading={loading}
-            disabled={!name.trim()}
-            onClick={() => void create()}
+            disabled={loading || !name.trim()}
+            type="submit"
+            form={formId}
           >
             创建论文
           </Button>
         </>
       }
     >
-      <div className="form-stack">
-        <Field label="项目名称">
-          <TextField
-            value={name}
-            onChange={setName}
-            placeholder="我的安全研究论文"
-            autoFocus
-          />
-        </Field>
-        {teams.length ? (
-          <Field label="工作区">
-            <Select
-              aria-label="工作区"
-              value={teamId}
-              onChange={setTeamId}
-              options={teams.map((team) => ({ value: team.id, label: team.personalUserId ? `${team.name} （个人）` : team.name }))}
-            />
-          </Field>
-        ) : null}
-        <Field label="研究领域" hint="研究领域与所选会议或期刊共同指导全部写作流程。">
-          <Select
-            aria-label="研究领域"
-            value={profile}
-            onChange={(next) => {
-              setProfile(next as WritingProfile);
-              setPublicationTarget(undefined);
-              setSelectedVenue(undefined);
-            }}
-            options={WRITING_PROFILES.map((item) => ({ value: item.value, label: item.label }))}
-          />
-        </Field>
-        <PublicationTargetFields
-          profile={profile}
-          value={publicationTarget}
-          onChange={setPublicationTarget}
-          onSelectedVenueChange={setSelectedVenue}
-        />
+      <form id={formId} className={styles.newPaperForm} onSubmit={event => { event.preventDefault(); void create(); }}>
+        <div className={styles.newPaperIdentity}>
+          <Field label="项目名称"><TextField aria-label="项目名称" value={name} onChange={setName} placeholder="我的研究论文" disabled={loading} required autoFocus /></Field>
+          <Field label="所属团队"><Select aria-label="所属团队" value={teamId} onChange={setTeamId} disabled={loading} portal options={[{ value: "", label: "个人论文" }, ...teams.map(team => ({ value: team.id, label: team.name }))]} /></Field>
+        </div>
+        <div className={styles.publicationPath}>
+          <span>研究领域与目标</span>
+          <PublicationTargetPicker profile={profile} onProfileChange={setProfile} value={publicationTarget} onChange={setPublicationTarget} onSelectedVenueChange={setSelectedVenue} disabled={loading} />
+        </div>
         {selectedVenue?.template ? (
           <div className="field field--template-info">
             <span>{selectedVenue.template.label}.</span>
@@ -1111,7 +569,7 @@ function NewPaperDialog({
             {error}
           </div>
         ) : null}
-      </div>
+      </form>
     </Dialog>
   );
 }

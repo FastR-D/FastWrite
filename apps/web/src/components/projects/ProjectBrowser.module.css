@@ -10,9 +10,7 @@
 .filterCount { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text-muted); }
 .navigation .filter[aria-current="page"] { color: var(--blue-700); background: var(--blue-100); }
 .filter[aria-current="page"] .filterCount { color: inherit; }
-.sidebarFooter { display: flex; flex-direction: column; gap: 14px; margin-top: auto; padding-top: 28px; }
-.sidebarFooter .teamButton { justify-content: flex-start; min-height: 34px; color: var(--text-secondary); }
-.sidebarFooter > span { padding: 0 12px; font-size: 10px; color: var(--text-muted); }
+.navDivider { margin: 12px 8px; border-top: 1px solid var(--border); }
 .main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; padding: 34px 40px 0; background: var(--surface); }
 .heading { flex-shrink: 0; margin-bottom: 24px; }
 .title { display: flex; align-items: center; gap: 10px; }
@@ -36,7 +34,7 @@
 .projectTable thead th:nth-child(2) { width: 22%; }
 .projectTable thead th:nth-child(3) { width: 16%; }
 .projectTable thead th:nth-child(4) { width: 112px; }
-.projectTable thead th:last-child { width: 48px; text-align: center; padding: 0; }
+.projectTable thead th:last-child { width: 238px; text-align: right; padding-right: 8px; }
 .projectTable .projectRow td { height: 66px; padding: 0 14px; vertical-align: middle; border-bottom: 1px solid var(--border); }
 .projectTable .projectRow td:first-child { padding-left: 8px; }
 .projectTable .projectRow td:last-child { padding: 0; text-align: center; }
@@ -58,7 +56,6 @@
 .updated { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
 .projectRow .deleteButton { color: var(--text-muted); }
 .projectRow .deleteButton:hover { color: var(--red-600); background: var(--red-50); }
-.footer { flex-shrink: 0; display: flex; align-items: center; min-height: 44px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 11px; }
 .empty { display: flex; flex: 1; min-height: 180px; flex-direction: column; align-items: center; justify-content: center; padding: 32px 16px; border-top: 1px solid var(--border); text-align: center; }
 .empty > span { color: var(--slate-400); margin-bottom: 16px; }
 .empty h2 { margin: 0; font-size: 16px; font-weight: 600; }
@@ -80,11 +77,13 @@
   .sidebar { flex: 0 0 auto; padding: 16px 20px 0; border-right: 0; border-bottom: 1px solid var(--border); }
   .createActions { display: flex; padding: 0 0 12px; }
   .createActions .createButton { width: auto; }
-  .navigation { flex-direction: row; gap: 16px; }
+  .navigation { flex-direction: row; gap: 16px; overflow-x: auto; }
+  .navigation .navDivider { display: none; }
+  .navigation .filter { flex-shrink: 0; }
   .navigation .filter { width: auto; min-height: 40px; padding: 0; border-radius: 0; border: 0; border-bottom: 2px solid transparent; }
   .navigation .filter[aria-current="page"] { background: transparent; border-bottom-color: var(--blue-600); }
   .filter > span { gap: 6px; }
-  .filter > span > span:first-child, .navHeading, .sidebarFooter { display: none; }
+  .filter > span > span:first-child, .navHeading { display: none; }
   .filterLabel { flex: none; }
   .filterCount { margin-left: 0; }
   .main { padding: 22px 20px 0; }
@@ -106,8 +105,21 @@
   .sortActions { width: 100%; justify-content: space-between; }
   .sortActions > div { width: 140px; }
   .projectTable thead th:nth-child(4), .projectTable td:nth-child(4) { display: none; }
-  .projectTable thead th:last-child { width: 34px; }
+  .projectTable thead th:last-child { width: 124px; }
   .projectTable .projectRow td { padding-right: 8px; }
   .mobileDate { display: inline; }
   .projectLink { gap: 9px; }
+}
+
+.rowActions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; padding-right: 4px; }
+.rowActions > button { flex-shrink: 0; }
+.rowActions > button:not(.deleteButton) { padding: 0 6px; color: var(--text-secondary); font-size: 11px; }
+@media (max-width: 1000px) {
+  .actionLabel { display: none; }
+  .projectTable thead th:last-child { width: 132px; }
+  .rowActions > button { width: 28px; height: 28px; padding: 0; }
+}
+@media (max-width: 480px) {
+  .projectTable thead th:last-child { width: 124px; }
+  .rowActions { gap: 1px; padding-right: 0; }
 }

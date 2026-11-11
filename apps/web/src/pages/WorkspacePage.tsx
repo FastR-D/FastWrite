@@ -62,7 +62,6 @@ import {
 } from "../lib/sectionSelection";
 import { FASTWRITE_SAVE_EVENT } from "../lib/keyboard";
 import { publicationTargetAbbreviation } from "../lib/labels";
-import { ProvenanceDialog } from "../components/workspace/ProvenanceDialog";
 import { canUseOfflineCache, loadWorkspaceFile, loadWorkspaceSnapshot, saveWorkspaceFile, saveWorkspaceSnapshot } from "../lib/offlineWorkspace";
 
 const SourceEditor = lazy(() =>
@@ -205,7 +204,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   useEffect(() => { setSettingsOpen(false); setSettingsActive(false); }, [projectId]);
   const [syncOpen, setSyncOpen] = useState(false);
   const [complianceOpen, setComplianceOpen] = useState(false);
-  const [provenanceOpen, setProvenanceOpen] = useState(false);
   const [settingsTree, setSettingsTree] = useState<WorkspaceTreeNode[]>([]);
   const [deleteError, setDeleteError] = useState("");
   const [compileRequest, setCompileRequest] = useState(0);
@@ -721,12 +719,12 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           <IconButton
             label="返回项目列表"
             icon={<Icon name={icons.arrowLeft} />}
-            onClick={() => navigate("/projects")}
+            onClick={() => navigate("/panel")}
           />
           <Link
             variant="inherit"
             className="brand brand--workspace"
-            href="/projects"
+            href="/panel"
           >
             <BrandMark />
             <span>FastWrite</span>
@@ -756,8 +754,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           >
             投稿检查
           </Button>
-          <Button size="small" variant="secondary" icon={<Icon name={icons.history} />} onClick={() => setProvenanceOpen(true)}>溯源记录</Button>
-          <Button size="small" variant="secondary" icon={<Icon name={icons.comment} />} aria-pressed={sidebarView === "collaboration" && sidebarWidth > 0} onClick={() => { setSidebarView("collaboration"); if (sidebarWidth === 0) setSidebarWidth(sidebarBeforeCollapse); }}>协作{collaboration.openCount ? ` · ${collaboration.openCount}` : ""}</Button>
           {project.source.type === "github" ? (
             <Button
               className="workspace-sync-button"
@@ -1366,7 +1362,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
           : {})}
         onClose={() => setComplianceOpen(false)}
       />
-      <ProvenanceDialog open={provenanceOpen} projectId={projectId} onClose={() => setProvenanceOpen(false)} />
       <QuickOpenDialog open={quickOpen} projectId={projectId} onClose={() => setQuickOpen(false)} onOpen={path => { closeHistoryDiff(); void navigateToPath(path); }} />
       <ShareDialog
         open={shareOpen}
@@ -1629,7 +1624,7 @@ function InviteDialog({
         `邀请已创建，到期时间为 ${new Date(result.invitation.expiresAt).toLocaleDateString("zh-CN")}.`,
       );
       setToken(
-        `${window.location.origin}/projects?invite=${encodeURIComponent(result.token)}`,
+        `${window.location.origin}/panel?invite=${encodeURIComponent(result.token)}`,
       );
       setEmail("");
       setExpiresAt("");
@@ -1649,7 +1644,7 @@ function InviteDialog({
     try {
       const result = await api.projects.resendInvitation(invitationId);
       setToken(
-        `${window.location.origin}/projects?invite=${encodeURIComponent(result.token)}`,
+        `${window.location.origin}/panel?invite=${encodeURIComponent(result.token)}`,
       );
       setSent(
         `邀请已重新发送，到期时间为 ${new Date(result.invitation.expiresAt).toLocaleDateString("zh-CN")}.`,
@@ -2112,7 +2107,7 @@ function WorkspaceError({ message }: { message: string }) {
     <div className="workspace-error">
       <h1>无法打开此论文</h1>
       <p>{message}</p>
-      <Button variant="primary" onClick={() => navigate("/projects")}>
+      <Button variant="primary" onClick={() => navigate("/panel")}>
         返回项目列表
       </Button>
     </div>

@@ -587,12 +587,12 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     route("GET", "/api/auth/providers", async () => json({ local: true, oidc: Boolean(oidc), cas: Boolean(cas), fastcas: Boolean(fastcas && fastcas.configuration.loginEnabled !== false), fastcasSignup: Boolean(fastcas?.configuration.allowRegistration && fastcas.configuration.loginEnabled !== false) })),
     route("GET", "/api/auth/fastcas/signup", async (_request, _params, url) => {
       if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
-      const signup = await fastcas.beginRegistration(url.searchParams.get("returnTo") ?? "/projects");
+      const signup = await fastcas.beginRegistration(url.searchParams.get("returnTo") ?? "/panel");
       return new Response(null, { status: 302, headers: { location: signup.url.href, "set-cookie": loginBindingCookie("fastcas", signup.binding), "cache-control": "no-store" } });
     }),
     route("GET", "/api/auth/fastcas/login", async (_request, _params, url) => {
       if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
-      const login = await fastcas.beginLogin(url.searchParams.get("returnTo") ?? "/projects");
+      const login = await fastcas.beginLogin(url.searchParams.get("returnTo") ?? "/panel");
       return new Response(null, { status: 302, headers: { location: login.url.href, "set-cookie": loginBindingCookie("fastcas", login.binding), "cache-control": "no-store" } });
     }),
     route("POST", "/api/auth/fastcas/link", async request => {

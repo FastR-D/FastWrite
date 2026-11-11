@@ -1,0 +1,4 @@
+.path { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; min-width: 0; padding: 5px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--slate-50); }
+.step { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.step > div { width: auto; }
+.separator { display: flex; align-items: center; flex-shrink: 0; color: var(--text-muted); }

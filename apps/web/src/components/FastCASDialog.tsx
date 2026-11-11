@@ -30,11 +30,11 @@ export function FastCASDialog({ open, onClose }: { open: boolean; onClose: () =>
         {proof?.method === "password" ? <Field label="确认 FastWrite 密码"><TextField type="password" autoComplete="current-password" value={password} onChange={setPassword} /></Field> : null}
         {proof?.method === "password" && proof.localLoginId ? <p>本地登录账号： <strong>{proof.localLoginId}</strong>。请保存此账号和密码，以便在 FastCAS 不可用时登录。</p> : null}
         {proof?.method === "external" ? <p>{proof.recent ? "最近的机构或校园登录可用于确认此账号身份，有效期为五分钟。" : "请使用原机构或校园账号重新登录，并在五分钟内返回此页面。"}</p> : null}
-        {proof?.method === "external" && !proof.recent && providers?.oidc ? <Button variant="secondary" onClick={() => window.location.assign("/api/auth/oidc/login?returnTo=/projects")}>重新使用机构账号登录</Button> : null}
+        {proof?.method === "external" && !proof.recent && providers?.oidc ? <Button variant="secondary" onClick={() => window.location.assign("/api/auth/oidc/login?returnTo=/panel")}>重新使用机构账号登录</Button> : null}
         {proof?.method === "external" && !proof.recent && providers?.cas ? <Button variant="secondary" onClick={() => window.location.assign("/api/auth/cas/login")}>重新使用校园 CAS 登录</Button> : null}
         {proof?.method === "none" && current?.state === "active" ? <>
           <p>{proof.recent ? "请在本次 FastCAS 登录仍有效时添加本地密码，项目和账号 ID 将保持不变。" : "请重新使用 FastCAS 登录，并在五分钟内返回此页面添加本地密码。"}</p>
-          {!proof.recent ? <Button variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/login?returnTo=/projects")}>重新使用 FastCAS 登录</Button> : <>
+          {!proof.recent ? <Button variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/login?returnTo=/panel")}>重新使用 FastCAS 登录</Button> : <>
             <Field label="新的 FastWrite 密码"><TextField type="password" autoComplete="new-password" value={newPassword} onChange={setNewPassword} /></Field>
             <Button variant="secondary" disabled={newPassword.length < 12 || busy} loading={busy} onClick={() => void act(() => api.auth.fastcasSetLocalPassword(newPassword))}>添加本地登录方式</Button>
           </>}

@@ -28,7 +28,6 @@ export function CollaborationHistoryPanel({ projectId, canWrite, selectedPath, o
     setRestore(null); setPreview(null); setSelected(null); await onRestored(); await load(); setResult("已恢复；恢复前的状态已自动保存在历史中。");
   }); };
   return <>
-    <p className={styles.hint}>查看和比较团队版本；命名版本同时保留正文、评论与修订状态。</p>
     {canWrite ? <div className={styles.compose}><Field label="保存命名版本"><TextField aria-label="版本名称" value={label} onChange={setLabel} placeholder="例如：首次投稿、返修第一轮" /></Field><Button size="small" disabled={busy || !label.trim()} icon={<Icon name={icons.history} />} onClick={save}>保存版本</Button></div> : null}
     {error ? <div className={styles.error} role="alert">{error}</div> : null}
     {result ? <p role="status" className={styles.hint}>{result}</p> : null}

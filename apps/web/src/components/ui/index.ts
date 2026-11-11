@@ -25,6 +25,7 @@ export { Table, TableRow, TableCell, type TableProps, type TableRowProps, type T
 
 export { Field, type FieldProps, type FieldRenderProps } from "./controls/Field";
 export { Select, type SelectProps, type SelectOption, type SelectOptionGroup } from "./controls/Select";
+export { BreadcrumbSelect, type BreadcrumbSelectProps, type BreadcrumbSelectStep } from "./controls/BreadcrumbSelect";
 export { MultiSelect, type MultiSelectProps, type MultiSelectOption } from "./controls/MultiSelect";
 export { NumberField, type NumberFieldProps } from "./controls/NumberField";
 export { FileField, type FileFieldProps } from "./controls/FileField";

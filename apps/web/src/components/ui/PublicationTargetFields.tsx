@@ -6,12 +6,13 @@ import { Field, Select } from "./index";
 
 interface PublicationTargetFieldsProps {
   profile: WritingProfile;
+  disabled?: boolean;
   value: PublicationTarget | undefined;
   onChange: (value: PublicationTarget | undefined) => void;
   onSelectedVenueChange?: (value: PublicationVenueOption | undefined) => void;
 }
 
-export function PublicationTargetFields({ profile, value, onChange, onSelectedVenueChange }: PublicationTargetFieldsProps) {
+export function PublicationTargetFields({ profile, value, onChange, onSelectedVenueChange, disabled = false }: PublicationTargetFieldsProps) {
   const [catalog, setCatalog] = useState<PublicationVenueOption[]>([]);
   useEffect(() => { const controller = new AbortController(); void api.venues.list(controller.signal).then(setCatalog).catch(() => setCatalog([])); return () => controller.abort(); }, []);
   const venues = useMemo(() => catalog.filter((venue) => venue.domain === profile), [catalog, profile]);
@@ -28,7 +29,7 @@ export function PublicationTargetFields({ profile, value, onChange, onSelectedVe
 
   return <>
     <Field label="目标会议或期刊" hint={selected ? `${selected.edition} · 规则核实于 ${selected.verifiedAt}${selected.template ? ` · ${selected.template.trust === "official" ? "官方模板" : selected.template.trust === "publisher" ? "出版社通用模板" : "社区镜像模板"}` : ""}` : "智能助手、修改、审稿和补全将使用所选会议或期刊的内置规则。"}>
-      <Select
+      <Select disabled={disabled}
         aria-label="目标会议或期刊"
         value={value?.venueId ?? ""}
         onChange={chooseVenue}
@@ -48,8 +49,8 @@ export function PublicationTargetFields({ profile, value, onChange, onSelectedVe
         ]}
       />
     </Field>
-    {value && templateYears.length ? <Field label="模板年份" hint="仅提供已核实的官方模板版本。"><Select aria-label="模板年份" value={String(value.year ?? Math.max(...templateYears))} onChange={(next) => onChange({ ...value, year: Number(next) })} options={templateYears.map((year) => ({ value: String(year), label: String(year) }))} /></Field> : null}
-    {value ? <Field label="稿件阶段"><Select aria-label="稿件阶段" value={value.stage} onChange={(next) => onChange({ ...value, stage: next as PublicationTarget["stage"] })} options={[{ value: "draft", label: "初稿" }, { value: "submission", label: "匿名投稿" }, { value: "camera-ready", label: "终稿" }]} /></Field> : null}
-    {value && selected?.tracks?.length ? <Field label="论文类别"><Select aria-label="论文类别" value={value.track ?? selected.tracks[0]!.value} onChange={(next) => onChange({ ...value, track: next })} options={selected.tracks.map((track) => ({ value: track.value, label: track.label }))} /></Field> : null}
+    {value && templateYears.length ? <Field label="模板年份" hint="仅提供已核实的官方模板版本。"><Select disabled={disabled} aria-label="模板年份" value={String(value.year ?? Math.max(...templateYears))} onChange={(next) => onChange({ ...value, year: Number(next) })} options={templateYears.map((year) => ({ value: String(year), label: String(year) }))} /></Field> : null}
+    {value ? <Field label="稿件阶段"><Select disabled={disabled} aria-label="稿件阶段" value={value.stage} onChange={(next) => onChange({ ...value, stage: next as PublicationTarget["stage"] })} options={[{ value: "draft", label: "初稿" }, { value: "submission", label: "匿名投稿" }, { value: "camera-ready", label: "终稿" }]} /></Field> : null}
+    {value && selected?.tracks?.length ? <Field label="论文类别"><Select disabled={disabled} aria-label="论文类别" value={value.track ?? selected.tracks[0]!.value} onChange={(next) => onChange({ ...value, track: next })} options={selected.tracks.map((track) => ({ value: track.value, label: track.label }))} /></Field> : null}
   </>;
 }

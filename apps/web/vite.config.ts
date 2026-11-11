@@ -53,6 +53,8 @@ export default defineConfig(() => {
       }
     },
     optimizeDeps: {
+      // Worker imports are discovered only when the editor opens; prebundle at startup to avoid a reload.
+      include: ["monaco-editor/editor/editor.worker.js"],
       exclude: ["@siglum/engine", "blake3-wasm"]
     },
     resolve: {
