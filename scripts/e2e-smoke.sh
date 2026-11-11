@@ -1017,16 +1017,18 @@ run_code 'async (page) => {
   if (!fixBox || !pdfBox || fixBox.x < pdfBox.x || fixBox.x + fixBox.width > pdfBox.x + pdfBox.width) throw new Error("Fix with Agent is clipped in the PDF failure state");
   await page.getByRole("button", { name: "隐藏面板", exact: true }).click();
   await fixButton.click();
-  await page.getByRole("region", { name: "智能助手工作区" }).waitFor();
-  const agentObjective = page.getByRole("textbox", { name: "希望智能助手做什么？" });
-  await agentObjective.waitFor();
-  await page.waitForFunction(() =>
-    (document.querySelector(".agent-task-form textarea")?.value || "").startsWith("/revise ")
-  );
-  const objective = await agentObjective.inputValue();
-  if (!objective.startsWith("/revise ")) throw new Error("Compile repair did not select the Agent revise intent: " + JSON.stringify(objective));
-  if (!objective.includes("main.tex")) throw new Error("Compile repair did not include the main document");
-  if (!/Undefined control sequence|undefinedFastWriteCommand/i.test(objective)) throw new Error("Compile repair did not include the actionable compiler diagnostic");
+  const assistant = page.getByRole("dialog", { name: "编译助手与待审核修改", exact: true });
+  await assistant.waitFor();
+  const lightweight = assistant.getByRole("checkbox", { name: /单条错误最小修复/ });
+  if (!(await lightweight.isChecked())) throw new Error("Compile repair did not select the bounded single-error repair mode");
+  if (!(await assistant.getByRole("textbox", { name: "任务", exact: true }).inputValue()).trim()) throw new Error("Compile repair did not provide an inspection objective");
+  await assistant.getByRole("combobox", { name: "错误定位", exact: true }).click();
+  await page.getByRole("option", { name: /main\.tex:3.*Undefined control sequence/ }).waitFor();
+  await page.keyboard.press("Escape");
+  const projectId = page.url().split("/").pop();
+  const fileUrl = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId + "/file?path=main.tex";
+  const beforeRepair = (await (await page.request.get(fileUrl)).json()).content;
+  if (!beforeRepair.includes("\\undefinedFastWriteCommand")) throw new Error("Opening compile repair changed the manuscript before review");
   await page.setViewportSize({ width: 720, height: 800 });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
   if (overflow) throw new Error("Compile repair Agent caused page-level overflow at 720x800");
@@ -1034,14 +1036,15 @@ run_code 'async (page) => {
   const browserSuffix = browserName === "chromium" ? "" : "-" + browserName;
   await page.screenshot({ path: "output/playwright/workspace-compile-repair-agent-720x800" + browserSuffix + ".png", fullPage: true });
 
+  await assistant.getByRole("button", { name: "关闭对话框", exact: true }).click();
+  const afterRepair = (await (await page.request.get(fileUrl)).json()).content;
+  if (afterRepair !== beforeRepair) throw new Error("Dismissing compile repair changed the manuscript without approval");
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.getByRole("group", { name: "AI 写作模式", exact: true }).getByRole("button", { name: "修改", exact: true }).click();
   await editor.focus();
   await editor.press("ControlOrMeta+A");
   const repairedContent = "\\documentclass{article}\n\\begin{document}\nCompilation repaired.\n\\end{document}";
   await page.keyboard.insertText(repairedContent);
-  const projectId = page.url().split("/").pop();
-  const fileUrl = page.url().replace(/\/projects\/.*$/, "") + "/api/projects/" + projectId + "/file?path=main.tex";
   let savedContent;
   for (let attempt = 0; attempt < 40; attempt += 1) {
     savedContent = (await (await page.request.get(fileUrl)).json()).content;
@@ -1094,7 +1097,7 @@ run_code 'async (page) => {
     requestBody = route.request().postDataJSON();
     await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(imported) });
   });
-  await page.getByRole("main").getByRole("button", { name: "导入论文", exact: true }).click();
+  await page.getByRole("complementary", { name: "项目导航" }).getByRole("button", { name: "导入论文", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "导入论文" });
   await dialog.getByRole("tab", { name: "GitHub 仓库" }).click();
   await dialog.getByLabel("仓库地址").fill("https://github.com/example/security-paper");
