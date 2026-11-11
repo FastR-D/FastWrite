@@ -24,8 +24,9 @@ export function FastCASDialog({ open, onClose }: { open: boolean; onClose: () =>
     <div className="form-stack">
       {!status ? <p>正在加载账号状态…</p> : !status.enabled ? <p>尚未配置 FastCAS，仍可使用 FastWrite 账号登录。</p> : <>
         <p>{current?.state === "active" ? "此账号已通过 FastCAS 认证。" : current ? "认证尚未完成，请检查状态以完成认证。" : "此账号尚未通过 FastCAS 认证。"}</p>
+        {status.linkEnabled === false && !current ? <p>管理员已关闭新的账号认证，已有登录方式仍可使用。</p> : null}
         <p>身份服务： {status.issuer}</p>
-        {current?.state === "prepared" ? <Button loading={busy} onClick={() => void act(() => api.auth.fastcasReconcile(current.id))}>检查待完成的认证</Button> : null}
+        {current?.state === "prepared" ? <Button disabled={status.linkEnabled === false || busy} loading={busy} onClick={() => void act(() => api.auth.fastcasReconcile(current.id))}>检查待完成的认证</Button> : null}
         {proof?.method === "password" ? <Field label="确认 FastWrite 密码"><TextField type="password" autoComplete="current-password" value={password} onChange={setPassword} /></Field> : null}
         {proof?.method === "password" && proof.localLoginId ? <p>本地登录账号： <strong>{proof.localLoginId}</strong>。请保存此账号和密码，以便在 FastCAS 不可用时登录。</p> : null}
         {proof?.method === "external" ? <p>{proof.recent ? "最近的机构或校园登录可用于确认此账号身份，有效期为五分钟。" : "请使用原机构或校园账号重新登录，并在五分钟内返回此页面。"}</p> : null}
@@ -39,7 +40,7 @@ export function FastCASDialog({ open, onClose }: { open: boolean; onClose: () =>
           </>}
         </> : null}
         {proof?.method === "none" && !current ? <p>没有可恢复的有效 FastCAS 认证。</p> : null}
-        {current ? <Button disabled={!canChange || busy} loading={busy} onClick={() => void act(() => api.auth.fastcasRevoke(current.id, password))}>移除 FastCAS 认证</Button> : <Button variant="primary" disabled={!canChange || busy} loading={busy} onClick={() => void act(async () => { const result = await api.auth.fastcasLink(password); window.location.assign(result.url); })}>使用 FastCAS 认证此账号</Button>}
+        {current ? <Button disabled={!canChange || busy} loading={busy} onClick={() => void act(() => api.auth.fastcasRevoke(current.id, password))}>移除 FastCAS 认证</Button> : <Button variant="primary" disabled={status.linkEnabled === false || !canChange || busy} loading={busy} onClick={() => void act(async () => { const result = await api.auth.fastcasLink(password); window.location.assign(result.url); })}>使用 FastCAS 认证此账号</Button>}
         <p>移除认证将结束此账号的 FastCAS 会话，项目和其他登录方式仍可使用。</p>
       </>}
       {error ? <p role="alert">{error}</p> : null}

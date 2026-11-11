@@ -45,7 +45,7 @@ try {
     loginReturnTo: () => "/projects",
     logout: async () => {}
   };
-  const app = await createApplication(directory, { features: { serverAuth: true }, oidcProvider: legacyOIDC, fastcasConfiguration: { issuer, clientId: "write", clientSecret: "integration-client-secret-32-characters-long", redirectUri: "http://127.0.0.1:3003/api/auth/fastcas/callback", allowLoopbackHTTP: true, allowRegistration: true, fetch: async (url, init) => {
+  const app = await createApplication(directory, { features: { serverAuth: true }, bootstrapAdmin: {email: "bootstrap@example.test", password: "isolated-contract-admin-password"}, oidcProvider: legacyOIDC, fastcasConfiguration: { issuer, clientId: "write", clientSecret: "integration-client-secret-32-characters-long", redirectUri: "http://127.0.0.1:3003/api/auth/fastcas/callback", allowLoopbackHTTP: true, allowRegistration: true, fetch: async (url, init) => {
     if (providerUnavailable) throw new Error("FastCAS deliberately unavailable during local login");
     const response = await fetch(url, init);
     if (loseActivationResponse && String(url).endsWith("/activate")) { loseActivationResponse = false; throw new Error("simulated lost activation response"); }

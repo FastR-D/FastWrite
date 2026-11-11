@@ -22,7 +22,7 @@
       "name": "@fastwrite/server",
       "version": "0.1.0",
       "dependencies": {
-        "@fastrd/fastcas": "^0.1.1",
+        "@fastrd/fastcas": "0.1.2",
         "@fastwrite/harness-claude": "workspace:*",
         "@fastwrite/harness-codex": "workspace:*",
         "@fastwrite/harness-core": "workspace:*",
@@ -250,7 +250,7 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.28.1", "https://registry.npmmirror.com/@esbuild/win32-x64/-/win32-x64-0.28.1.tgz", { "os": "win32", "cpu": "x64" }, "sha512-bm4Mowrv+GXMlpWX++EcXw/iLyd1o3+bJkC2DkWXYVvgZCqD/bSj9ctZeAMC3cIxgjRVR2Dufaiu4YPxr5gW1A=="],
 
-    "@fastrd/fastcas": ["@fastrd/fastcas@0.1.1", "", { "dependencies": { "jose": "6.2.12", "openid-client": "6.8.8" } }, "sha512-bp/PsVHuJSWiTdnL4yT4SWuNItwpKDPIvQSHiZiMt1CSHxzE1cDDpV6m5H64L+K0wfcI1GjTKbUaDCv2kJPnlQ=="],
+    "@fastrd/fastcas": ["@fastrd/fastcas@0.1.2", "", { "dependencies": { "jose": "6.2.12", "openid-client": "6.8.8" } }, "sha512-opFVJwcxGTQquEp9b3YrCr3vi/mqMJaCG6yOPD/CblUGfbmYm6liywho4aaMDLC62puqZYTyD6hWVEgz6MsbeQ=="],
 
     "@fastwrite/harness-claude": ["@fastwrite/harness-claude@workspace:packages/harness-claude"],
 

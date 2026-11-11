@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fastrd/fastcas": "^0.1.1",
+    "@fastrd/fastcas": "0.1.2",
     "@fastwrite/harness-claude": "workspace:*",
     "@fastwrite/harness-codex": "workspace:*",
     "@fastwrite/harness-core": "workspace:*",

@@ -584,7 +584,7 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     route("POST", "/api/auth/register", async (request) => { const result = await auth.register(await readJson<{ email: string; password: string; displayName?: string }>(request)); await teams.personalWorkspace({ user: result.user, sessionId: "register" }); return authResponse(result, 201); }),
     route("POST", "/api/auth/login", async (request) => authResponse(await auth.login(await readJson<{ email: string; password: string }>(request)))),
     route("POST", "/api/auth/dev-session", async (request) => { requireSameOrigin(request); return json(await auth.developmentSession(), 200, { "cache-control": "no-store" }); }),
-    route("GET", "/api/auth/providers", async () => json({ local: true, oidc: Boolean(oidc), cas: Boolean(cas), fastcas: Boolean(fastcas), fastcasSignup: Boolean(fastcas?.configuration.allowRegistration) })),
+    route("GET", "/api/auth/providers", async () => json({ local: true, oidc: Boolean(oidc), cas: Boolean(cas), fastcas: Boolean(fastcas && fastcas.configuration.loginEnabled !== false), fastcasSignup: Boolean(fastcas?.configuration.allowRegistration && fastcas.configuration.loginEnabled !== false) })),
     route("GET", "/api/auth/fastcas/signup", async (_request, _params, url) => {
       if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
       const signup = await fastcas.beginRegistration(url.searchParams.get("returnTo") ?? "/projects");
