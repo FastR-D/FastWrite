@@ -85,7 +85,6 @@ export function CollaborationPanel({ projectId, registry, collaboration, selecti
     </header>
     {selectedPath && access ? <div className={styles.mode}>
       <Field label="写作模式"><Select aria-label="写作模式" value={writingMode} onChange={value => onWritingModeChange(value as WritingMode)} options={[...(access.canWrite ? [{ value: "editing", label: "编辑" }] : []), ...(access.canComment ? [{ value: "reviewing", label: "审阅 · 跟踪修订" }] : []), { value: "viewing", label: "查看" }]} /></Field>
-      <small className={styles.hint}>{writingMode === "reviewing" ? "修订自动保存，接受后写入正文" : writingMode === "viewing" ? "只读正文，可选择文本与查看讨论" : "更改实时同步给协作者"}</small>
     </div> : null}
     <TabBar label="协作面板" activeId={tab} onSelect={setTab} tabs={[{ id: "discussions", label: `讨论 ${threads.filter(item => item.status !== "resolved").length || ""}` }, { id: "external", label: `外部反馈 ${externalComments.filter(item => item.status === "open").length || ""}` }, { id: "people", label: "成员" }, { id: "history", label: "历史" }]} />
     {error || collaboration.error ? <div className={styles.error} role="alert">{error || collaboration.error}</div> : null}
@@ -105,7 +104,6 @@ export function CollaborationPanel({ projectId, registry, collaboration, selecti
         <h3 className={styles.sectionTitle}>项目成员 · {members.length}</h3>
         {members.map(member => <div className={styles.member} key={member.userId}><span><strong>{member.user.displayName}</strong><small>{member.user.emailNormalized}</small></span><span className={styles.badge}>{roleLabel(member.role)}</span></div>)}
       </> : tab === "external" ? <>
-        <p className={styles.hint}>通过分享链接收到的反馈。访客姓名由其自行填写。</p>
         {externalComments.map(comment => <article className={styles.thread} key={comment.id}>
           <header className={styles.threadHeader}><Button variant="ghost" size="small" onClick={() => { void act(comment.id, () => onNavigate(comment.path, undefined, undefined, comment.line)); }}>{comment.path}{comment.line ? `:${comment.line}` : ""}</Button><span className={styles.badge}>{comment.status === "resolved" ? "已解决" : "待处理"}</span></header>
           <div className={styles.message}><div><strong>{comment.author} · 访客</strong><time dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleDateString()}</time></div><p>{comment.body}</p></div>

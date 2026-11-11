@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Alert, Badge, Button, Checkbox, Disclosure, Divider, EmptyState, Field, FileField, Icon, IconButton, icons,
+  Alert, Badge, BreadcrumbSelect, Button, Checkbox, Disclosure, Divider, EmptyState, Field, FileField, Icon, IconButton, icons,
   Label, Link, List, ListEmpty, ListRow, ListRowText, Loader, MultiSelect, NumberField, ProgressBar,
   SegmentedControl, Select, Spinner, TabBar, Table, TableCell, TableRow,
   Tag, TextArea, TextField, ThemeToggle, Tooltip, View, type ControlDensity
@@ -32,6 +32,8 @@ const CITY_VENUES = [
 ].map((city, index) => ({ value: city.toLowerCase(), label: ["奥胡斯", "柏林", "芝加哥", "德累斯顿", "爱丁堡", "佛罗伦萨", "日内瓦", "赫尔辛基", "伊斯坦布尔", "雅加达", "京都", "里斯本"][index]! }));
 
 export function GalleryPage() {
+  const [breadcrumbDomain, setBreadcrumbDomain] = useState("security");
+  const [breadcrumbVenue, setBreadcrumbVenue] = useState("ccs");
   const [project, setProject] = useState("");
   const [publication, setPublication] = useState("");
   const [city, setCity] = useState("");
@@ -118,6 +120,15 @@ export function GalleryPage() {
           <Tag icon={<Icon name={icons.fileCode} />}>sections/introduction.tex · 第 12–28 行</Tag>
           <Tag tone="info">学术表达精修</Tag>
         </div>
+      </section>
+
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>面包屑选择</h2>
+        <p className={styles.sectionNote}>逐级选择领域与目标；菜单独立浮动，切换上级时由调用方重置下级。</p>
+        <BreadcrumbSelect label="面包屑选择示例" steps={[
+          { id: "domain", label: "示例领域", value: breadcrumbDomain, onChange: value => { setBreadcrumbDomain(value); setBreadcrumbVenue(""); }, options: [{ value: "security", label: "网络与信息安全" }, { value: "ai", label: "人工智能" }] },
+          { id: "venue", label: "示例投稿目标", value: breadcrumbVenue, onChange: setBreadcrumbVenue, placeholder: "选择目标", options: [{ value: "", label: "通用领域指导" }, ...(breadcrumbDomain === "security" ? [{ value: "ccs", label: "ACM CCS" }, { value: "sp", label: "IEEE S&P" }] : [{ value: "neurips", label: "NeurIPS" }, { value: "icml", label: "ICML" }])] },
+        ]} />
       </section>
 
       <section className={styles.section}>
@@ -330,7 +341,7 @@ export function GalleryPage() {
         <p className={styles.sectionNote}>包括导航、分组、展开区域和状态栏。</p>
 
         <div className={styles.row}>
-          <Link href="/projects">内部链接</Link>
+          <Link href="/panel">内部链接</Link>
           <Link href="#gallery-anchor">页面锚点</Link>
           <Link href="https://example.com" rel="noreferrer noopener" target="_blank">外部链接</Link>
           <Link href="/api/health" variant="button" download="health.json">下载按钮</Link>

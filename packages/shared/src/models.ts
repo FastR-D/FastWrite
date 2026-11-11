@@ -169,6 +169,12 @@ export interface Team {
   updatedAt: string;
 }
 
+export interface TeamSummary extends Team {
+  role: TeamRole;
+  memberCount: number;
+  projectCount: number;
+}
+
 export interface TeamMember { teamId: string; userId: string; role: TeamRole; idpGroupBindingIds?: string[]; createdAt: string; updatedAt: string; }
 export interface TeamGroupBinding { id: string; teamId: string; idpGroup: string; role: Exclude<TeamRole, "owner">; createdByUserId: string; createdAt: string; updatedAt: string; }
 export interface ProjectMember { projectId: string; userId: string; role: ProjectRole; createdAt: string; updatedAt: string; }

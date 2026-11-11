@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { icons } from "../icons";
 import { Icon } from "../primitives/Icon";
 import { useFieldWiring } from "./Field";
@@ -7,6 +8,8 @@ import styles from "./Select.module.css";
 export interface SelectOption {
   value: string;
   label: string;
+  /** Compact text in the trigger; the menu retains the full label. */
+  shortLabel?: string;
   disabled?: boolean;
   icon?: ReactNode;
   description?: string;
@@ -36,7 +39,9 @@ export interface SelectProps {
   searchable?: boolean;
   /** Render the list above the trigger instead of below. */
   position?: "above" | "below";
-  appearance?: "field" | "toolbar";
+  appearance?: "field" | "toolbar" | "breadcrumb";
+  /** Float within the nearest dialog (or viewport), outside scrolling form content. */
+  portal?: boolean;
   id?: string;
   name?: string;
   invalid?: boolean;
@@ -63,6 +68,7 @@ export function Select({
   searchable,
   position = "below",
   appearance = "field",
+  portal = false,
   id,
   invalid,
   "aria-describedby": describedBy,
@@ -85,6 +91,45 @@ export function Select({
   const [activeIndex, setActiveIndex] = useState(0);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [floating, setFloating] = useState<{ container: HTMLElement; style: CSSProperties } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open || !portal) { setFloating(null); return; }
+    const anchor = wrapperRef.current;
+    if (!anchor) return;
+    const dialog = anchor.closest<HTMLElement>('[role="dialog"]');
+    const container = dialog ?? document.body;
+    const update = () => {
+      const trigger = anchor.getBoundingClientRect();
+      const boundary = dialog?.getBoundingClientRect();
+      const leftEdge = boundary?.left ?? 0;
+      const rightEdge = boundary?.right ?? window.innerWidth;
+      const footer = dialog?.querySelector<HTMLElement>(".dialog__footer")?.getBoundingClientRect();
+      const bottom = footer?.top ?? boundary?.bottom ?? window.innerHeight;
+      const width = Math.min(Math.max(trigger.width, 280), 360, rightEdge - leftEdge - 24);
+      const left = Math.max(leftEdge + 12, Math.min(trigger.left, rightEdge - width - 12));
+      const top = trigger.bottom + 4;
+      const upperEdge = dialog?.querySelector<HTMLElement>(".dialog__header")?.getBoundingClientRect().bottom ?? boundary?.top ?? 0;
+      setFloating({ container, style: {
+        position: dialog ? "absolute" : "fixed",
+        left: left - (boundary?.left ?? 0) - (dialog?.clientLeft ?? 0),
+        top: position === "above" ? "auto" : top - (boundary?.top ?? 0) - (dialog?.clientTop ?? 0),
+        right: "auto",
+        bottom: position === "above" ? (boundary?.bottom ?? window.innerHeight) - trigger.top + 4 - (dialog?.clientTop ?? 0) : "auto",
+        width,
+        maxHeight: Math.max(0, Math.min(320, position === "above" ? trigger.top - upperEdge - 12 : bottom - top - 8)),
+      } });
+    };
+    const scroll = (event: Event) => { if (!(event.target instanceof Node) || !popoverRef.current?.contains(event.target)) update(); };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", scroll, true);
+    const observer = new ResizeObserver(update);
+    observer.observe(anchor);
+    if (dialog) observer.observe(dialog);
+    return () => { observer.disconnect(); window.removeEventListener("resize", update); window.removeEventListener("scroll", scroll, true); };
+  }, [open, portal, position]);
 
   /*
    * Filtering maps over entries, not over a flat list: a mixed array must keep
@@ -110,7 +155,7 @@ export function Select({
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) close();
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node) && !popoverRef.current?.contains(event.target as Node)) close();
     };
     document.addEventListener("mousedown", onPointerDown);
     return () => document.removeEventListener("mousedown", onPointerDown);
@@ -190,6 +235,7 @@ export function Select({
     switch (event.key) {
       case "Escape": {
         event.preventDefault();
+        event.stopPropagation();
         close();
         // Escape returns focus to the trigger. When the filter field is open,
         // the focused element is about to unmount, so focus it first while the
@@ -244,6 +290,17 @@ export function Select({
     }
   };
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    const list = popoverRef.current?.querySelector<HTMLElement>('[role="listbox"]');
+    const option = document.getElementById(optionId(activeIndex));
+    if (!list || !option || !list.contains(option)) return;
+    const viewport = list.getBoundingClientRect();
+    const item = option.getBoundingClientRect();
+    if (item.top < viewport.top) list.scrollTop -= viewport.top - item.top;
+    else if (item.bottom > viewport.bottom) list.scrollTop += item.bottom - viewport.bottom;
+  }, [open, activeIndex, floating?.container]);
+
   const activeOption = visibleFlat[activeIndex];
   /*
    * The element that carries the combobox role is the element that holds focus,
@@ -261,16 +318,69 @@ export function Select({
   const comboboxOnInput = canSearch && open;
   let runningIndex = -1;
 
+  const renderPopover = () => (
+    <div ref={popoverRef} className={`${styles.popover} ${portal ? styles.portalPopover : ""}`} style={portal ? floating?.style : undefined}>
+      {canSearch ? (
+        <div className={styles.search}>
+          {/*
+           * A raw <input>, not the TextField primitive: this element is the
+           * combobox, and TextField's contract deliberately has no role or
+           * aria-activedescendant pass-through. Its look mirrors
+           * TextField.input in the stylesheet.
+           */}
+          <input
+            type="text"
+            className={styles.filter}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="筛选…"
+            role="combobox"
+            aria-expanded
+            aria-haspopup="listbox"
+            aria-controls={listboxId}
+            aria-activedescendant={activeOption ? optionId(activeIndex) : undefined}
+            aria-label={rest["aria-label"] ?? "筛选选项"}
+            aria-invalid={resolvedInvalid || undefined}
+            aria-describedby={resolvedDescribedBy}
+            autoFocus
+          />
+        </div>
+      ) : null}
+
+      <div className={styles.listbox} id={listboxId} role="listbox" aria-label={rest["aria-label"]}>
+        {visible.map((entry) =>
+          isGroup(entry) ? (
+            <div className={styles.group} role="group" aria-label={entry.label} key={entry.label}>
+              <div className={styles.groupLabel}>{entry.label}</div>
+              {entry.options.map((option) => {
+                runningIndex += 1;
+                return renderOption(option, runningIndex);
+              })}
+            </div>
+          ) : (
+            (() => {
+              runningIndex += 1;
+              return renderOption(entry, runningIndex);
+            })()
+          )
+        )}
+
+        {!visibleFlat.length ? <div className={styles.empty}>没有匹配项</div> : null}
+      </div>
+    </div>
+  );
+
   return (
     <div
       ref={wrapperRef}
-      className={`${styles.wrapper} ${position === "above" ? styles.above : ""} ${appearance === "toolbar" ? styles.toolbar : ""} ${className}`.trim()}
+      className={`${styles.wrapper} ${position === "above" ? styles.above : ""} ${appearance === "toolbar" ? styles.toolbar : appearance === "breadcrumb" ? styles.breadcrumb : ""} ${className}`.trim()}
       onKeyDown={onKeyDown}
     >
       <button
         {...rest}
         ref={triggerRef}
         type="button"
+        title={selected?.shortLabel ? selected.label : undefined}
         id={selectId}
         className={`${styles.trigger} ${resolvedInvalid ? styles.invalid : ""}`.trim()}
         role={comboboxOnInput ? undefined : "combobox"}
@@ -285,67 +395,12 @@ export function Select({
       >
         <span className={`${styles.value} ${selected ? "" : styles.placeholder}`.trim()}>
           {selected?.icon ? <span className={styles.optionIcon} aria-hidden="true">{selected.icon}</span> : null}
-          <span className={styles.valueText}>{selected ? selected.label : placeholder}</span>
+          <span className={styles.valueText}>{selected ? selected.shortLabel ?? selected.label : placeholder}</span>
         </span>
         <span className={styles.chevron} aria-hidden="true"><Icon name={icons.chevronDown} size={14} /></span>
       </button>
 
-      {open ? (
-        /*
-         * The filter field sits above the listbox rather than inside it: a
-         * listbox may only own options and groups, and a combobox input nested
-         * in one is an owned child with the wrong role.
-         */
-        <div className={styles.popover}>
-          {canSearch ? (
-            <div className={styles.search}>
-              {/*
-               * A raw <input>, not the TextField primitive: this element is the
-               * combobox, and TextField's contract deliberately has no role or
-               * aria-activedescendant pass-through. Its look mirrors
-               * TextField.input in the stylesheet.
-               */}
-              <input
-                type="text"
-                className={styles.filter}
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="筛选…"
-                role="combobox"
-                aria-expanded
-                aria-haspopup="listbox"
-                aria-controls={listboxId}
-                aria-activedescendant={activeOption ? optionId(activeIndex) : undefined}
-                aria-label={rest["aria-label"] ?? "筛选选项"}
-                aria-invalid={resolvedInvalid || undefined}
-                aria-describedby={resolvedDescribedBy}
-                autoFocus
-              />
-            </div>
-          ) : null}
-
-          <div className={styles.listbox} id={listboxId} role="listbox" aria-label={rest["aria-label"]}>
-            {visible.map((entry) =>
-              isGroup(entry) ? (
-                <div className={styles.group} role="group" aria-label={entry.label} key={entry.label}>
-                  <div className={styles.groupLabel}>{entry.label}</div>
-                  {entry.options.map((option) => {
-                    runningIndex += 1;
-                    return renderOption(option, runningIndex);
-                  })}
-                </div>
-              ) : (
-                (() => {
-                  runningIndex += 1;
-                  return renderOption(entry, runningIndex);
-                })()
-              )
-            )}
-
-            {!visibleFlat.length ? <div className={styles.empty}>没有匹配项</div> : null}
-          </div>
-        </div>
-      ) : null}
+      {open ? portal ? floating ? createPortal(renderPopover(), floating.container) : null : renderPopover() : null}
     </div>
   );
 

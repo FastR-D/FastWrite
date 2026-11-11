@@ -13,7 +13,7 @@ export function ProductLanding({ onSignIn }: { onSignIn: () => void }) {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <Link variant="inherit" className="brand" href="/projects">
+        <Link variant="inherit" className="brand" href="/panel">
           <BrandMark /><span>FastWrite</span>
         </Link>
         <nav className={styles.navigation} aria-label="首页导航">

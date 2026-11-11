@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { normalizeWorkspacePath, type AccessRequest, type AccountUser, type Invitation, type NotificationPreference, type ProjectAclAction, type ProjectAclRule, type ProjectMember, type ProjectRole, type Team, type TeamGroupBinding, type TeamHarnessPolicy, type TeamMember, type TeamRole, type UserNotification, type UserNotificationType } from "@fastwrite/shared";
+import { normalizeWorkspacePath, type AccessRequest, type AccountUser, type Invitation, type NotificationPreference, type ProjectAclAction, type ProjectAclRule, type ProjectMember, type ProjectRole, type Team, type TeamSummary, type TeamGroupBinding, type TeamHarnessPolicy, type TeamMember, type TeamRole, type UserNotification, type UserNotificationType } from "@fastwrite/shared";
 import { ApiError } from "../http";
 import type { JsonDatabase } from "../storage/database";
 import type { Principal } from "../auth/auth-service";
@@ -17,7 +17,18 @@ export class TeamService {
     return this.database.snapshot().teams.find((item) => item.personalUserId === principal.user.id)!;
   }
 
-  list(principal: Principal): Team[] { return this.database.snapshot().teams.filter((team) => this.database.snapshot().teamMembers.some((member) => member.teamId === team.id && member.userId === principal.user.id)); }
+  list(principal: Principal): TeamSummary[] {
+    const state = this.database.snapshot();
+    const memberships = new Map(state.teamMembers.filter(member => member.userId === principal.user.id).map(member => [member.teamId, member.role]));
+    const memberCounts = new Map<string, number>();
+    const projectCounts = new Map<string, number>();
+    for (const member of state.teamMembers) memberCounts.set(member.teamId, (memberCounts.get(member.teamId) ?? 0) + 1);
+    for (const project of state.projects) if (project.teamId) projectCounts.set(project.teamId, (projectCounts.get(project.teamId) ?? 0) + 1);
+    return state.teams.flatMap(team => {
+      const role = memberships.get(team.id);
+      return role ? [{ ...team, role, memberCount: memberCounts.get(team.id) ?? 0, projectCount: projectCounts.get(team.id) ?? 0 }] : [];
+    });
+  }
   policy(teamId: string, principal: Principal): TeamHarnessPolicy {
     this.authorization.requireTeamRole(principal, teamId, ["owner", "admin", "member"]);
     return structuredClone(this.database.snapshot().teams.find((team) => team.id === teamId)?.harnessPolicy ?? { personalHarness: false });

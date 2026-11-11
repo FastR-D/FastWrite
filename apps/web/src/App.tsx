@@ -11,6 +11,9 @@ const AccessRequestPage = lazy(() => import("./pages/AccessRequestPage").then((m
 const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
 
 function routeFromLocation(): { name: "admin" } | { name: "projects" } | { name: "gallery" } | { name: "workspace"; projectId: string } | { name: "shared"; token: string } | { name: "access-request"; projectId: string } {
+  if (/^\/projects\/?$/.test(window.location.pathname)) {
+    window.history.replaceState(window.history.state, "", `/panel${window.location.search}${window.location.hash}`);
+  }
   if (window.location.pathname === "/admin") return { name: "admin" };
   if (window.location.pathname === "/components") return { name: "gallery" };
   const shared = window.location.pathname.match(/^\/shared\/([^/]+)\/?$/);

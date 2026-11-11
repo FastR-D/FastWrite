@@ -17,6 +17,7 @@ import type {
   OutlineItem,
   PaperFile,
   PaperProject,
+  TeamSummary,
   SaveFileRequest,
   SaveFileResponse,
   ReviseRequest,
@@ -222,7 +223,7 @@ export const api = {
     providers: () => request<{ local: boolean; oidc: boolean; cas: boolean; fastcas: boolean; fastcasSignup: boolean }>("/api/auth/providers"),
     fastcasStatus: () => request<{ enabled: boolean; loginEnabled?: boolean; linkEnabled?: boolean; issuer?: string; proof?: { method: "password" | "external" | "none"; recent: boolean; localLoginId?: string }; links: Array<{ id: string; state: "prepared" | "active" | "revoked"; version: number }> }>("/api/auth/fastcas/status"),
     fastcasSetLocalPassword: (password: string) => request<{ loginId: string }>("/api/auth/fastcas/local-password", jsonInit("POST", { password })),
-    fastcasLink: (password: string) => request<{ url: string }>("/api/auth/fastcas/link", jsonInit("POST", { password, returnTo: "/projects" })),
+    fastcasLink: (password: string) => request<{ url: string }>("/api/auth/fastcas/link", jsonInit("POST", { password, returnTo: "/panel" })),
     fastcasReconcile: (id: string) => request(`/api/auth/fastcas/links/${encodeURIComponent(id)}/reconcile`, { method: "POST" }),
     fastcasRevoke: (id: string, password: string) => request(`/api/auth/fastcas/links/${encodeURIComponent(id)}/revoke`, jsonInit("POST", { password })),
     refresh: () => request<{ user: { id: string; emailNormalized: string; displayName: string; platformRole: string }; token: string }>("/api/auth/refresh", { method: "POST" }),
@@ -247,7 +248,7 @@ export const api = {
     ,revokeSupportAccess: (requestId: string) => request<SupportAccessRequest>(`/api/admin/support-access/${encodeURIComponent(requestId)}/revoke`, { method: "POST" })
   },
   teams: {
-    list: (signal?: AbortSignal) => request<Array<{ id: string; name: string; slug: string; personalUserId?: string }>>("/api/teams", signal ? { signal } : undefined),
+    list: (signal?: AbortSignal) => request<TeamSummary[]>("/api/teams", signal ? { signal } : undefined),
     create: (name: string) => request<{ id: string; name: string; slug: string }>("/api/teams", jsonInit("POST", { name })),
     policy: (teamId: string) => request<{ personalHarness: boolean; allowedProviders?: Array<"codex" | "claude" | "openai-compatible">; maxConcurrentRuns?: number; dailyBudgetUsd?: number }>(`/api/teams/${encodeURIComponent(teamId)}/harness-policy`),
     updatePolicy: (teamId: string, body: { personalHarness: boolean; allowedProviders?: Array<"codex" | "claude" | "openai-compatible">; maxConcurrentRuns?: number; dailyBudgetUsd?: number }) => request<unknown>(`/api/teams/${encodeURIComponent(teamId)}/harness-policy`, jsonInit("PATCH", body)),
@@ -382,6 +383,7 @@ export const api = {
     resendInvitation: (invitationId: string) => request<{ invitation: { id: string; expiresAt: string }; token: string }>(`/api/invitations/${encodeURIComponent(invitationId)}/resend`, { method: "POST" }),
     revokeInvitation: (invitationId: string) => request<void>(`/api/invitations/${encodeURIComponent(invitationId)}`, { method: "DELETE" }),
     members: (id: string) => request<{ members: Array<{ userId: string; role: "owner" | "maintainer" | "editor" | "commenter" | "viewer"; createdAt: string; user: { displayName: string; emailNormalized: string } }>; canManage: boolean }>(`/api/projects/${id}/members`),
+    transferToTeam: (id: string, teamId: string) => request<PaperProject>(`/api/projects/${encodeURIComponent(id)}/transfer`, jsonInit("POST", { teamId })),
     transferOwnership: (id: string, personalOwnerUserId: string) => request<PaperProject>(`/api/projects/${id}/transfer`, jsonInit("POST", { personalOwnerUserId })),
     updateMember: (id: string, userId: string, role: "maintainer" | "editor" | "commenter" | "viewer") => request<unknown>(`/api/projects/${id}/members/${encodeURIComponent(userId)}`, jsonInit("PATCH", { role })),
     removeMember: (id: string, userId: string) => request<void>(`/api/projects/${id}/members/${encodeURIComponent(userId)}`, { method: "DELETE" }),

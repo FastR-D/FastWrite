@@ -10,3 +10,15 @@
   .topbar :global(.topbar-actions) { width: 100%; gap: 2px; flex-wrap: nowrap; justify-content: space-between; }
   .topbar :global(.topbar-actions) button { padding-right: 6px; padding-left: 6px; font-size: 11px; }
 }
+
+.newPaperDialog { height: min(560px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); }
+.newPaperDialog :global(.dialog__body) { flex: 1; }
+.newPaperForm { display: flex; flex-direction: column; gap: 20px; }
+.newPaperIdentity { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; }
+.newPaperIdentity > *, .newPaperIdentity input { min-width: 0; }
+.publicationPath { display: flex; flex-direction: column; gap: 8px; }
+.publicationPath > span { color: var(--text); font-size: 12px; font-weight: 600; }
+@media (max-width: 480px) {
+  .newPaperIdentity { grid-template-columns: minmax(0, 1fr); }
+  .newPaperDialog :global(.dialog__header), .newPaperDialog :global(.dialog__body) { padding: 16px; }
+}

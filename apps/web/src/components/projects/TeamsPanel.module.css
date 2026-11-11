@@ -1,0 +1,86 @@
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 28px; }
+.title { display: flex; align-items: center; gap: 10px; }
+.title h1 { margin: 0; font-size: 23px; line-height: 1.4; font-weight: 650; letter-spacing: -.025em; }
+.count { min-width: 22px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; color: var(--text-secondary); font-size: 11px; text-align: center; font-variant-numeric: tabular-nums; }
+.listHeading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; color: var(--text-muted); font-size: 12px; }
+.table { flex: 1; min-height: 0; border: 0; border-radius: 0; overflow: auto; scrollbar-gutter: stable; }
+.table table { table-layout: fixed; }
+.table thead th { height: 38px; background: var(--surface); padding: 0 16px; border-bottom: 1px solid var(--border-strong); font-size: 11px; font-weight: 500; color: var(--text-muted); }
+.table thead th:first-child, .table td:first-child { padding-left: 8px; }
+.table thead th:nth-child(2), .table thead th:nth-child(3) { width: 100px; }
+.table thead th:nth-child(4) { width: 110px; }
+.table thead th:last-child { width: 190px; text-align: right; }
+.table td { height: 86px; padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.table tr:hover td { background: var(--slate-50); }
+.identity { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 40px; height: 40px; background: var(--blue-100); color: var(--blue-700); border: 1px solid var(--border); border-radius: 10px; }
+.identity > div, .summary > div { display: flex; flex-direction: column; min-width: 0; gap: 5px; }
+.identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.identity small, .summary small { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.mobileMeta { display: none; }
+.metric { font-size: 14px; font-variant-numeric: tabular-nums; }
+.metric small { font-size: 11px; color: var(--text-muted); }
+.role { display: inline-flex; align-items: center; width: fit-content; white-space: nowrap; padding: 3px 8px; border-radius: 4px; background: var(--slate-100); color: var(--text-secondary); font-size: 11px; }
+.actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; min-height: 200px; gap: 12px; padding: 32px 16px; border-top: 1px solid var(--border); text-align: center; color: var(--text-muted); }
+.empty h2 { margin: 4px 0 0; color: var(--text); font-size: 16px; font-weight: 600; }
+.empty p { margin: 0 0 8px; font-size: 12px; }
+.summary { display: flex; align-items: center; gap: 12px; padding: 16px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--slate-50); }
+.summary strong { font-size: 14px; overflow-wrap: anywhere; }
+.summary > .role { margin-left: auto; }
+.form { display: flex; flex-direction: column; gap: 18px; }
+.formGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.formGrid > *, .formGrid input { min-width: 0; }
+.tabContent { padding-top: 18px; }
+.roster { display: flex; flex-direction: column; }
+.memberRow { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.memberRow:first-child { padding-top: 2px; }
+.memberRow:last-child { border-bottom: 0; }
+.memberAvatar { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; height: 32px; background: var(--slate-100); border-radius: 50%; color: var(--text-secondary); font-size: 12px; }
+.person { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.person strong { font-size: 12px; font-weight: 600; }
+.person small { font-size: 11px; color: var(--text-muted); }
+.memberActions { display: flex; align-items: center; gap: 8px; }
+.memberActions > div { width: 110px; }
+.result { margin-right: auto; color: var(--text-secondary); font-size: 11px; }
+.muted { color: var(--text-muted); font-size: 12px; }
+.linkBox { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--slate-50); margin-top: 20px; }
+.linkBox > div { width: 100%; }
+.profile { padding-top: 18px; border-top: 1px solid var(--border); }
+.profile h3 { font-size: 13px; font-weight: 600; margin: 0 0 16px; }
+@media (max-width: 1100px) {
+  .table thead th:nth-child(2), .table thead th:nth-child(3) { width: 76px; }
+  .table thead th:nth-child(4) { width: 90px; }
+  .table thead th:last-child { width: 170px; }
+  .table td, .table thead th { padding-right: 8px; padding-left: 8px; }
+}
+@media (max-width: 760px) {
+  .heading { margin-bottom: 18px; }
+  .title h1 { font-size: 21px; }
+  .table thead th:nth-child(2), .table td:nth-child(2), .table thead th:nth-child(3), .table td:nth-child(3), .table thead th:nth-child(4), .table td:nth-child(4) { display: none; }
+  .table thead th:last-child { width: 150px; }
+  .mobileMeta { display: block; color: var(--text-muted); font-size: 10px; overflow-wrap: anywhere; }
+  .identity { gap: 10px; }
+  .identity .avatar { width: 32px; height: 32px; border-radius: 8px; }
+  .table .actions { gap: 2px; }
+  .table .actions button { padding-right: 7px; padding-left: 7px; }
+}
+@media (max-width: 480px) {
+  .formGrid { grid-template-columns: minmax(0, 1fr); }
+  .table thead th:last-child { width: 112px; }
+  .table .actions button > span > span:first-child { display: none; }
+  .identity .avatar { display: none; }
+  .identity strong { white-space: normal; overflow-wrap: anywhere; }
+  .memberRow { flex-wrap: wrap; gap: 8px; }
+  .memberActions { margin-left: auto; }
+  .summary { flex-wrap: wrap; padding: 12px; }
+  .summary > div { flex: 1; }
+  .dialog :global(.dialog__header), .dialog :global(.dialog__body) { padding: 16px; }
+}
+
+.providerField { border: 0; padding: 0; margin: 0; min-width: 0; }
+
+.dialog { height: min(640px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); }
+.managementDialog { height: min(720px, calc(100dvh - 48px)); }
+.dialog :global(.dialog__body) { flex: 1; }
+.dialog :global(.dialog__footer) { flex-wrap: wrap; }

@@ -1,0 +1,20 @@
+.dialog { height: min(640px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); }
+.dialog :global(.dialog__body) { flex: 1; }
+.transfer { height: min(460px, calc(100dvh - 48px)); }
+.form, .fieldset { display: flex; flex-direction: column; gap: 18px; }
+.fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.grid > *, .grid input { min-width: 0; }
+.muted { color: var(--text-muted); font-size: 12px; line-height: 1.7; margin: 0; }
+.project { display: flex; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--slate-50); }
+.project > span { color: var(--blue-600); flex-shrink: 0; }
+.project > div { display: flex; flex-direction: column; min-width: 0; gap: 6px; }
+.project strong { font-size: 13px; overflow-wrap: anywhere; }
+.project small { font-size: 11px; color: var(--text-muted); }
+.linkBox { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--slate-50); }
+.linkBox > div { width: 100%; }
+.linkBox > strong { font-size: 12px; }
+@media (max-width: 480px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .dialog :global(.dialog__header), .dialog :global(.dialog__body) { padding: 16px; }
+}
