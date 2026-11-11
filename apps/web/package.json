@@ -12,8 +12,8 @@
     "test:fastui:browser": "node scripts/fastui-browser.mjs"
   },
   "dependencies": {
-    "@fastrd/ui-foundation": "https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-foundation-0.1.0.tgz",
-    "@fastrd/ui-react": "https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-react-0.1.0.tgz",
+    "@fastrd/ui-foundation": "0.1.2",
+    "@fastrd/ui-react": "0.1.2",
     "@fastwrite/shared": "workspace:*",
     "@siglum/engine": "^0.1.4",
     "@siglum/filesystem": "^0.2.1",

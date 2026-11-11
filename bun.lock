@@ -44,8 +44,8 @@
       "name": "@fastwrite/web",
       "version": "0.1.0",
       "dependencies": {
-        "@fastrd/ui-foundation": "https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-foundation-0.1.0.tgz",
-        "@fastrd/ui-react": "https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-react-0.1.0.tgz",
+        "@fastrd/ui-foundation": "0.1.2",
+        "@fastrd/ui-react": "0.1.2",
         "@fastwrite/shared": "workspace:*",
         "@siglum/engine": "^0.1.4",
         "@siglum/filesystem": "^0.2.1",
@@ -248,9 +248,9 @@
 
     "@fastrd/fastcas": ["@fastrd/fastcas@0.1.1", "", { "dependencies": { "jose": "6.2.12", "openid-client": "6.8.8" } }, "sha512-bp/PsVHuJSWiTdnL4yT4SWuNItwpKDPIvQSHiZiMt1CSHxzE1cDDpV6m5H64L+K0wfcI1GjTKbUaDCv2kJPnlQ=="],
 
-    "@fastrd/ui-foundation": ["@fastrd/ui-foundation@https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-foundation-0.1.0.tgz", {}, "sha512-5O4s9BXXHXWk7GbzPfMYX6HjNi0DKryfWLRPYMZINNb4ew3arjCKbJvxFaSvqcCvhHxmrf8OZDg9GPmfvdnRtw=="],
+    "@fastrd/ui-foundation": ["@fastrd/ui-foundation@0.1.2", "", {}, "sha512-Jobx7DanQOejVRFfsT5DFXND7rtcvSUzZ5Zui+lY3oAuretz8vwkzqHh1Gd0+ezJubw82WeFsnsXdvbWB4t1YA=="],
 
-    "@fastrd/ui-react": ["@fastrd/ui-react@https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-react-0.1.0.tgz", { "dependencies": { "@fastrd/ui-foundation": "https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-foundation-0.1.0.tgz" }, "peerDependencies": { "react": "^18.3.0 || ^19.0.0", "react-dom": "^18.3.0 || ^19.0.0" } }, "sha512-zsnN8Afm889TyhPX0ZQQ4hIn5Bj1EsFbEZ857CQXDgmCIOEfY3369bCFn1VEelR/EWjU5Lpyjj6D1E9lVtQ5uw=="],
+    "@fastrd/ui-react": ["@fastrd/ui-react@0.1.2", "", { "dependencies": { "@fastrd/ui-foundation": "0.1.2" }, "peerDependencies": { "react": "^18.3.0 || ^19.0.0", "react-dom": "^18.3.0 || ^19.0.0" } }, "sha512-/7WrTu/LrsMWcJKQglQBmpe+sXWj0hGUt66mgrZ3f6B/5dZfb03xdrbPSKRRGFmCA8H6O8stmU9oOFMSuW7YHQ=="],
 
     "@fastwrite/harness-claude": ["@fastwrite/harness-claude@workspace:packages/harness-claude"],
 
