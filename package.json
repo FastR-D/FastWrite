@@ -21,7 +21,7 @@
     "papers:compile": "bun scripts/papers-compile.ts",
     "latex:check": "bash scripts/check-latex-linux.sh",
     "latex:setup": "bash scripts/setup-latex-linux.sh --install",
-    "e2e:smoke": "sh scripts/e2e-smoke.sh",
+    "e2e:smoke": "node scripts/e2e-smoke.mjs",
     "e2e:cross-browser": "sh scripts/e2e-cross-browser.sh",
     "llm:smoke": "bun scripts/llm-smoke.ts",
     "ci:check": "sh scripts/ci-check.sh",

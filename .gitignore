@@ -30,30 +30,4 @@ output/
 .superpowers/
 /docs/superpowers
 evalution/
-# Keep generated evaluation runs local; commit fixed inputs used by tests.
-/evaluation/*
-!/evaluation/agent-writing-skills/
-/evaluation/agent-writing-skills/*
-!/evaluation/agent-writing-skills/integrations.json
-!/evaluation/agent-writing-skills/sources.lock.json
-!/evaluation/agent-writing-skills/sources/
-/evaluation/agent-writing-skills/sources/*
-!/evaluation/social-research-skills/
-/evaluation/social-research-skills/*
-!/evaluation/social-research-skills/integrations.json
-!/evaluation/social-research-skills/reviews.json
-!/evaluation/social-research-skills/rules.json
-!/evaluation/social-research-skills/cases.json
-!/evaluation/social-research-skills/codex-summary.json
-
-# Pinned upstream instruction snapshots and their license evidence.
-!/evaluation/agent-writing-skills/sources/chinese-research-writing/
-!/evaluation/agent-writing-skills/sources/citation-management/
-!/evaluation/agent-writing-skills/sources/content-research-writer/
-!/evaluation/agent-writing-skills/sources/humanizer/
-!/evaluation/agent-writing-skills/sources/literature-review/
-!/evaluation/agent-writing-skills/sources/ml-paper-writing/
-!/evaluation/agent-writing-skills/sources/peer-review/
-!/evaluation/agent-writing-skills/sources/reviewer-response/
-!/evaluation/agent-writing-skills/sources/scientific-critical-thinking/
-!/evaluation/agent-writing-skills/sources/scientific-writing/
+/evaluation/

@@ -1,4 +1,5 @@
-import { chromium, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { startTestServer, launchTestBrowser } from './fixtures/browser-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -7,11 +8,13 @@ import { join } from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const report = join(root, 'output/ui-projects');
 await mkdir(report, { recursive: true });
-const base = process.env.FASTWRITE_E2E_URL ?? 'http://127.0.0.1:3218';
-const browser = await chromium.launch({ channel: process.env.FASTWRITE_E2E_CHANNEL ?? 'chrome', headless: true });
+const setup = process.env.FASTWRITE_E2E_URL ? null : await startTestServer();
+const base = process.env.FASTWRITE_E2E_URL ?? setup.origin;
+let browser;
 const errors = [], cases = [], layouts = [];
 let page;
 try {
+  browser = await launchTestBrowser();
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, reducedMotion: 'reduce', serviceWorkers: 'block' });
   await context.addInitScript(() => {
     localStorage.setItem('fastwrite.session-token', 'project-ui-fixture');
@@ -193,4 +196,5 @@ try {
   console.error({ pageErrors: errors });
   await page?.screenshot({ path: join(report, 'failure.png'), fullPage: true }).catch(() => {});
   throw error;
-} finally { await browser.close(); }
+} finally { await browser?.close();
+  await setup?.close(); }

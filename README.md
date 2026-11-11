@@ -90,6 +90,16 @@ bun run backup:restore -- --data-dir /absolute/path/to/paperdata --file /absolut
 
 `.github/workflows/ci.yml` 会在 push 和 pull request 时自动运行类型检查、单元测试、构建和浏览器 E2E。本地可运行 `bun run ci:check` 执行同一组校验。
 
+| 命令 | 覆盖范围 |
+| --- | --- |
+| `bun run test` | 服务端、前端状态与共享库的确定性测试；已安装的三种 LaTeX 引擎会执行真实编译。 |
+| `bun run e2e:smoke` | 构建后的关键浏览器流程：登录、保存与撤销、导出、编译与审核边界、刷新与离线权限、GitHub 导入。 |
+| `bun run e2e:projects-ui` | 项目列表的筛选、排序、删除、对话框和无障碍回归。 |
+| `bun run e2e:cross-browser` | 构建后在 Chrome、Firefox、WebKit 上复用同一冒烟流程。 |
+
+浏览器冒烟和项目列表测试会启动临时服务、使用随机端口，并在结束后清理数据；无须另开开发服务。默认使用 Playwright Chromium，可设置 `FASTWRITE_E2E_BROWSER=chrome` 使用本机 Chrome。CI 固定 Ubuntu 24.04 和 Bun 版本，安装三种 LaTeX 引擎并检查依赖。外部网站、真实模型质量评测和专门的视觉／性能脚本按需运行；历史调研数据不作为单元测试输入。
+
+
 在 `.env` 设置 `FASTWRITE_HARNESS=codex` 或 `claude`，并配置 `FASTWRITE_HARNESS_API_KEY`、可选的 `FASTWRITE_HARNESS_BASE_URL`、`FASTWRITE_HARNESS_MODEL`、`FASTWRITE_HARNESS_WIRE_API` 和 `FASTWRITE_HARNESS_TIMEOUT_MS`，即可为全部 AI 工作流配置统一 Harness。Project Settings 也可运行时配置这些 Harness 参数；API key 只保存在内存中且不会回传。Agent 规划、普通 AI 操作以及 `/draft`、`/continue`、`/revise` 的完整文件生成默认超时均为 300 秒，可用 `FASTWRITE_HARNESS_TIMEOUT_MS` 覆盖（最大 600 秒）。导入私有 GitHub Repository 时设置 `FASTWRITE_GITHUB_TOKEN`。
 
 验证 `.env` 中的真实 LLM 配置：
