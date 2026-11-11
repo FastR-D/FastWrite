@@ -34,7 +34,11 @@ jobs:
       - name: Install browser and sandboxed LaTeX dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap latexmk texlive-latex-base texlive-latex-recommended texlive-fonts-recommended
+          sudo apt-get install -y --no-install-recommends bubblewrap latexmk texlive-latex-base texlive-latex-recommended texlive-fonts-recommended texlive-xetex texlive-luatex fonts-dejavu-core
+          for engine in pdflatex xelatex lualatex; do command -v "$engine"; done
+          kpsewhich article.cls
+          kpsewhich fontspec.sty
+          kpsewhich luaotfload-main.lua
           bunx playwright install --with-deps chromium
 
       - name: Verify real sandboxed compilation

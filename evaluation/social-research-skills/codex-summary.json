@@ -1,0 +1,84 @@
+{
+  "generatedAt": "2026-11-07T16:42:02.620836+00:00",
+  "engine": "real Codex CLI",
+  "modelCalls": 16,
+  "adaptedSkills": 6,
+  "syntheticCases": 12,
+  "passedChecks": 132,
+  "totalChecks": 132,
+  "selectedResults": [
+    {
+      "id": "paper-reading-notes",
+      "version": "1.0.0",
+      "report": "codex-round-1.json",
+      "instructionSha256": "3029d98cc1179997b4255d8f5ba7c7e060e2a209073d797ddc18261556beda90",
+      "fixtureSha256": "898e8ea08956ac15871456d1be8de88b678129ba31b77116a37600d67ab913fd",
+      "checksPassed": 17,
+      "checksTotal": 17,
+      "toolCalls": 0
+    },
+    {
+      "id": "evidence-storyline",
+      "version": "1.0.0",
+      "report": "codex-round-1.json",
+      "instructionSha256": "6a19efff7c6b82d293bcd64a8e73ab949970411b73db7619e50dc02b925631ee",
+      "fixtureSha256": "bb96371f01d466f00a6111e5da1ac656ad55710db980423e7b0460e6404c5b2f",
+      "checksPassed": 21,
+      "checksTotal": 21,
+      "toolCalls": 0
+    },
+    {
+      "id": "experiment-reporting",
+      "version": "1.0.0",
+      "report": "codex-round-1.json",
+      "instructionSha256": "f8d9928b255dc861f2d70a3c61a823c836f3c049458373f2fb9342e57d75bc77",
+      "fixtureSha256": "bf013fb9eb6079e28654f32c6449626c03f43d88958ad1ae3a261ce40939c694",
+      "checksPassed": 22,
+      "checksTotal": 22,
+      "toolCalls": 0
+    },
+    {
+      "id": "results-discussion",
+      "version": "1.0.0",
+      "report": "codex-round-1.json",
+      "instructionSha256": "2810d0560ef80b695411572e78022a80a1ee5cf6937ebb3b32066d1866c54575",
+      "fixtureSha256": "523fa4549f4eddba05e2ca3dcc027e6c5a03d393ab175369c7ee1732e66b6df2",
+      "checksPassed": 24,
+      "checksTotal": 24,
+      "toolCalls": 0
+    },
+    {
+      "id": "figure-caption-audit",
+      "version": "1.0.1",
+      "report": "codex-round-2-figure-reviewed.json",
+      "instructionSha256": "dc87abdb0269fe3bcc752c35289a0d01337c727605fa9bbd90430f6fcb592b4f",
+      "fixtureSha256": "75b1a503c2bf87ffaf5d11a140de2866ad7733e81f177b328163ba899cc329e1",
+      "checksPassed": 23,
+      "checksTotal": 23,
+      "toolCalls": 0
+    },
+    {
+      "id": "manuscript-consistency",
+      "version": "1.0.0",
+      "report": "codex-round-2-consistency.json",
+      "instructionSha256": "b53f5900ec87406b1c528da25fa2271cb714b4494ab40d0e531455dea912fe63",
+      "fixtureSha256": "9073ca610d1cffbcf14878696f01fedb90cf876239d4aeae9a11834e34efab3f",
+      "checksPassed": 25,
+      "checksTotal": 25,
+      "toolCalls": 0
+    }
+  ],
+  "editorialReview": {
+    "status": "completed for all final adapted answers",
+    "finding": "First figure run assigned ambiguous values to A/B. Skill 1.0.1 now requires explicit pairing; a harder fixture was run with Codex and the revised answer retained the unknown mapping.",
+    "checkerCorrections": [
+      "Minimum-length gate incorrectly rejected a valid short requested sentence. Added case-specific threshold and reran consistency cases.",
+      "Aggregation and value-mapping checks missed semantically correct wording. Expanded accepted wording; figure round-2 answers rechecked without model calls, after verifying unchanged model-visible inputs and Skill hash."
+    ],
+    "limitations": [
+      "Bounded synthetic acceptance, not evidence of improved publication quality or statistical superiority over baseline.",
+      "Baseline outputs also largely satisfied requirements; original records retained, including checker false negatives.",
+      "No claim of source verification, visual rendering or experiments by the evaluated models."
+    ]
+  }
+}

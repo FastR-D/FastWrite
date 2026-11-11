@@ -34,6 +34,7 @@
     "e2e:editor": "node scripts/e2e-editor-reliability.mjs",
     "e2e:ai-workspace": "node scripts/e2e-ai-workspace.mjs",
     "e2e:workbench-ui": "node scripts/e2e-workbench-ui.mjs",
+    "e2e:projects-ui": "node scripts/e2e-projects-ui.mjs",
     "e2e:typography": "node scripts/e2e-typography.mjs",
     "e2e:sidebar-evidence": "node scripts/e2e-sidebar-evidence.mjs",
     "e2e:compile-snapshot": "node scripts/e2e-compile-snapshot.mjs",

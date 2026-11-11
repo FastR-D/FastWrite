@@ -14,10 +14,11 @@ import { WRITING_PROFILES } from "@fastwrite/shared";
 import { api } from "../api/client";
 import { ImportDialog } from "../components/import/ImportDialog";
 import { FastCASDialog } from "../components/FastCASDialog";
-import { Button, Checkbox, Dialog, Field, Icon, IconButton, Link, MultiSelect, NumberField, Select, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
+import { Button, Checkbox, Dialog, Field, Icon, Link, MultiSelect, NumberField, Select, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { PublicationTargetFields } from "../components/ui/PublicationTargetFields";
 import { navigate, projectPath } from "../lib/navigation";
-import { publicationTargetAbbreviation } from "../lib/labels";
+import { ProjectBrowser } from "../components/projects/ProjectBrowser";
+import styles from "./ProjectsPage.module.css";
 
 export function ProjectsPage() {
   const invitationToken = new URLSearchParams(window.location.search).get(
@@ -138,14 +139,13 @@ export function ProjectsPage() {
   };
 
   return (
-    <div className="projects-page">
-      <header className="projects-topbar">
+    <div className={styles.page}>
+      <header className={`projects-topbar ${styles.topbar}`}>
         <Link variant="inherit" className="brand" href="/projects">
           <BrandMark />
           <span>FastWrite</span>
         </Link>
         <div className="topbar-actions">
-          <span className="skill-badge">智能论文写作</span>
           <Button
             size="small"
             variant="ghost"
@@ -185,137 +185,27 @@ export function ProjectsPage() {
         </div>
       </header>
       <FastCASDialog open={fastcasOpen} onClose={() => setFastcasOpen(false)} />
-      <main className="projects-main">
-        <section className="projects-hero">
-          <h1>工作区</h1>
-          <div className="projects-hero__actions">
-            <Button
-              variant="primary"
-              icon={<Icon name={icons.add} />}
-              onClick={() => setImportOpen(true)}
-            >
-              导入论文
-            </Button>
-            <Button
-              variant="secondary"
-              icon={<Icon name={icons.newFile} />}
-              onClick={() => setNewOpen(true)}
-            >
-              新建论文
-            </Button>
+      <ProjectBrowser
+        projects={projects}
+        loading={loading}
+        error={error}
+        deleting={deleting}
+        onNew={() => setNewOpen(true)}
+        onImport={() => setImportOpen(true)}
+        onTeams={() => setTeamsOpen(true)}
+        onRetry={() => void loadProjects()}
+        onDelete={(project) => void deleteProject(project)}
+        notice={invitationToken ? (
+          <div
+            className={invitationState === "error" ? "page-error" : "form-notice"}
+            role={invitationState === "error" ? "alert" : "status"}
+          >
+            {invitationState === "accepting" ? "正在接受邀请…"
+              : invitationState === "accepted" ? "已接受邀请，可在工作区中访问此项目。"
+              : invitationError || "正在准备邀请…"}
           </div>
-        </section>
-
-        <section className="projects-section" aria-labelledby="recent-projects">
-          {invitationToken ? (
-            <div
-              className={
-                invitationState === "error" ? "page-error" : "form-notice"
-              }
-              role={invitationState === "error" ? "alert" : "status"}
-            >
-              {!account ? (
-                <>
-                  <span>
-                    请使用受邀邮箱登录以加入此项目。
-                  </span>
-                  <Button size="small" onClick={() => setAccountOpen(true)}>
-                    登录
-                  </Button>
-                </>
-              ) : invitationState === "accepting" ? (
-                "正在接受邀请…"
-              ) : invitationState === "accepted" ? (
-                "已接受邀请，可在工作区中访问此项目。"
-              ) : (
-                invitationError || "正在准备邀请…"
-              )}
-            </div>
-          ) : null}
-          <div className="section-heading">
-            <div>
-              <h2 id="recent-projects">最近项目</h2>
-
-            </div>
-            <span>
-              {projects.length} 个项目
-            </span>
-          </div>
-          {error ? (
-            <div className="page-error" role="alert">
-              <strong>无法加载项目</strong>
-              <span>{error}</span>
-              <Button size="small" onClick={() => void loadProjects()}>
-                重试
-              </Button>
-            </div>
-          ) : null}
-          {loading ? (
-            <ProjectSkeletons />
-          ) : projects.length === 0 ? (
-            <div className="projects-empty">
-              <div className="projects-empty__art">
-                <Icon name={icons.book} />
-              </div>
-              <h3>暂无论文</h3>
-              <p>
-                导入本地目录或 GitHub 仓库，开始使用完整的写作工作区。
-              </p>
-              <Button
-                variant="primary"
-                icon={<Icon name={icons.repo} />}
-                onClick={() => setImportOpen(true)}
-              >
-                导入第一篇论文
-              </Button>
-            </div>
-          ) : (
-            <div className="project-grid">
-              {projects.map((project) => (
-                <div
-                  key={project.id}
-                  className="project-card"
-                  role="group"
-                  onClick={() => openProject(project)}
-                >
-                  <div className="project-card__top">
-                    <span className="project-card__icon">
-                      <Icon name={icons.book} />
-                    </span>
-                    <span className="project-card__actions">
-                      <Icon name={icons.arrowRight} className="project-card__arrow" />
-                      <IconButton
-                        className="project-card__delete"
-                        label={`删除 ${project.name}`}
-                        title="将项目移入回收站"
-                        icon={<Icon name={icons.trash} />}
-                        disabled={deleting === project.id}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void deleteProject(project);
-                        }}
-                      />
-                    </span>
-                  </div>
-                  <h3>{project.name}</h3>
-                  <code>{project.mainDocument}</code>
-                  <div className="project-card__meta">
-                    <span>
-                      <Icon name={icons.clockface} /> {relativeTime(project.updatedAt)}
-                    </span>
-                    <span>
-                      {publicationTargetAbbreviation(
-                        project.publicationTarget,
-                        project.skill.id,
-                      )}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </main>
+        ) : null}
+      />
       <ImportDialog
         open={importOpen}
         onClose={() => setImportOpen(false)}
@@ -1224,31 +1114,4 @@ function NewPaperDialog({
       </div>
     </Dialog>
   );
-}
-
-function ProjectSkeletons() {
-  return (
-    <div className="project-grid" aria-label="正在加载项目">
-      {[0, 1, 2].map((item) => (
-        <div className="project-card project-card--skeleton" key={item}>
-          <i />
-          <i />
-          <i />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function relativeTime(value: string): string {
-  const days = Math.floor(
-    (Date.now() - new Date(value).getTime()) / 86_400_000,
-  );
-  if (days <= 0) return "今天";
-  if (days === 1) return "昨天";
-  if (days < 30) return `${days} 天前`;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(value));
 }

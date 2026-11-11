@@ -92,7 +92,7 @@ run_code 'async (page) => {
   await dialog.getByLabel("邮箱", { exact: true }).fill("e2e-admin@example.test");
   await dialog.getByLabel("密码", { exact: true }).fill("fastwrite-e2e-only-password");
   await dialog.getByRole("button", { name: "登录", exact: true }).click();
-  await page.getByRole("button", { name: "新建论文", exact: true }).waitFor();
+  await page.getByRole("complementary", { name: "项目导航" }).getByRole("button", { name: "新建论文", exact: true }).waitFor();
   const token = await page.evaluate(() => localStorage.getItem("fastwrite.session-token"));
   if (!token) throw new Error("UI login did not establish a session");
   // The API fixtures below use page.request and need the same identity as the UI.
@@ -102,7 +102,7 @@ run_code 'async (page) => {
 }'
 
 run_code 'async (page) => {
-  await page.getByRole("button", { name: "新建论文" }).click();
+  await page.getByRole("complementary", { name: "项目导航" }).getByRole("button", { name: "新建论文", exact: true }).click();
   await page.getByRole("textbox", { name: "项目名称" }).fill("E2E Smoke Paper");
   await page.getByRole("button", { name: "创建论文" }).click();
   await page.waitForURL(/\/projects\/paper_/);

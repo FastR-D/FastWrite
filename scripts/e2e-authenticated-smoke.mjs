@@ -25,7 +25,7 @@ try {
   await login.getByLabel("邮箱", { exact: true }).fill("e2e-admin@example.test");
   await login.getByLabel("密码", { exact: true }).fill("fastwrite-e2e-only-password");
   await login.getByRole("button", { name: "登录", exact: true }).click();
-  await page.getByRole("button", { name: "新建论文", exact: true }).click();
+  await page.getByRole("complementary", { name: "项目导航" }).getByRole("button", { name: "新建论文", exact: true }).click();
   await page.getByRole("textbox", { name: "项目名称" }).fill("Authenticated regression");
   await page.getByRole("button", { name: "创建论文", exact: true }).click();
   await page.waitForURL(/\/projects\/paper_/);

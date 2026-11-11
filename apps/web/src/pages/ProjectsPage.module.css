@@ -1,0 +1,12 @@
+.page { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; background: var(--surface); }
+.page .topbar { flex-shrink: 0; height: 56px; padding: 0 28px; background: var(--surface); }
+.topbar :global(.brand) { font-size: 17px; }
+@media (max-width: 760px) {
+  .page .topbar { height: auto; min-height: 56px; gap: 12px; padding: 12px 20px; flex-wrap: wrap; }
+  .topbar :global(.topbar-actions) { flex-wrap: wrap; }
+}
+@media (max-width: 480px) {
+  .page .topbar { padding-right: 14px; padding-left: 14px; }
+  .topbar :global(.topbar-actions) { width: 100%; gap: 2px; flex-wrap: nowrap; justify-content: space-between; }
+  .topbar :global(.topbar-actions) button { padding-right: 6px; padding-left: 6px; font-size: 11px; }
+}

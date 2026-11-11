@@ -239,9 +239,9 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
           {!selection ? (
             <div className="directory-picker">
               <Button variant="ghost" className="directory-dropzone" onClick={pickDirectory}>
-                <span className="directory-dropzone__icon"><Icon name={icons.folderOpened} /></span>
+                <span className="directory-dropzone__icon"><Icon name={icons.folderOpened} size={24} /></span>
                 <strong>选择论文目录</strong>
-                <span>LaTeX 源文件、参考文献、图片和样式文件将复制到 FastWrite。</span>
+                <span className="directory-dropzone__description">LaTeX 源文件、参考文献、图片和样式文件将复制到 FastWrite。</span>
               </Button>
               <Button variant="ghost" className="directory-picker__fallback" onClick={() => inputRef.current?.click()}>通过浏览器上传文件夹</Button>
             </div>
