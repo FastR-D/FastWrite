@@ -81,6 +81,9 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
     port: config.port,
     async fetch(request: Request, server: Server<SocketData>) {
       const url = new URL(request.url);
+      // The production listener is loopback-only. Trust TLS termination only
+      // when explicitly enabled for the local reverse proxy.
+      if (process.env.FASTWRITE_TRUST_PROXY === "true" && request.headers.get("x-forwarded-proto") === "https") url.protocol = "https:";
       if (url.pathname === "/api/collaboration/socket") {
         const clientId = url.searchParams.get("clientId")?.trim(); const roomToken = url.searchParams.get("token")?.trim();
         if (!clientId || !roomToken) return new Response("clientId and token are required", { status: 400 });
@@ -105,7 +108,7 @@ export function createServerOptions(fetch: ((request: Request) => Promise<Respon
         try { authorizeHarness(accessRequest, runId); } catch (error) { return errorResponse(error); }
         return server.upgrade(request, { data: { kind: "harness", runId, accessRequest } }) ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
       }
-      const response = await fetch(request);
+      const response = await fetch(url.href === request.url ? request : new Request(url.toString(), request));
       const discardedProject = request.method === "POST" && url.pathname.match(/^\/api\/projects\/([^/]+)\/(?:history\/discard|comments\/[^/]+\/decision|checkpoints\/[^/]+\/restore)$/);
       const externalMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && url.pathname.match(/^\/api\/projects\/([^/]+)\/(?:file|files|assets|change-sets\/[^/]+\/(?:accept|decide|rollback)|history\/[^/]+\/restore|github-sync\/[^/]+\/(?:resolve|finalize))$/);
       const changedProject = discardedProject || externalMutation;
