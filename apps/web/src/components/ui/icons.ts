@@ -116,7 +116,9 @@ export const icons = {
   type: "symbol-method",
   organization: "organization",
   symbolNumeric: "symbol-numeric",
-  robot: "robot"
+  robot: "robot",
+  extensions: "extensions",
+  commentDiscussion: "comment-discussion"
 } as const;
 
 export type IconName = (typeof icons)[keyof typeof icons];

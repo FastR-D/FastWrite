@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv, type Plugin } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import wasm from "vite-plugin-wasm";
 
@@ -20,9 +20,8 @@ function siglumStaticHeaders(): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => {
-  const environment = loadEnv(mode, process.cwd(), "");
-  const apiOrigin = process.env.FASTWRITE_API_ORIGIN ?? environment.FASTWRITE_API_ORIGIN ?? `http://localhost:${process.env.FASTWRITE_PORT ?? environment.FASTWRITE_PORT ?? "3003"}`;
+export default defineConfig(() => {
+  const socketPath = process.env.FASTWRITE_DEV_SOCKET;
   return {
     plugins: [siglumStaticHeaders(), react(), wasm()],
     server: {
@@ -33,9 +32,9 @@ export default defineConfig(({ mode }) => {
         "Cross-Origin-Opener-Policy": "same-origin",
         "Cross-Origin-Embedder-Policy": "require-corp"
       },
-      proxy: {
-        "/api": { target: apiOrigin, ws: true }
-      }
+      proxy: socketPath ? {
+        "/api": { target: { host: "localhost", port: 80, socketPath }, ws: true }
+      } : {}
     },
     clearScreen: false,
     build: {

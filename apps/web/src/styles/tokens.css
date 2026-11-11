@@ -7,14 +7,38 @@
  * for reasons OTHER than a palette value need an explicit dark override at the
  * bottom of this file.
  *
- * Rule: components read --vscode-* only. Brand colours are defined once, in the
- * scales in styles.css.
+ * Components read --vscode-* for shared appearances and --fw-* for product
+ * geometry, motion and AI surfaces. Brand scales live in styles.css.
  */
 
 :root {
   /* Typography */
-  --vscode-font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif;
+  --fw-font-ui: "IBM Plex Sans Variable", "Noto Sans SC Variable", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --fw-font-ui-geist: "Geist Variable", "Noto Sans SC Variable", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --fw-font-ui-system: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
+  --fw-font-mono: "JetBrains Mono Variable", "Noto Sans SC Variable", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --fw-font-weight-body: 500;
+  --fw-font-weight-code: 450;
+  --vscode-font-family: var(--fw-font-ui);
   --vscode-font-size: 12px;
+
+  /* Compact workbench defaults; View can opt a form into comfortable density. */
+  --fw-control-height-default: 28px;
+  --fw-control-height-small: 25px;
+  --fw-control-height-comfortable: 32px;
+  --fw-control-height: var(--fw-control-height-default);
+  --fw-control-padding-inline: 6px;
+  --fw-button-padding-inline: 11px;
+  --fw-radius-control: 4px;
+  --fw-radius-surface: 6px;
+  --fw-radius-overlay: 8px;
+  --fw-duration-fast: 120ms;
+  --fw-duration-normal: 180ms;
+  --fw-ease: cubic-bezier(0.2, 0, 0, 1);
+  --fw-disabled-opacity: 0.4;
+  --fw-control-border: #8290a3;
+  --fw-ai-background: var(--purple-50);
+  --fw-ai-foreground: var(--purple-600);
 
   /* Foreground / surfaces */
   --vscode-foreground: var(--text);
@@ -55,11 +79,16 @@
   /* Inputs */
   --vscode-input-background: var(--surface);
   --vscode-input-foreground: var(--text);
+  --vscode-input-border: var(--fw-control-border);
+  --vscode-input-placeholderForeground: var(--text-muted);
+  --vscode-inputValidation-errorBorder: var(--red-600);
   --vscode-dropdown-background: var(--surface);
-  --vscode-dropdown-border: var(--slate-300);
+  --vscode-dropdown-border: var(--fw-control-border);
   --vscode-settings-dropdownListBorder: var(--slate-300);
+  --vscode-widget-border: var(--border);
+  --vscode-widget-shadow: var(--shadow-popover);
   --vscode-checkbox-background: var(--surface);
-  --vscode-checkbox-border: var(--slate-300);
+  --vscode-checkbox-border: var(--fw-control-border);
   /*
    * vscrui draws the tick as `fill: currentColor` on the box, and the box uses
    * one background for both states — there is no filled accent square to put a
@@ -67,14 +96,13 @@
    * (--surface), not against a blue fill: #ffffff would be a white tick on a
    * white box. --blue-600 is 6.25:1 against the light surface and 4.84:1
    * against the dark one, clearing 4.5:1 for a non-text graphic as well as the
-   * 3:1 that WCAG 1.4.11 asks for. Our own Checkbox does not use this token,
-   * but a wrong value here is a trap for anyone who uses vscrui's directly.
+   * 3:1 that WCAG 1.4.11 asks for. Shared Checkbox and vscrui both consume it.
    */
   --vscode-checkbox-foreground: var(--blue-600);
 
   /* Lists and selection */
-  --vscode-list-activeSelectionBackground: var(--blue-600);
-  --vscode-list-activeSelectionForeground: #ffffff;
+  --vscode-list-activeSelectionBackground: var(--blue-100);
+  --vscode-list-activeSelectionForeground: var(--blue-800);
   --vscode-list-hoverBackground: var(--slate-100);
   --vscode-list-focusOutline: var(--blue-500);
 
@@ -116,7 +144,7 @@
    * dark surfaces, so --blue-600 is a LIGHT blue (#3d8ed8). Any variable that
    * puts WHITE TEXT on a blue background therefore cannot reference the ramp in
    * dark mode: white on #3d8ed8 measures 3.47:1 and fails WCAG AA (needs 4.5:1
-   * for text this size). These five need explicit mid-dark values instead.
+   * for text this size). These four need explicit mid-dark values instead.
    *
    * Contrast figures below are white-on-background ratios, verified against
    * the WCAG 2.1 relative-luminance formula.
@@ -125,7 +153,6 @@
   --vscode-button-hoverBackground: #1177bb;           /* 4.79:1 */
   --vscode-badge-background: #0e639c;                 /* 6.40:1 */
   --vscode-activityBarBadge-background: #0e639c;      /* 6.40:1 */
-  --vscode-list-activeSelectionBackground: #094771;   /* 9.76:1 */
 
   /*
    * Secondary buttons sit on a dark surface and need a lifted, not sunken,
@@ -141,4 +168,11 @@
   /* Mirror of the light danger pair, with a red dark enough for white text. */
   --fw-danger-background: #b03030;          /* 6.34:1 */
   --fw-danger-foreground: #ffffff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --fw-duration-fast: 0ms;
+    --fw-duration-normal: 0ms;
+  }
 }

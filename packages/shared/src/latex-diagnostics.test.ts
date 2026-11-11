@@ -25,3 +25,8 @@ Overfull \\hbox (8.0pt too wide) in paragraph at lines 30--31`, ["main.tex"], "m
     expect(result[1]).toMatchObject({ severity: "error", path: "main.tex", line: 25, message: "Emergency stop." });
   });
 });
+
+test("parses file-line engine errors without an Error prefix", () => {
+  const result = parseLatexDiagnostics("./sections/body.tex:27: Undefined control sequence.\nl.27 \\bad", ["main.tex", "sections/body.tex"], "main.tex");
+  expect(result[0]).toMatchObject({ severity: "error", path: "sections/body.tex", line: 27, message: "Undefined control sequence." });
+});

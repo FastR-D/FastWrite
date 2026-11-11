@@ -18,6 +18,10 @@ const RUNTIME_GENERATED = new Set([
   // Monaco. The host class is ours; these are Monaco's own, targeted through
   // the host to reach the editor it mounts.
   "monaco-editor",
+  // Monaco owns the gutter overlay and folding glyph elements.
+  "margin-view-overlays",
+  "cldr",
+  "codicon",
   "overflow-guard",
   "margin",
   // Monaco decorations, applied through its API as `options.className` rather

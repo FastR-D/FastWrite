@@ -188,6 +188,16 @@ function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestI
 }
 
 export const api = {
+  latex: {
+    proposals: (projectId: string) => request<ChangeSet[]>(`/api/projects/${projectId}/pending-proposals`),
+    index: (projectId: string) => request<import("@fastwrite/shared").LatexIndex>(`/api/projects/${projectId}/latex-index`),
+    preflight: (projectId: string) => request<{ dependencies: Array<{ file: string; status: string }>; warnings: string[]; missing: string[] }>(`/api/projects/${projectId}/compile-environment`),
+    environments: () => request<import("@fastwrite/shared").TexEnvironmentStatus[]>("/api/tex-environments"),
+    assistant: (projectId: string, body: { expectedVersion: number; objective?: string; diagnosticId?: string; lightweight: boolean }, signal?: AbortSignal) => request<{ run: AgentRun; changeSet?: ChangeSet; explanation: string; validated: boolean; diagnostics: import("@fastwrite/shared").LatexDiagnostic[]; steps: Array<{ action: string; result: unknown }> }>(`/api/projects/${projectId}/compile-assistant`, jsonInit("POST", body, signal)),
+    tokens: (projectId: string) => request<Array<{ id: string; name: string; scopes: string[]; expiresAt: string; revokedAt?: string }>>(`/api/projects/${projectId}/mcp-tokens`),
+    createToken: (projectId: string, body: { name: string; scopes: string[]; days: number }) => request<{ token: string }>(`/api/projects/${projectId}/mcp-tokens`, jsonInit("POST", body)),
+    revokeToken: (projectId: string, id: string) => request<void>(`/api/projects/${projectId}/mcp-tokens/${id}`, { method: "DELETE" })
+  },
   referencePapers: {
     import: (projectId: string, source: string, signal?: AbortSignal) => request<ReferencePaper>(`/api/projects/${projectId}/reference-papers/import`, { ...jsonInit("POST", { source }), ...(signal ? { signal } : {}) }),
     list: (projectId: string, signal?: AbortSignal) => request<ReferencePaper[]>(`/api/projects/${projectId}/reference-papers`, signal ? { signal } : undefined),
@@ -303,7 +313,7 @@ export const api = {
     list: (signal?: AbortSignal) => request<PaperProject[]>("/api/projects", signal ? { signal } : undefined),
     get: (id: string, signal?: AbortSignal) => request<PaperProject>(`/api/projects/${id}`, signal ? { signal } : undefined),
     create: (body: { name: string; mainDocument?: string; venue?: TargetVenue; publicationTarget?: PublicationTarget; initializeFromTemplate?: boolean; teamId?: string }) => request<PaperProject>("/api/projects", jsonInit("POST", body)),
-    update: (id: string, body: Partial<Pick<PaperProject, "name" | "mainDocument">> & { venue?: TargetVenue; publicationTarget?: PublicationTarget | null }) => request<PaperProject>(`/api/projects/${id}`, jsonInit("PATCH", body)),
+    update: (id: string, body: Partial<Pick<PaperProject, "name" | "mainDocument" | "compilation">> & { venue?: TargetVenue; publicationTarget?: PublicationTarget | null }) => request<PaperProject>(`/api/projects/${id}`, jsonInit("PATCH", body)),
     exportUrl: (id: string) => `/api/projects/${encodeURIComponent(id)}/export`,
     versions: (id: string, cursor?: string) => request<CollaborationVersionPage>(`/api/projects/${id}/checkpoints${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
     saveVersion: (id: string, label: string) => request<{ oid: string; label: string; createdAt: string }>(`/api/projects/${id}/checkpoints`, jsonInit("POST", { label })),

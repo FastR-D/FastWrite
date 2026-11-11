@@ -24,6 +24,7 @@
  * style, and a second source of truth here could drift from the virtualiser.
  */
 .row {
+  transition: background-color var(--fw-duration-fast) var(--fw-ease), border-color var(--fw-duration-fast) var(--fw-ease), color var(--fw-duration-fast) var(--fw-ease);
   position: absolute;
   right: 0;
   left: 0;
@@ -35,7 +36,7 @@
   background: transparent;
   color: var(--slate-700);
   text-align: left;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -44,7 +45,7 @@
 
 /* Keyed off aria-selected, the state of record, so the visual and the
    accessible state cannot disagree. */
-.row[aria-selected="true"] { background: var(--vscode-active); color: var(--text); }
+.row[aria-selected="true"] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); box-shadow: inset 2px 0 var(--vscode-list-focusOutline); }
 
 /* Every child keeps its intrinsic size... */
 .row > * { flex: 0 0 auto; }
@@ -59,8 +60,8 @@
 
 /* These four must beat Icon's own colour; a CSS module does not raise
    specificity, and `fill` is inherited into the svg. */
-.folder { color: #d18b24 !important; fill: #f7c873; }
+.folder { color: var(--amber-700) !important; }
 .tex { color: var(--blue-600) !important; }
-.image { color: #8768ba !important; }
-.text { color: #4c8b68 !important; }
+.image { color: var(--fw-ai-foreground) !important; }
+.text { color: var(--green-600) !important; }
 .main { margin-right: 7px; color: var(--blue-600); }

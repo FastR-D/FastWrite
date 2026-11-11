@@ -1,9 +1,12 @@
+import { McpSettingsPanel } from "./McpSettingsPanel";
+import { type CompileSettings } from "@fastwrite/shared";
+import { CompileEnvironmentPanel } from "./CompileEnvironmentPanel";
 import { userFacingError } from "../../lib/notifications";
 import { statusLabel } from "../../lib/labels";
 import { useEffect, useMemo, useState } from "react";
 import { isIgnoredWorkspacePath, WRITING_PROFILES, type AgentWireApi, type PaperProject, type ProjectAclAction, type PublicationTarget, type PublishedSkillDescriptor, type WritingProfile, type WorkspaceTreeNode } from "@fastwrite/shared";
 import { api, downloadFile } from "../../api/client";
-import { Button, Field, Icon, icons, Select, TextField, Link } from "../ui";
+import { Button, Field, Icon, icons, Select, TextField, Link, Section } from "../ui";
 import { PublicationTargetFields } from "../ui/PublicationTargetFields";
 import { harnessSettingsSaveDecision, type HarnessSettingsBaseline, type HarnessSettingsDraft } from "./harnessSettings";
 import styles from "./ProjectSettingsEditor.module.css";
@@ -24,6 +27,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
   const [saved, setSaved] = useState(false);
   const harnessDraftKey = "fastwrite.harness-settings";
   const [name, setName] = useState(project.name);
+  const [compilation, setCompilation] = useState<CompileSettings>(project.compilation ?? { engine: "pdflatex", environmentId: "system" });
   const [mainDocument, setMainDocument] = useState(project.mainDocument);
   const [profile, setProfile] = useState<WritingProfile>(project.skill.venue);
   const [publicationTarget, setPublicationTarget] = useState<PublicationTarget | undefined>(project.publicationTarget);
@@ -51,7 +55,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
 
   useEffect(() => {
     setSaved(false);
-  }, [name, mainDocument, profile, publicationTarget, language, apiKey, baseURL, model, wireAPI]);
+  }, [name, mainDocument, compilation, profile, publicationTarget, language, apiKey, baseURL, model, wireAPI]);
 
   useEffect(() => {
     setAgentConfigured(null);
@@ -98,7 +102,7 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
     setResponseLanguage(language);
     try {
       if (agentDecision.kind === "save") await persistAgentSettings(agentDecision.body);
-      const updated = await api.projects.update(project.id, { name: name.trim(), mainDocument, venue: profile, publicationTarget: publicationTarget ?? null });
+      const updated = await api.projects.update(project.id, { name: name.trim(), mainDocument, compilation, venue: profile, publicationTarget: publicationTarget ?? null });
       await onSaved(updated);
       setSaved(true);
     } catch (saveError) {
@@ -155,8 +159,10 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
 
   const categories = [
     { id: "general", label: "常规", keywords: "项目 名称 主文档 入口 文件" },
+    { id: "compile", label: "编译环境", keywords: "LaTeX 编译 引擎 XeLaTeX LuaLaTeX 环境 依赖" },
     { id: "writing", label: "写作", keywords: "研究 领域 投稿 目标 会议 期刊 模板 年份 稿件 阶段 论文 类别" },
     { id: "ai", label: "AI 与模型配置", keywords: "回复 语言 API 密钥 服务 地址 模型 接口 智能 助手" },
+    { id: "mcp", label: "外部 MCP", keywords: "外部 AI 客户端 连接 令牌" },
     ...(aclAvailable ? [{ id: "access", label: "访问权限", keywords: "权限 路径 规则 主体 角色 用户 团队 用户组 操作 效果 允许 拒绝" }] : []),
     { id: "backup", label: "历史与导出", keywords: "自动 Git 历史 检查点 工作区 快照 下载 归档 备份" }
   ];
@@ -187,6 +193,12 @@ export function ProjectSettingsEditor({ project, tree, onSaved }: ProjectSetting
           <Select aria-label="主文档" value={mainDocument} onChange={setMainDocument} options={texFiles.map((path) => ({ value: path, label: path }))} placeholder="选择文档" />
         </Field>
           </section>
+          <Section className={styles.section ?? ""} hidden={!visible("compile")} title="编译环境" description="选择项目的编译引擎，检查服务器环境与宏包依赖。">
+            <CompileEnvironmentPanel projectId={project.id} value={compilation} onChange={setCompilation} />
+          </Section>
+          <Section className={styles.section ?? ""} hidden={!visible("mcp")} title="外部 MCP" description="管理外部 AI 客户端连接及其项目权限。">
+            <McpSettingsPanel projectId={project.id} />
+          </Section>
           <section className={styles.section} hidden={!visible("skills")} aria-labelledby="skills-settings-title">
             <h2 id="skills-settings-title">技能管理</h2>
             <p className={styles.description}>已发布技能受清单、许可证、能力、风险及审核记录约束。</p>

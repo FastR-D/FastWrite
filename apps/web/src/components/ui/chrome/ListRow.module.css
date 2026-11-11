@@ -11,13 +11,14 @@
 .row { display: block; }
 
 .rowButton {
+  transition: background-color var(--fw-duration-fast) var(--fw-ease), border-color var(--fw-duration-fast) var(--fw-ease), color var(--fw-duration-fast) var(--fw-ease);
   display: flex;
   align-items: baseline;
   gap: 6px;
   width: 100%;
   padding: 5px 7px;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--fw-radius-control);
   background: transparent;
   color: var(--vscode-foreground);
   font-family: var(--vscode-font-family);
@@ -39,8 +40,8 @@
 .rowContent { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 
 .primary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.secondary { color: var(--text-muted); font-size: 10px; }
+.secondary { color: var(--text-muted); font-size: 11px; }
 
-.selected .secondary { color: inherit; opacity: 0.8; }
+.selected .secondary { color: inherit; }
 
 .empty { padding: 8px 7px; color: var(--text-muted); font-size: 11px; }

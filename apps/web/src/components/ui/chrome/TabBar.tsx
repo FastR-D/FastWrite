@@ -108,7 +108,7 @@ export function TabBar({ tabs, activeId, onSelect, label, onClose, onActivate, c
             >
               {tab.icon}
               <span className={styles.label}>{tab.label}</span>
-              {tab.dirty ? <span className={styles.dirty} aria-label="未保存的更改">●</span> : null}
+              {tab.dirty ? <span className={styles.dirty} role="img" aria-label="未保存的更改" /> : null}
             </button>
             {onClose ? (
               <button

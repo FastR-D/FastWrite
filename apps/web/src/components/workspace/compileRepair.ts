@@ -16,6 +16,7 @@ export interface CompileFailureContext {
 export interface CompileRepairRequest {
   id: number;
   failure: CompileFailureContext;
+  diagnosticId?: string;
 }
 
 const MAX_DIAGNOSTICS = 8;

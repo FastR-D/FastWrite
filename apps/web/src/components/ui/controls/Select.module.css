@@ -1,33 +1,38 @@
-.wrapper { position: relative; width: 100%; }
+.wrapper { position: relative; width: 100%; min-width: 0; }
 
 .trigger {
+  transition: background-color var(--fw-duration-fast) var(--fw-ease), border-color var(--fw-duration-fast) var(--fw-ease), color var(--fw-duration-fast) var(--fw-ease);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  height: 34px;
-  padding: 0 8px 0 10px;
+  height: var(--fw-control-height);
+  padding: 4px var(--fw-control-padding-inline);
   border: 1px solid var(--vscode-dropdown-border);
-  border-radius: 4px;
+  border-radius: var(--fw-radius-control);
   background: var(--vscode-dropdown-background);
   color: var(--vscode-foreground);
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
+  font-weight: var(--fw-font-weight-body);
+  line-height: 18px;
   text-align: left;
   cursor: pointer;
 }
 
-.trigger:hover:not(:disabled):not(.invalid) { border-color: var(--slate-400); }
-.trigger:focus-visible, .trigger[aria-expanded="true"] { border-color: var(--vscode-focusBorder); box-shadow: var(--focus); outline: none; }
+.trigger:focus-visible, .trigger[aria-expanded="true"] { border-color: var(--vscode-focusBorder); outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; box-shadow: none; }
 .trigger:disabled { opacity: 0.55; cursor: not-allowed; }
-.invalid { border-color: var(--red-600); }
+.trigger.invalid { border-color: var(--vscode-inputValidation-errorBorder); }
+.trigger.invalid:focus-visible { outline-color: var(--vscode-inputValidation-errorBorder); }
 
-.value { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.value { display: flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; }
+.valueText { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* --slate-400 is 2.8:1 on the light surface, below the 4.5:1 AA floor for
    text. --text-muted is 4.8:1 light / 6.9:1 dark and still reads as muted. */
-.placeholder { color: var(--text-muted); }
-.chevron { flex: 0 0 auto; color: var(--vscode-icon-foreground); }
+.placeholder { color: var(--vscode-input-placeholderForeground); }
+.chevron { display: flex; flex: 0 0 auto; color: var(--vscode-icon-foreground); transition: transform var(--fw-duration-fast) var(--fw-ease); }
+.trigger[aria-expanded="true"] .chevron { transform: rotate(180deg); }
 
 .popover {
   position: absolute;
@@ -35,10 +40,10 @@
   top: calc(100% + 2px);
   left: 0;
   right: 0;
-  border: 1px solid var(--vscode-focusBorder);
-  border-radius: 4px;
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: var(--fw-radius-control);
   background: var(--vscode-dropdown-background);
-  box-shadow: var(--shadow-popover);
+  box-shadow: var(--vscode-widget-shadow);
 }
 
 .listbox {
@@ -49,46 +54,37 @@
 
 .above .popover { top: auto; bottom: calc(100% + 2px); }
 
-.search { margin: 3px 3px 5px; }
+.search { margin: 4px 4px 6px; }
 
 /*
- * Mirrors TextField.input. The filter is not a TextField: it is the combobox
+ * Reuses TextField styling. The filter is not a TextField: it is the combobox
  * itself and needs role/aria-activedescendant, which the TextField primitive's
- * contract deliberately does not carry. Keep the two in step by eye.
+ * contract deliberately does not carry.
  */
 .filter {
-  width: 100%;
-  height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--vscode-dropdown-border);
-  border-radius: 4px;
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
+  composes: input from "../primitives/TextField.module.css";
 }
-
-.filter:hover:not(:disabled) { border-color: var(--slate-400); }
-.filter:focus { border-color: var(--vscode-focusBorder); box-shadow: var(--focus); outline: none; }
-.filter::placeholder { color: var(--text-muted); }
 
 .group { padding: 0; margin: 0; border: 0; }
 .groupLabel {
   padding: 5px 7px 3px;
-  color: var(--text-muted);
+  color: var(--vscode-panelTitle-inactiveForeground);
   font-family: var(--vscode-font-family);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .option {
-  display: block;
+  font-weight: var(--fw-font-weight-body);
+  line-height: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 4px 7px;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: var(--fw-radius-control);
   background: transparent;
   color: var(--vscode-foreground);
   font-family: var(--vscode-font-family);
@@ -102,7 +98,27 @@
 
 /* The active option is cursor-tracked AND keyboard-tracked; one visual state. */
 .option.active { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
-.option[aria-selected="true"] { font-weight: 600; }
+.optionLabel { overflow: hidden; text-overflow: ellipsis; }
+.optionContent { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.optionIcon { display: grid; place-items: center; flex: 0 0 22px; width: 22px; height: 22px; border-radius: 5px; background: var(--fw-ai-background); color: var(--fw-ai-foreground); }
+.optionText { display: flex; flex-direction: column; min-width: 0; }
+.description { color: var(--vscode-panelTitle-inactiveForeground); font-size: 11px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; }
+.option.active .description { color: var(--vscode-list-activeSelectionForeground); }
+
+.toolbar .trigger { padding: 3px 7px 3px 4px; border-color: transparent; border-radius: var(--fw-radius-surface); background: var(--vscode-toolbar-hoverBackground); font-weight: 500; }
+.toolbar .trigger:hover:not(:disabled) { border-color: var(--vscode-widget-border); background: var(--vscode-dropdown-background); }
+.toolbar .trigger:focus-visible, .toolbar .trigger[aria-expanded="true"] { border-color: var(--vscode-focusBorder); background: var(--vscode-dropdown-background); }
+.toolbar .trigger.invalid { border-color: var(--vscode-inputValidation-errorBorder); }
+.toolbar .popover { top: calc(100% + 5px); left: auto; min-width: 200px; max-width: calc(100vw - 24px); border-radius: var(--fw-radius-overlay); padding: 3px; }
+.toolbar.above .popover { top: auto; bottom: calc(100% + 5px); }
+.toolbar .option { padding: 7px; border-radius: var(--fw-radius-surface); }
+.toolbar .optionIcon { flex-basis: 28px; width: 28px; height: 28px; }
+.toolbar .value .optionIcon { flex-basis: 22px; width: 22px; height: 22px; }
+.toolbar .option[aria-selected="true"] > :last-child { color: var(--fw-ai-foreground); }
+
+@container (max-width: 350px) {
+  .toolbar .popover { left: 0; right: auto; }
+}
 /*
  * `:disabled` matches form controls only, and an option is a <div aria-disabled>
  * — the rule it used to be written as never matched, so disabled options rendered
@@ -110,4 +126,4 @@
  */
 .option[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
 
-.empty { padding: 8px; color: var(--text-muted); font-family: var(--vscode-font-family); font-size: 11px; }
+.empty { padding: 8px; color: var(--vscode-panelTitle-inactiveForeground); font-family: var(--vscode-font-family); font-size: 11px; }

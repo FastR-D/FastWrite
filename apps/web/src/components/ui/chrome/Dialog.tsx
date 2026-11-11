@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { IconButton } from "../primitives/IconButton";
 import { Icon } from "../primitives/Icon";
 import { icons } from "../icons";
@@ -85,7 +86,9 @@ export function Dialog({ open, title, description, children, footer, headerActio
    */
   const widthClass = styles[width] ?? "";
 
-  return (
+  // A workbench panel may be hidden or clipped while its modal is open.
+  // Keep modal layout independent from the panel that owns its state.
+  return createPortal(
     <div className={`${styles.backdrop} dialog-backdrop`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section ref={dialogRef} className={`${styles.dialog} ${widthClass} dialog dialog--${width} ${className}`} style={resizable ? { width: `min(${resizedWidth}px, calc(100vw - 32px))` } : undefined} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}>
         <header className={`${styles.header} dialog__header`}>
@@ -104,6 +107,7 @@ export function Dialog({ open, title, description, children, footer, headerActio
           else if (event.key === "End") { event.preventDefault(); updateWidth(window.innerWidth - 32); }
         }}><Icon name={icons.gripper} /></div> : null}
       </section>
-    </div>
+    </div>,
+    document.body
   );
 }

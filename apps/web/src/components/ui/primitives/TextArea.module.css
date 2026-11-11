@@ -1,13 +1,16 @@
 .textarea {
+  transition: background-color var(--fw-duration-fast) var(--fw-ease), border-color var(--fw-duration-fast) var(--fw-ease), color var(--fw-duration-fast) var(--fw-ease);
   width: 100%;
+  min-width: 0;
   min-height: 70px;
-  padding: 9px 10px;
-  border: 1px solid var(--vscode-dropdown-border);
-  border-radius: 4px;
+  padding: 4px var(--fw-control-padding-inline);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: var(--fw-radius-control);
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
+  font-weight: var(--fw-font-weight-body);
   line-height: 1.5;
 }
 
@@ -16,10 +19,11 @@
 .both { resize: both; }
 .horizontal { resize: horizontal; }
 
-.textarea:hover:not(:disabled):not(.invalid) { border-color: var(--slate-400); }
-.textarea:focus { border-color: var(--vscode-focusBorder); box-shadow: var(--focus); outline: none; }
+.textarea:focus { border-color: var(--vscode-focusBorder); outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; box-shadow: none; }
+.textarea::placeholder { color: var(--vscode-input-placeholderForeground); opacity: 1; }
 .textarea:disabled { opacity: 0.55; cursor: not-allowed; }
-.invalid { border-color: var(--red-600); }
+.textarea.invalid { border-color: var(--vscode-inputValidation-errorBorder); }
+.textarea.invalid:focus { outline-color: var(--vscode-inputValidation-errorBorder); }
 
 /* Editor-style surfaces that must fill their pane rather than scroll internally. */
 .fill { min-height: 0; height: 100%; }

@@ -2,10 +2,11 @@ import { useState } from "react";
 import {
   Alert, Badge, Button, Checkbox, Disclosure, Divider, EmptyState, Field, FileField, Icon, IconButton, icons,
   Label, Link, List, ListEmpty, ListRow, ListRowText, Loader, MultiSelect, NumberField, ProgressBar,
-  SegmentedControl, Select, Spinner, Table, TableCell, TableRow,
-  Tag, TextArea, TextField, Tooltip, View
+  SegmentedControl, Select, Spinner, TabBar, Table, TableCell, TableRow,
+  Tag, TextArea, TextField, ThemeToggle, Tooltip, View, type ControlDensity
 } from "../components/ui";
 import styles from "./GalleryPage.module.css";
+import { TypographyPreview } from "./TypographyPreview";
 
 const PROJECTS = [
   { value: "alpha", label: "甲项目" },
@@ -34,21 +35,31 @@ export function GalleryPage() {
   const [project, setProject] = useState("");
   const [publication, setPublication] = useState("");
   const [city, setCity] = useState("");
+  const [service, setService] = useState("codex");
+  const [editorFiles, setEditorFiles] = useState(["main.tex", "sections/method.tex", "notes.md"]);
+  const [activeFile, setActiveFile] = useState("main.tex");
   const [skills, setSkills] = useState<string[]>(["draft"]);
   const [size, setSize] = useState<number | undefined>(120);
   const [agree, setAgree] = useState(false);
   const [name, setName] = useState("安全系统论文");
   const [sizeMode, setSizeMode] = useState<"small" | "medium" | "wide">("medium");
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [densityFiles, setDensityFiles] = useState<Record<ControlDensity, string>>({ compact: "main", comfortable: "main" });
 
   return (
     <main className={styles.page}>
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>FastWrite 界面组件</h1>
-          <div className={styles.subtitle}>组件目录 · 基于 vscrui</div>
+          <h1 className={styles.title}>FastUI 组件目录</h1>
+          <div className={styles.subtitle}>紧凑工作台组件 · 柔和反馈 · 浅深色主题</div>
         </div>
-        <Button variant="ghost" size="small" onClick={() => { window.location.assign("/"); }}>返回项目列表</Button>
+        <div className={styles.headerActions}>
+          <ThemeToggle />
+          <Button variant="ghost" size="small" onClick={() => { window.location.assign("/"); }}>返回项目列表</Button>
+        </div>
       </header>
+
+      <TypographyPreview />
 
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>按钮</h2>
@@ -66,6 +77,46 @@ export function GalleryPage() {
           <IconButton label="搜索项目" icon={<Icon name={icons.search} />} />
           <IconButton label="删除草稿" variant="danger" icon={<Icon name={icons.trash} />} />
           <IconButton label="刷新" variant="secondary" icon={<Icon name={icons.refresh} />} />
+        </div>
+        <div className={styles.row}>
+          <Button variant="primary" loading={loadingPreview} icon={<Icon name={icons.save} />}>保存设置</Button>
+          <Checkbox checked={loadingPreview} onChange={setLoadingPreview}>预览加载状态</Checkbox>
+        </div>
+      </section>
+
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>密度与上下文</h2>
+        <p className={styles.sectionNote}>工作台保留紧凑密度，设置表单使用更舒展的控件。主题切换会同步更新所有示例。</p>
+        <div className={styles.densityGrid}>
+          {(["compact", "comfortable"] as const).map(density => (
+            <View key={density} density={density} role="group" aria-label={density === "compact" ? "紧凑密度示例" : "舒适密度示例"} className={styles.specimen ?? ""}>
+              <div className={styles.specimenHeading}>
+                <h3>{density === "compact" ? "紧凑工作台" : "舒适表单"}</h3>
+                <Tag>{density === "compact" ? "28 px" : "32 px"}</Tag>
+              </div>
+              <Field label={density === "compact" ? "紧凑输入" : "舒适输入"}>
+                <TextField defaultValue="面向长文档的协同写作与多轮修订研究" />
+              </Field>
+              <Field label={density === "compact" ? "紧凑选择" : "舒适选择"}>
+                <Select value={densityFiles[density]} onChange={value => setDensityFiles(current => ({ ...current, [density]: value }))} options={[
+                  { value: "main", label: "main.tex" },
+                  { value: "methods", label: "sections/面向多轮修订的研究方法与实验设计.tex" }
+                ]} />
+              </Field>
+              <Field label={density === "compact" ? "紧凑数量" : "舒适数量"}>
+                <NumberField min={1} defaultValue={12} />
+              </Field>
+              <div className={styles.row}>
+                <Button variant="primary" icon={<Icon name={icons.check} />}>检查表单</Button>
+                <Button variant="secondary">重置范围</Button>
+              </div>
+            </View>
+          ))}
+        </div>
+        <div className={styles.contextExample}>
+          <Tag tone="ai" icon={<Icon name={icons.sparkle} />}>AI 写作上下文</Tag>
+          <Tag icon={<Icon name={icons.fileCode} />}>sections/introduction.tex · 第 12–28 行</Tag>
+          <Tag tone="info">学术表达精修</Tag>
         </div>
       </section>
 
@@ -106,11 +157,33 @@ export function GalleryPage() {
       </section>
 
       <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>工作台页签</h2>
+        <p className={styles.sectionNote}>支持方向键切换、中键关闭和预览态；选中页签保留编辑器的顶部标记。</p>
+        <TabBar label="页签示例" activeId={activeFile} onSelect={setActiveFile} tabs={editorFiles.map(path => ({
+          id: path, label: path, title: path, icon: <Icon name={path.endsWith(".tex") ? icons.fileCode : icons.fileText} size={14} />,
+          preview: path === "notes.md", dirty: path === "sections/method.tex"
+        }))} onClose={path => {
+          const remaining = editorFiles.filter(file => file !== path);
+          setEditorFiles(remaining);
+          if (activeFile === path) setActiveFile(remaining[0] ?? "");
+        }} />
+        <Button size="small" variant="ghost" onClick={() => { setEditorFiles(["main.tex", "sections/method.tex", "notes.md"]); setActiveFile("main.tex"); }}>重置页签示例</Button>
+      </section>
+
+      <section className={styles.section}>
         <h2 className={styles.sectionTitle}>选择</h2>
         <p className={styles.sectionNote}>
           自定义组合框支持方向键、Home、End、输入匹配和 Esc。选项超过 10 个时显示筛选框。
         </p>
         <div className={styles.column}>
+          <Field label="工具栏服务" hint="轻量表面、服务图标与选项说明。">
+            {({ id, describedBy }) => (
+              <Select id={id} aria-describedby={describedBy} aria-label="工具栏服务" appearance="toolbar" value={service} onChange={setService} options={[
+                { value: "codex", label: "Codex", description: "OpenAI", icon: <Icon name={icons.robot} size={14} /> },
+                { value: "claude", label: "Claude", description: "Anthropic", icon: <Icon name={icons.sparkle} size={14} /> }
+              ]} />
+            )}
+          </Field>
           <Field label="项目">
             {({ id, describedBy }) => (
               <Select id={id} aria-describedby={describedBy} aria-label="项目" options={PROJECTS} value={project} onChange={setProject} placeholder="选择项目" />

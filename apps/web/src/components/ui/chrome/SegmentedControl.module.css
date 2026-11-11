@@ -1,13 +1,14 @@
 .group { display: inline-flex; align-items: center; gap: 2px; }
 
 .item {
+  transition: background-color var(--fw-duration-fast) var(--fw-ease), border-color var(--fw-duration-fast) var(--fw-ease), color var(--fw-duration-fast) var(--fw-ease);
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 24px;
   padding: 0 9px;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: var(--fw-radius-control);
   background: transparent;
   color: var(--text-secondary);
   font-family: var(--vscode-font-family);
@@ -24,8 +25,8 @@
 
 /* Selected reads as pressed, matching vscrui's active list selection. */
 .selected {
-  background: var(--vscode-list-hoverBackground);
-  color: var(--vscode-foreground);
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
   font-weight: 600;
 }
 

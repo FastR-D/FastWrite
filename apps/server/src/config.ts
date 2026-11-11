@@ -116,7 +116,7 @@ export function discoverHarnessConfiguration(harness: "claude" | "codex"): Harne
 
 export const config = {
   harness: configuredHarness(process.env.FASTWRITE_HARNESS),
-  port: Number.parseInt(process.env.FASTWRITE_PORT ?? "3003", 10),
+  port: Number.parseInt(process.env.FASTWRITE_PORT ?? "3002", 10),
   dataDirectory: resolve(configuredDataDirectory || ".fastwrite-data"),
   webDirectory: resolve(process.env.FASTWRITE_WEB_DIR || defaultWebDirectory),
   maxFileBytes: 200 * 1024 * 1024,

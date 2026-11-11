@@ -3,15 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { parseLatexDiagnostics, parseSyncTex, pdfToSource, sourceToPdf, type LatexDiagnostic, type PdfLocation, type SourceLocation, type SyncTexDocument, type WorkspaceTreeNode } from "@fastwrite/shared";
-/*
- * Every IconButton here comes from the library, and the toolbar's dark-strip
- * metrics reach them through `.pdf-toolbar__controls button` in styles.css —
- * a descendant selector outranks the component's own hashed rule.
- */
 import { Button, Icon, IconButton, TextField, icons } from "../ui";
 import { api, ApiClientError } from "../../api/client";
 import { fitPdfPageScale, MAX_PDF_SCALE, MIN_PDF_SCALE } from "./pdfScale";
 import { compilerLogExcerpt, shouldAutoCompile, type CompileFailureContext } from "./compileRepair";
+import { compileFeedback } from "./compileFeedback";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
@@ -20,7 +16,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 export type CompileState = "idle" | "loading" | "compiling" | "success" | "error";
 export interface CompileStateReport { state: CompileState; compiledVersion: number | null; renderedPages?: number; failure?: CompileFailureContext; diagnostics: LatexDiagnostic[]; log: string; progress: string }
 
-export function PdfPane({ canCompile = true, projectId, projectVersion, buffersDirty, beforeCompile, mainDocument, tree, sourceLocation, compileRequest, onCompileState, onFixWithAgent, onSyncToSource }: { canCompile?: boolean; projectId: string; projectVersion: number; buffersDirty: boolean; beforeCompile: () => Promise<void>; mainDocument: string; tree: WorkspaceTreeNode[]; sourceLocation: SourceLocation | null; compileRequest: number; onCompileState: (report: CompileStateReport) => void; onFixWithAgent: (failure: CompileFailureContext) => void; onSyncToSource: (location: SourceLocation) => void }) {
+export function PdfPane({ canCompile = true, projectId, projectVersion, buffersDirty, beforeCompile, mainDocument, tree, sourceLocation, compileRequest, onCompileState, onFixWithAgent, onShowProblems, onShowOutput, onSyncToSource }: { canCompile?: boolean; projectId: string; projectVersion: number; buffersDirty: boolean; beforeCompile: () => Promise<void>; mainDocument: string; tree: WorkspaceTreeNode[]; sourceLocation: SourceLocation | null; compileRequest: number; onCompileState: (report: CompileStateReport) => void; onFixWithAgent: (failure: CompileFailureContext) => void; onShowProblems: () => void; onShowOutput: () => void; onSyncToSource: (location: SourceLocation) => void }) {
   const sharedSnapshot = useRef("");
   const compiledVersionRef = useRef<number | null>(null);
   const beforeCompileRef = useRef(beforeCompile);
@@ -281,6 +277,7 @@ export function PdfPane({ canCompile = true, projectId, projectVersion, buffersD
   const diagnosticErrors = visibleDiagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
   const diagnosticWarnings = visibleDiagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
   const diagnosticLabel = diagnosticErrors ? `${diagnosticErrors} 项错误` : diagnosticWarnings ? `${diagnosticWarnings} 项警告` : "编译日志";
+  const feedback = compileFeedback({ state, progress, hasPdf: !!pdfUrl, buffersDirty, compiledVersion, projectVersion, previewError: pdfError });
   const toggleFullscreen = () => {
     if (document.fullscreenElement) void document.exitFullscreen();
     else void paneRef.current?.requestFullscreen().catch((error: unknown) => setProgress(userFacingError(error, "无法进入 PDF 全屏")));
@@ -295,20 +292,20 @@ export function PdfPane({ canCompile = true, projectId, projectVersion, buffersD
           <span className="pdf-toolbar__zoom">{Math.round(scale * 100)}%</span>
           <IconButton label="放大" icon={<Icon name={icons.zoomIn} />} disabled={!pdfUrl || scale >= MAX_PDF_SCALE} onClick={() => { setFitToPanel(false); setScale((value) => Math.min(MAX_PDF_SCALE, value + .1)); }} />
           <span className="toolbar-separator" />
-          <IconButton label="适应预览面板" icon={<Icon name={icons.arrowBoth} />} disabled={!pdfUrl} onClick={() => { setFitToPanel(true); window.requestAnimationFrame(applyFitToPanel); }} />
+          <IconButton label="适应预览面板" icon={<Icon name={icons.arrowBoth} />} aria-pressed={fitToPanel} disabled={!pdfUrl} onClick={() => { setFitToPanel(true); window.requestAnimationFrame(applyFitToPanel); }} />
           <IconButton label="下载 PDF" icon={<Icon name={icons.cloudDownload} />} disabled={!pdfUrl} onClick={downloadPdf} />
           <IconButton label="在 PDF 中定位编辑器选区" icon={<Icon name={icons.target} />} disabled={!activeSyncTex || !sourceLocation || pageCount === 0} onClick={locateSource} />
           <IconButton label={fullscreen ? "退出 PDF 全屏" : "进入 PDF 全屏"} icon={fullscreen ? <Icon name={icons.screenNormal} /> : <Icon name={icons.screenFull} />} onClick={toggleFullscreen} />
-          <IconButton label="搜索 PDF" icon={<Icon name={icons.search} />} disabled />
         </div>
       </header>
-      <div className={`compile-strip compile-strip--${state}`} aria-live="polite">
+      <div className={`compile-strip compile-strip--${feedback.tone}`}>
         {resourcePercent !== null ? <div className="compile-strip__meter" role="progressbar" aria-label="编译资源加载" aria-valuemin={0} aria-valuemax={100} aria-valuenow={resourcePercent} style={{ width: `${resourcePercent}%` }} /> : null}
-        <CompileStatusIcon state={state} />
-        <span>{buffersDirty ? "有未保存的更改 · PDF 定位已过期" : progress}</span>
-        {failure ? <Button variant="ghost" className="compile-fix-agent" icon={<Icon name={icons.tools} />} onClick={() => onFixWithAgent(failure)}>使用智能助手修复</Button> : null}
-        {canCompile ? isRunning ? <Button variant="ghost" onClick={cancel}>取消</Button> : <Button variant="ghost" onClick={() => void compile()}>{buffersDirty ? "保存并编译" : pdfUrl ? "重新编译" : "编译"}</Button> : null}
-        {log ? <span className="compile-strip__diagnostics">{diagnosticLabel}</span> : null}
+        <span className="compile-strip__summary" role="status" title={feedback.detail}><CompileStatusIcon state={feedback.tone} /><span>{feedback.message}</span></span>
+        <div className="compile-strip__actions">
+          {log || failure ? <Button size="small" variant="ghost" aria-label={diagnosticErrors || diagnosticWarnings || failure ? "查看编译问题" : "查看编译输出"} onClick={diagnosticErrors || diagnosticWarnings || failure ? onShowProblems : onShowOutput}>{diagnosticLabel}</Button> : null}
+          {failure ? <Button size="small" variant="ghost" className="compile-fix-agent" aria-label="使用智能助手修复" icon={<Icon name={icons.tools} />} onClick={() => onFixWithAgent(failure)}>助手修复</Button> : null}
+          {canCompile ? isRunning ? <Button size="small" variant="ghost" onClick={cancel}>取消</Button> : <Button size="small" variant="ghost" icon={<Icon name={icons.refresh} />} onClick={() => void compile()}>{buffersDirty ? "保存并编译" : pdfUrl ? "重新编译" : "编译"}</Button> : null}
+        </div>
       </div>
       <div ref={containerRef} className={`pdf-canvas ${pdfUrl ? "" : "pdf-canvas--empty"}`} role="region" aria-label="PDF 预览" tabIndex={0} onScroll={(event) => {
         const top = event.currentTarget.scrollTop;
@@ -342,7 +339,7 @@ PDF 预览错误： ${message}` : `PDF 预览错误： ${message}`); }}
           <div className="pdf-empty">
             <span className={`pdf-empty__icon ${state === "error" ? "pdf-empty__icon--error" : ""}`}>{state === "error" ? <Icon name={icons.error} /> : <Icon name={icons.filePdf} />}</span>
             <h3>{state === "error" ? "编译失败" : canCompile ? "编译论文" : "共享论文预览"}</h3>
-            <p>{state === "error" ? progress : canCompile ? <><code>{mainDocument}</code> 将使用本地 LaTeX 工具链编译。</> : progress}</p>
+            <p>{state === "error" ? "打开问题面板查看诊断，或使用智能助手协助修复。" : canCompile ? <><code>{mainDocument}</code><br />保存源文件后生成论文预览。</> : progress}</p>
             {canCompile ? <Button variant="primary" icon={<Icon name={icons.refresh} />} loading={isRunning} onClick={() => void compile()}>{isRunning ? "正在编译" : "编译 PDF"}</Button> : null}
           </div>
         )}
@@ -354,10 +351,11 @@ PDF 预览错误： ${message}` : `PDF 预览错误： ${message}`); }}
 function PdfLoading({ label }: { label: string }) { return <div className="pdf-document-state"><Icon name={icons.refresh} spin /><span>{label}</span></div>; }
 function PdfError({ label }: { label: string }) { return <div className="pdf-document-state pdf-document-state--error"><Icon name={icons.error} /><span>{label}</span></div>; }
 
-function CompileStatusIcon({ state }: { state: CompileState }) {
+function CompileStatusIcon({ state }: { state: CompileState | "stale" }) {
   if (state === "error") return <Icon name={icons.error} className="compile-status-icon compile-status-icon--error" aria-label="编译错误" />;
   if (state === "success") return <Icon name={icons.passFilled} className="compile-status-icon" />;
   if (state === "loading" || state === "compiling") return <Icon name={icons.loading} className="compile-status-icon" spin />;
+  if (state === "stale") return <Icon name={icons.clockface} className="compile-status-icon" />;
   return <Icon name={icons.filePdf} className="compile-status-icon" />;
 }
 

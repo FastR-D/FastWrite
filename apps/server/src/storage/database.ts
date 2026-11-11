@@ -13,6 +13,7 @@ export interface FileVersionRecord {
 }
 
 export interface DatabaseState {
+  mcpAccessTokens?: import("../mcp/access-tokens").McpAccessToken[];
   referencePapers: ReferencePaper[];
   referenceSettings: ReferenceSettings[];
   schemaVersion: number;
@@ -78,8 +79,8 @@ export interface DatabaseState {
   experimentRuns: Array<{ id: string; projectId: string; projectVersion: number; scriptPath: string; status: "queued" | "running" | "completed" | "failed" | "cancelled"; authorization: "user-approved"; inputSnapshotHash?: string; result?: { success: boolean; exitCode: number; log: string; artifactPaths: string[]; runId: string }; jobId?: string; createdAt: string; updatedAt: string }>;
 }
 
-export const CURRENT_SCHEMA_VERSION = 17;
-const EMPTY_DATABASE: DatabaseState = { referencePapers: [], referenceSettings: [], schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], researchScreening: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [], users: [], externalIdentities: [], fastcasTransactions: [], fastcasLinks: [], fastcasEvents: [], sessions: [], teams: [], teamMembers: [], teamGroupBindings: [], projectMembers: [], projectAclRules: [], invitations: [], accessRequests: [], notifications: [], notificationPreferences: [], notificationDeliveries: [], auditEvents: [], harnessProfiles: [], encryptedSecrets: [], localCredentials: [], collaborationDocuments: [], yDocumentSnapshots: [], yDocumentUpdates: [], commentThreads: [], commentMessages: [], collaborationReviewSessions: [], collaborationCheckpoints: [], skillReleaseOverrides: [], jobs: [], supportAccessRequests: [], experimentRuns: [] };
+export const CURRENT_SCHEMA_VERSION = 18;
+const EMPTY_DATABASE: DatabaseState = { mcpAccessTokens: [], referencePapers: [], referenceSettings: [], schemaVersion: CURRENT_SCHEMA_VERSION, projects: [], uploadSessions: [], fileVersions: {}, agentRuns: [], harnessRuns: [], harnessSessions: [], mcpAudits: [], changeSets: [], draftPlans: [], reviewSnapshots: [], reviewReports: [], paperMemories: [], agentTaskPlans: [], issueResolutions: [], compileRecords: [], githubSyncRuns: [], researchWorks: [], projectResearchWorks: [], researchIdentifiers: [], metadataObservations: [], sourceEvidence: [], paperClaims: [], claimEvidenceLinks: [], researchRuns: [], researchScreening: [], fastReadBundles: [], claimRelations: [], projectShares: [], shareComments: [], users: [], externalIdentities: [], fastcasTransactions: [], fastcasLinks: [], fastcasEvents: [], sessions: [], teams: [], teamMembers: [], teamGroupBindings: [], projectMembers: [], projectAclRules: [], invitations: [], accessRequests: [], notifications: [], notificationPreferences: [], notificationDeliveries: [], auditEvents: [], harnessProfiles: [], encryptedSecrets: [], localCredentials: [], collaborationDocuments: [], yDocumentSnapshots: [], yDocumentUpdates: [], commentThreads: [], commentMessages: [], collaborationReviewSessions: [], collaborationCheckpoints: [], skillReleaseOverrides: [], jobs: [], supportAccessRequests: [], experimentRuns: [] };
 
 export class JsonDatabase {
   private state: DatabaseState = structuredClone(EMPTY_DATABASE);
@@ -100,6 +101,7 @@ export class JsonDatabase {
       const parsed = JSON.parse(this.persistedContents) as Partial<DatabaseState>;
       const originalSchemaVersion = Number.isInteger(parsed.schemaVersion) ? parsed.schemaVersion! : 1;
       const migratedState: DatabaseState = {
+        mcpAccessTokens: parsed.mcpAccessTokens ?? [],
         referencePapers: parsed.referencePapers ?? [],
         referenceSettings: parsed.referenceSettings ?? [],
         schemaVersion: originalSchemaVersion,
@@ -255,6 +257,7 @@ export class JsonDatabase {
       state.collaborationReviewSessions = state.collaborationReviewSessions.filter(item => item.projectId !== projectId);
       state.collaborationCheckpoints = state.collaborationCheckpoints.filter(item => item.projectId !== projectId);
       state.commentMessages = state.commentMessages.filter((item) => !threadIds.has(item.threadId));
+      state.mcpAccessTokens = (state.mcpAccessTokens ?? []).filter(item => item.projectId !== projectId);
       delete state.fileVersions[projectId];
     });
   }
@@ -357,6 +360,8 @@ function migrate(state: DatabaseState): DatabaseState {
   if (state.schemaVersion < 16) state.schemaVersion = 16;
   state.researchScreening ??= [];
   if (state.schemaVersion < 17) state.schemaVersion = 17;
+  state.mcpAccessTokens ??= [];
+  if (state.schemaVersion < 18) state.schemaVersion = 18;
   if (state.schemaVersion > CURRENT_SCHEMA_VERSION) throw new Error(`Unsupported database schema version ${state.schemaVersion}`);
   return state;
 }

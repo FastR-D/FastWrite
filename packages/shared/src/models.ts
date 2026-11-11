@@ -109,6 +109,7 @@ export type ImportSource =
   | { type: "github"; repository: string; ref: string; commit: string };
 
 export interface PaperProject {
+  compilation?: import("./compile-settings").CompileSettings;
   id: string;
   name: string;
   mainDocument: string;

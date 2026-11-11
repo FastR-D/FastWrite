@@ -41,6 +41,14 @@ export function parseLatexDiagnostics(log: string, workspacePaths: string[] = []
       pendingError = null;
       continue;
     }
+    // -file-line-error also emits messages without the literal word "Error".
+    const engineError = cleaned.match(/^(.+?\.(?:tex|sty|cls|bib)):(\d+):\s*(.+)$/i);
+    if (engineError?.[1] && engineError[2] && engineError[3]) {
+      const message = engineError[3];
+      add(/\bwarning\b/i.test(message) ? "warning" : "error", message, raw, engineError[1], Number.parseInt(engineError[2], 10));
+      pendingError = null;
+      continue;
+    }
     if (cleaned.startsWith("!")) {
       if (pendingError) add("error", pendingError.message, pendingError.raw);
       const message = cleaned.replace(/^!\s*(?:LaTeX Error:\s*)?/i, "");

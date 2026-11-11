@@ -47,9 +47,10 @@ export function Button({
   ...rest
 }: ButtonProps) {
   const classes = `${styles.button} ${styles[size]} ${variant === "danger" ? styles.danger : ""} ${variant === "ghost" ? styles.ghost : ""} ${className}`.trim();
-  // CSS-module lookups are `string | undefined` under noUncheckedIndexedAccess;
-  // Icon's className is a plain optional string, so default it to "".
-  const leading = loading ? <Icon name={icons.loading} spin className={styles.spinner ?? ""} /> : icon;
+  const content = <>
+    <span className={`${styles.content} ${loading ? styles.pending : ""}`.trim()}>{icon}{children}</span>
+    {loading ? <span className={styles.loading} aria-hidden="true"><Icon name={icons.loading} spin /></span> : null}
+  </>;
 
   /*
    * primary / secondary map onto vscrui appearances. ghost and danger do not,
@@ -60,13 +61,12 @@ export function Button({
    * text ghost wearing it looked like a different control from the primary next
    * to it. vscrui has no text-ghost appearance and no danger appearance at all,
    * so both render through the local <button> and take their metrics from this
-   * module — see the ownership note at the top of Button.module.css.
+   * module. Shared geometry is owned by the module for all four variants.
    */
   if (variant === "danger" || variant === "ghost") {
     return (
-      <button className={classes} disabled={disabled || loading} type={type} onClick={onClick} {...rest}>
-        {leading}
-        {children}
+      <button className={classes} disabled={disabled || loading} type={type} onClick={onClick} {...rest} aria-busy={loading || rest["aria-busy"]}>
+        {content}
       </button>
     );
   }
@@ -79,9 +79,9 @@ export function Button({
       type={type}
       onClick={onClick}
       {...rest}
+      aria-busy={loading || rest["aria-busy"]}
     >
-      {leading}
-      {children}
+      {content}
     </Vscrui>
   );
 }

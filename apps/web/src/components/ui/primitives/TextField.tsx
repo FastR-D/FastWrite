@@ -60,6 +60,7 @@ export function TextField({
   id,
   "aria-describedby": describedBy,
   type = "text",
+  readonly = false,
   ...rest
 }: TextFieldProps) {
   const wiring = useFieldWiring();
@@ -72,6 +73,7 @@ export function TextField({
       id={resolvedId}
       aria-describedby={resolvedDescribedBy}
       type={type}
+      readOnly={readonly}
       className={`${styles.input} ${resolvedInvalid ? styles.invalid : ""} ${className}`.trim()}
       value={value}
       defaultValue={defaultValue}

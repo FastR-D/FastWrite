@@ -5,3 +5,5 @@ export * from "./synctex";
 export * from "./latex-diagnostics";
 export * from "./text-hunks";
 export * from "./review-merge";
+export * from "./latex-intelligence";
+export * from "./compile-settings";

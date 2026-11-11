@@ -8,6 +8,7 @@ app-bin/
 .playwright-cli/
 .env
 /references/
+/reference/
 
 # Tool and test caches
 **/.vite/

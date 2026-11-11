@@ -1,0 +1,10 @@
+/* Self-hosted variable fonts; Unicode ranges load only the glyph subsets in use. */
+@import "@fontsource-variable/ibm-plex-sans/wght.css";
+@import "@fontsource-variable/ibm-plex-sans/wght-italic.css";
+@import "@fontsource-variable/noto-sans-sc/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
+@import "@fontsource-variable/geist/wght.css";
+
+/* Temporary previews in FastUI. Leaving the gallery restores the default. */
+:root[data-font-preview="geist"] { --fw-font-ui: var(--fw-font-ui-geist); }
+:root[data-font-preview="system"] { --fw-font-ui: var(--fw-font-ui-system); }

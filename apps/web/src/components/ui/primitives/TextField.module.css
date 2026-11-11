@@ -1,18 +1,21 @@
 .input {
+  transition: background-color var(--fw-duration-fast) var(--fw-ease), border-color var(--fw-duration-fast) var(--fw-ease), color var(--fw-duration-fast) var(--fw-ease);
   width: 100%;
-  height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--vscode-dropdown-border);
-  border-radius: 4px;
+  min-width: 0;
+  height: var(--fw-control-height);
+  padding: 4px var(--fw-control-padding-inline);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: var(--fw-radius-control);
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
+  font-weight: var(--fw-font-weight-body);
+  line-height: 18px;
 }
 
-.input:hover:not(:disabled):not(.invalid) { border-color: var(--slate-400); }
-.input:focus { border-color: var(--vscode-focusBorder); box-shadow: var(--focus); outline: none; }
-/* Same 2.8:1 problem as the Select placeholder; see Select.module.css. */
-.input::placeholder { color: var(--text-muted); }
+.input:focus { border-color: var(--vscode-focusBorder); outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; box-shadow: none; }
+.input::placeholder { color: var(--vscode-input-placeholderForeground); opacity: 1; }
 .input:disabled { opacity: 0.55; cursor: not-allowed; }
-.invalid { border-color: var(--red-600); }
+.input.invalid, .input[aria-invalid="true"] { border-color: var(--vscode-inputValidation-errorBorder); }
+.input.invalid:focus, .input[aria-invalid="true"]:focus { outline-color: var(--vscode-inputValidation-errorBorder); }
