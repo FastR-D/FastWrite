@@ -1,3 +1,4 @@
+import { workspaceSummary } from "./workspace-summary";
 import { createHash, randomBytes } from "node:crypto";
 import { FastCASError, FastCAS, type Configuration, type Link, type TransactionStore } from "@fastrd/fastcas/server";
 import type { JsonDatabase } from "../storage/database";
@@ -35,6 +36,7 @@ export class FastCASService {
   constructor(readonly configuration: FastCASConfiguration, private readonly database: JsonDatabase, private readonly auth: AuthService) {
     this.sdk = new FastCAS(configuration, new FastCASTransactions(database));
   }
+  workspaceSummary(request: Request) { return workspaceSummary(this.sdk, this.configuration, this.database, request); }
   status(principal: Principal) {
     return { enabled: true, loginEnabled: this.configuration.loginEnabled !== false, linkEnabled: this.configuration.linkEnabled !== false, issuer: this.configuration.issuer, proof: this.auth.fastCASProofStatus(principal), links: this.database.snapshot().fastcasLinks.filter(item => item.userId === principal.user.id && item.issuer === this.configuration.issuer).map(item => item.link) };
   }

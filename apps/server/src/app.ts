@@ -557,6 +557,10 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     route("GET", "/api/integrations/fastread/projects/:id/feedback", async (request, params) => json(await fastRead.feedback(required(params, "id"), fastRead.authenticate(request)))),
     route("GET", "/api/projects/:projectId/research/fastread-feedback", async (request, params) => json(await fastRead.feedback(required(params, "projectId"), principal(request, true)!))),
     route("PUT", "/api/projects/:projectId/research/fastread-feedback", async (request, params) => json(await fastRead.saveFeedback(required(params, "projectId"), principal(request, true)!, await readJson(request)))),
+    route("POST", "/api/integrations/fastresearch/workspace", async request => {
+      if (!fastcas) throw new ApiError(503, "fastcas_not_configured", "FastCAS is not configured");
+      return json(await fastcas.workspaceSummary(request), 200, { "cache-control": "no-store" });
+    }),
     route("GET", "/api/tex-environments", async (request) => { principal(request); return json(await latexCompiler.environments.status()); }),
     route("GET", "/api/projects/:projectId/pending-proposals", async (request, params) => {
       const projectId = required(params, "projectId"), actor = principal(request);
