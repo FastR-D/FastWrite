@@ -4,6 +4,8 @@
 
 FastCAS SDK 使用 npm 包 [`@fastrd/fastcas`](https://www.npmjs.com/package/@fastrd/fastcas)，随 `bun install` 安装。可选的 FastCAS 登录配置见 [FastCAS 接入说明](docs/FASTCAS.md)。
 
+项目的「文献与证据」面板支持连接 FastRead，同步论文和逐页证据，并将写作反馈传回阅读笔记。配对方式和接口见 [FastRead 联动](docs/FASTREAD-INTEGRATION.md)。
+
 ## 开发运行
 
 ```bash

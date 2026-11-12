@@ -59,6 +59,7 @@ import { WorkspaceService } from "./workspace/workspace-service";
 import { ProjectSearchService } from "./workspace/project-search-service";
 import { LatexTemplateService } from "./templates/latex-template-service";
 import { ResearchService } from "./research/research-service";
+import { FastReadIntegration, type FastReadBundleInput } from "./research/fastread-integration";
 import { ClaimService } from "./claims/claim-service";
 import { AlignmentService } from "./alignment/alignment-service";
 import { writingGuardMany } from "./writing/writing-guard";
@@ -513,6 +514,7 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
   const presence = new PresenceService(authorization);
   const intelligence = new ProjectIntelligence(workspaces, authorization, latexCompiler.environments);
   const mcpTokens = new McpAccessTokens(database, authorization);
+  const fastRead = new FastReadIntegration(database, authorization, workspaces, research);
   const principal = (request: Request, required = authEnabled): Principal | undefined => auth.principal(request, required);
   const harnessRoute = (method: string, path: string, handler: Handler, adminOnly = true): Route => route(method, path, (request, params, url) => {
     requireHarnessAccess(auth, request, authEnabled, adminOnly);
@@ -547,6 +549,14 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     return selected;
   };
   return [
+    route("GET", "/api/integrations/fastread/token", request => { if (request.headers.get("authorization")?.startsWith("Bearer fw_read_")) { fastRead.authenticate(request); return json({ connected: true }); } return json(fastRead.status(principal(request, true)!)); }),
+    route("POST", "/api/integrations/fastread/token", async request => json(await fastRead.issue(principal(request, true)!), 201, { "cache-control": "no-store" })),
+    route("DELETE", "/api/integrations/fastread/token", async request => json(await fastRead.revoke(principal(request, true)!))),
+    route("GET", "/api/integrations/fastread/projects", request => json(fastRead.projects(fastRead.authenticate(request)))),
+    route("POST", "/api/integrations/fastread/projects/:id/bundles", async (request, params) => json(await fastRead.receiveBundle(required(params, "id"), fastRead.authenticate(request), await readJson<FastReadBundleInput>(request)), 201)),
+    route("GET", "/api/integrations/fastread/projects/:id/feedback", async (request, params) => json(await fastRead.feedback(required(params, "id"), fastRead.authenticate(request)))),
+    route("GET", "/api/projects/:projectId/research/fastread-feedback", async (request, params) => json(await fastRead.feedback(required(params, "projectId"), principal(request, true)!))),
+    route("PUT", "/api/projects/:projectId/research/fastread-feedback", async (request, params) => json(await fastRead.saveFeedback(required(params, "projectId"), principal(request, true)!, await readJson(request)))),
     route("GET", "/api/tex-environments", async (request) => { principal(request); return json(await latexCompiler.environments.status()); }),
     route("GET", "/api/projects/:projectId/pending-proposals", async (request, params) => {
       const projectId = required(params, "projectId"), actor = principal(request);

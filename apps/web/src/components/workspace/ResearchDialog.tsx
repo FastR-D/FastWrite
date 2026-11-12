@@ -3,6 +3,7 @@ import { statusLabel } from "../../lib/labels";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeSet, ClaimEvidenceLink, CitationReviewer, FastReadBundleReceipt, PaperClaim, PaperProject, ProjectResearchWorkDetails, ResearchRun, SourceEvidence, WorkspaceTreeNode } from "@fastwrite/shared";
 import { api } from "../../api/client";
+import { FastReadPanel } from "./FastReadPanel";
 import { Button, Checkbox, Dialog, Field, FileField, Icon, IconButton, Select, Stepper, TextArea, TextField, icons } from "../ui";
 
 type ResearchWorkView = ProjectResearchWorkDetails;
@@ -256,6 +257,7 @@ export function ResearchDialog({ open, project, onClose, onChanged, onNavigate }
       {error ? <p className="form-error" role="alert">{error}</p> : null}
 
       {tab === "sources" ? <div className="research-view">
+        <FastReadPanel projectId={project.id} revision={bundles.length} />
         <section className="research-section">
           <header><div><h3>FastRead 导入</h3><p>完整资料包经 SHA-256 校验后导入，重复导入不会产生副本，失败后仍可重试。</p></div><Button size="small" icon={<Icon name={icons.refresh} />} loading={busy === "bundle:all"} onClick={() => void importBundles()}>导入已检测到的资料</Button></header>
           <div className="research-bundles">

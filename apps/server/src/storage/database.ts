@@ -13,6 +13,8 @@ export interface FileVersionRecord {
 }
 
 export interface DatabaseState {
+  fastReadConnections?: import("../research/fastread-integration").FastReadConnection[];
+  fastReadFeedback?: import("../research/fastread-integration").FastReadFeedback[];
   mcpAccessTokens?: import("../mcp/access-tokens").McpAccessToken[];
   referencePapers: ReferencePaper[];
   referenceSettings: ReferenceSettings[];
@@ -102,6 +104,8 @@ export class JsonDatabase {
       const parsed = JSON.parse(this.persistedContents) as Partial<DatabaseState>;
       const originalSchemaVersion = Number.isInteger(parsed.schemaVersion) ? parsed.schemaVersion! : 1;
       const migratedState: DatabaseState = {
+        fastReadConnections: parsed.fastReadConnections ?? [],
+        fastReadFeedback: parsed.fastReadFeedback ?? [],
         mcpAccessTokens: parsed.mcpAccessTokens ?? [],
         referencePapers: parsed.referencePapers ?? [],
         referenceSettings: parsed.referenceSettings ?? [],

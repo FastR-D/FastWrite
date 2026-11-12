@@ -189,6 +189,13 @@ function jsonInit(method: string, body: unknown, signal?: AbortSignal): RequestI
 }
 
 export const api = {
+  fastRead: {
+    status: () => request<{ connected: boolean }>("/api/integrations/fastread/token"),
+    connect: () => request<{ token: string }>("/api/integrations/fastread/token", { method: "POST" }),
+    disconnect: () => request<{ connected: boolean }>("/api/integrations/fastread/token", { method: "DELETE" }),
+    feedback: (projectId: string) => request<{ items: Array<{ id: string; paper_id: string; title: string; content: string }>; papers: Array<{ id: string; title: string }> }>(`/api/projects/${projectId}/research/fastread-feedback`),
+    saveFeedback: (projectId: string, input: { paper_id: string; title: string; content: string }) => request<{ id: string; paper_id: string; title: string; content: string }>(`/api/projects/${projectId}/research/fastread-feedback`, { method: "PUT", body: JSON.stringify(input) }),
+  },
   latex: {
     proposals: (projectId: string) => request<ChangeSet[]>(`/api/projects/${projectId}/pending-proposals`),
     index: (projectId: string) => request<import("@fastwrite/shared").LatexIndex>(`/api/projects/${projectId}/latex-index`),
