@@ -84,6 +84,7 @@ try {
   await signupPage.getByRole('button', { name: /登录/ }).first().click();
   await expect(signupPage.getByRole('dialog', { name: '登录', exact: true })).toBeVisible();
   await expect(signupPage.getByRole('button', { name: '创建账号', exact: true })).toHaveCount(0);
+  await expect(signupPage.getByRole('dialog', { name: '登录', exact: true })).not.toContainText('普通注册已关闭');
   await signupContext.close();
   assert.deepEqual(errors, []); console.log(JSON.stringify({ status: 'passed', output }));
 } finally { await browser.close(); await setup.close(); }

@@ -29,7 +29,7 @@ async function fixture(emailVerified = true) {
     if (!tx || tx.bindingHash !== digest(options.browserBinding)) throw new FastCASError("transaction_invalid", "Invalid transaction", 401);
     return { identity, transaction: tx, tokens: { access_token: "never-persist-this-token", token_type: "Bearer" } } as LoginResult;
   });
-  spyOn(service.sdk, "resolveLink").mockRejectedValue(new FastCASError("link_not_found", "No link", 404));
+  spyOn(service.sdk, "resolveLink").mockRejectedValue(new FastCASError("authentication_required", "Please sign in again", 401));
   spyOn(service.sdk, "beginRegistration").mockImplementation(async options => {
     const tx = await transaction("register", options.browserBinding, options.newLocalAccountRef);
     return new URL(`https://cas.test/authorize?state=${tx.state}`);
@@ -88,4 +88,25 @@ test("provider failure never becomes a signup invitation", async () => {
   const { database, service, start } = await fixture();
   spyOn(service.sdk, "resolveLink").mockRejectedValue(new FastCASError("provider_unavailable", "Unavailable", 503));
   await expect(start()).rejects.toMatchObject({ status: 503 }); expect(database.snapshot().fastcasSignups).toHaveLength(0);
+});
+
+test("missing-link 404 remains compatible with providers using an explicit not-found response", async () => {
+  const { service, start } = await fixture();
+  spyOn(service.sdk, "resolveLink").mockRejectedValue(new FastCASError("link_not_found", "No link", 404));
+  expect(await start()).toMatchObject({ registrationRequired: true });
+});
+test("an inactive existing local mapping never becomes a new signup after upstream 401", async () => {
+  const { database, service, start } = await fixture();
+  await database.mutate(state => { state.fastcasLinks.push({ issuer: configuration.issuer, userId: "existing-user", link: { id: "existing-link", client_id: "write", local_account_ref: "existing-user", subject: "cas-subject", state: "revoked", version: 3, verified_at: new Date().toISOString() } }); });
+  await expect(start()).rejects.toMatchObject({ code: "fastcas_not_linked" });
+  expect(database.snapshot().fastcasSignups).toHaveLength(0);
+});
+test("signup policy and unrelated unauthorized responses remain closed", async () => {
+  const { database, service, start } = await fixture();
+  service.configuration.allowRegistration = false;
+  await expect(start()).rejects.toMatchObject({ status: 401, code: "authentication_required" });
+  service.configuration.allowRegistration = true;
+  spyOn(service.sdk, "resolveLink").mockRejectedValue(new FastCASError("invalid_client", "Invalid client", 401));
+  await expect(start()).rejects.toMatchObject({ status: 401, code: "invalid_client" });
+  expect(database.snapshot().fastcasSignups).toHaveLength(0);
 });

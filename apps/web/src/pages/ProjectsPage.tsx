@@ -303,7 +303,6 @@ function AccountDialog({
           {providers.oidc ? <Button type="button" variant="secondary" onClick={() => { window.location.assign(`/api/auth/oidc/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`); }}>使用机构账号登录</Button> : null}
           {providers.cas ? <Button type="button" variant="secondary" onClick={() => { window.location.assign("/api/auth/cas/login"); }}>使用校园 CAS 登录</Button> : null}
         </div> : null}
-        {!providers.registration ? <p>普通注册已关闭，请联系管理员创建账号{providers.fastcasSignup ? "，或使用已有 FastCAS 账号登录并注册绑定。" : "。"}</p> : null}
         {mode === "register" ? (
           <Field label="名称">
             <TextField

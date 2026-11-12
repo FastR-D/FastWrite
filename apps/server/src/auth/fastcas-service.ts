@@ -127,7 +127,12 @@ export class FastCASService {
     let link: Link;
     try { link = await this.sdk.resolveLink(verified.identity.subject); }
     catch (error) {
-      if (!(error instanceof FastCASError) || error.status !== 404 || !this.configuration.allowRegistration || this.configuration.linkEnabled === false) throw error;
+      // FastCAS 0.1.x uses the same 401 for a missing active
+      // binding and a rejected lookup. Only a verified login with no local
+      // mapping may continue to signup; account creation still requires a new
+      // authenticated registration intent and a second matching identity proof.
+      const missingLink = error instanceof FastCASError && (error.status === 404 || error.status === 401 && error.code === "authentication_required");
+      if (!missingLink || !this.configuration.allowRegistration || this.configuration.linkEnabled === false) throw error;
       if (this.database.snapshot().fastcasLinks.some(item => item.issuer === this.configuration.issuer && item.link.subject === verified.identity.subject)) throw new ApiError(403, "fastcas_not_linked", "此身份原有关联已失效，请登录 FastWrite 后重新绑定");
       await this.database.mutate(state => {
         state.fastcasSignups = state.fastcasSignups.filter(item => item.expiresAt > Date.now() && item.bindingHash !== hash(binding));
