@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { provisionAccount } from "../apps/server/test-support/accounts";
 import { createApplication } from "../apps/server/src/app";
 
 const issuer=process.env.FASTCAS_CONTRACT_ISSUER!;
@@ -16,7 +17,7 @@ try {
  }});
  const target=new URL(origin);
  server=Bun.serve({hostname:target.hostname,port:Number(target.port),fetch:app});
- const registered=await fetch(origin+"/api/auth/register",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({email:"alice@example.test",password:"local-password-contract-32-characters",displayName:"Local Alice"})});
+ const registered=await provisionAccount(app, new Request(origin+"/test/accounts",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({email:"alice@example.test",password:"local-password-contract-32-characters",displayName:"Local Alice"})}), {email:"bootstrap@example.test",password:"isolated-contract-admin-password"});
  assert.equal(registered.status,201,await registered.clone().text());
  const session=await registered.json() as {token:string;user:{id:string}};
  const created=await fetch(origin+"/api/projects",{method:"POST",headers:{"content-type":"application/json",authorization:`Bearer ${session.token}`},body:JSON.stringify({name:"Browser preserved writing project"})});

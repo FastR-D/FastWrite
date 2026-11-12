@@ -33,6 +33,8 @@ export function ProjectsPage() {
   const [account, setAccount] = useState<{
     displayName: string;
     emailNormalized: string;
+    platformRole?: string;
+    id?: string;
   } | null>(null);
   const [invitationState, setInvitationState] = useState<
     "idle" | "accepting" | "accepted" | "error"
@@ -174,6 +176,8 @@ export function ProjectsPage() {
       </header>
       <FastCASDialog open={fastcasOpen} onClose={() => setFastcasOpen(false)} />
       <ProjectBrowser
+        canManageUsers={account?.platformRole === "platform_admin"}
+        currentUserId={account?.id}
         projects={projects}
         loading={loading}
         error={error}
@@ -239,8 +243,8 @@ function AccountDialog({
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [providers, setProviders] = useState<{ oidc: boolean; cas: boolean; fastcas: boolean; fastcasSignup: boolean }>({ oidc: false, cas: false, fastcas: false, fastcasSignup: false });
-  useEffect(() => { if (open) void api.auth.providers().then((value) => setProviders(value)).catch(() => undefined); }, [open]);
+  const [providers, setProviders] = useState<{ registration: boolean; oidc: boolean; cas: boolean; fastcas: boolean; fastcasSignup: boolean }>({ registration: false, oidc: false, cas: false, fastcas: false, fastcasSignup: false });
+  useEffect(() => { if (open) void api.auth.providers().then((value) => { setProviders(value); if (!value.registration) setMode("login"); }).catch(() => undefined); }, [open]);
   const submit = async () => {
     setLoading(true);
     setError("");
@@ -271,7 +275,7 @@ function AccountDialog({
       onClose={onClose}
       footer={
         <>
-          <Button
+          {providers.registration ? <Button
             variant="ghost"
             type="button"
             onClick={() => {
@@ -280,7 +284,7 @@ function AccountDialog({
             }}
           >
             {mode === "login" ? "创建账号" : "使用已有账号"}
-          </Button>
+          </Button> : null}
           <Button
             variant="primary"
             type="submit"
@@ -299,7 +303,7 @@ function AccountDialog({
           {providers.oidc ? <Button type="button" variant="secondary" onClick={() => { window.location.assign(`/api/auth/oidc/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`); }}>使用机构账号登录</Button> : null}
           {providers.cas ? <Button type="button" variant="secondary" onClick={() => { window.location.assign("/api/auth/cas/login"); }}>使用校园 CAS 登录</Button> : null}
         </div> : null}
-        {mode === "register" && providers.fastcasSignup ? <Button type="button" variant="secondary" onClick={() => window.location.assign("/api/auth/fastcas/signup?returnTo=/panel")}>通过 FastCAS 创建新账号</Button> : null}
+        {!providers.registration ? <p>普通注册已关闭，请联系管理员创建账号{providers.fastcasSignup ? "，或使用已有 FastCAS 账号登录并注册绑定。" : "。"}</p> : null}
         {mode === "register" ? (
           <Field label="名称">
             <TextField

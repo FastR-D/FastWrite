@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { provisionAccount } from "../../test-support/accounts";
 import { AuthService } from "./auth-service";
 import { JsonDatabase } from "../storage/database";
 import { createApplication } from "../app";
@@ -27,7 +28,7 @@ test("development administrator has global access without reusable login credent
   for (const path of ["/api/auth/me", "/api/admin/health", "/api/admin/users", "/api/projects"]) {
     expect((await app(new Request(`http://localhost${path}`, { headers: { authorization: `Bearer ${token}` } }))).status).toBe(200);
   }
-  const registration = await app(new Request("http://localhost/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "member@example.test", password: "ordinary-member-password" }) }));
+  const registration = await provisionAccount(app, new Request("http://localhost/test/accounts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "member@example.test", password: "ordinary-member-password" }) }), { token });
   const member = await registration.json() as { token: string };
   const project = await app(new Request("http://localhost/api/projects", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${member.token}` }, body: JSON.stringify({ name: "Member private project", mainDocument: "main.tex", venue: "general" }) }));
   expect(project.status).toBe(201);

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { provisionAccount } from "../apps/server/test-support/accounts";
 import { createApplication } from "../apps/server/src/app";
 import type { IdentityProvider } from "../apps/server/src/auth/identity-provider";
 const issuer = process.env.FASTCAS_CONTRACT_ISSUER!;
@@ -61,8 +62,13 @@ try {
     for (const value of response.headers.getSetCookie()) { const entry = value.split(";")[0]!; const at = entry.indexOf("="); cookies.set(entry.slice(0,at),entry.slice(at+1)); }
     return response;
   }
+  async function createAccount(input: { email: string; password: string; displayName?: string }) {
+    const response = await provisionAccount(app, new Request(origin + "/test/accounts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) }), { email: "bootstrap@example.test", password: "isolated-contract-admin-password" });
+    for (const value of response.headers.getSetCookie()) { const entry = value.split(";")[0]!; const at = entry.indexOf("="); cookies.set(entry.slice(0, at), entry.slice(at + 1)); }
+    return response;
+  }
   const password = "local-password-contract-32-characters";
-  const registered = await request("/api/auth/register", { email: "alice@example.test", password, displayName: "Local Alice" });
+  const registered = await createAccount({ email: "alice@example.test", password, displayName: "Local Alice" });
   assert.equal(registered.status,201);
   const local = await registered.json(); token=local.token;
   const localRefresh = cookies.get("fastwrite.refresh")!;
@@ -165,11 +171,18 @@ try {
   token=oldCasSession.token;
   assert.equal((await request("/api/auth/me")).status,401);
   console.log("FastWrite legacy OIDC account linked and unlinked through recent original-provider proof without changing either same-email account");
-  const sameEmail = await (await request("/api/auth/register", { email:"new@example.test", password })).json();
+  const sameEmail = await (await createAccount({ email:"new@example.test", password })).json();
   jar.clear(); token=""; cookies.clear();
-  const signup = await request("/api/auth/fastcas/signup");
-  assert.equal(signup.status,302);
-  const signupCallback = await complete(signup.headers.get("location")!, "new@example.test");
+  const signupLogin = await request("/api/auth/fastcas/login");
+  const profileCallback = await complete(signupLogin.headers.get("location")!, "new@example.test");
+  const profileRedirect = await request(profileCallback.pathname + profileCallback.search);
+  assert.ok(profileRedirect.headers.get("location")?.includes("fastcas=register"));
+  assert.equal((await request("/api/auth/fastcas/signup")).status, 200);
+  assert.equal((await request("/api/auth/fastcas/signup", {email:"new@example.test", displayName:"New user", password})).status, 409);
+  const localLoginId = "new-fastwrite@example.test";
+  const signup = await request("/api/auth/fastcas/signup", {email:localLoginId, displayName:"New user", password});
+  assert.equal(signup.status, 200);
+  const signupCallback = await complete((await signup.json()).url, "new@example.test");
   assert.equal((await request(signupCallback.pathname+signupCallback.search)).status,302);
   const newSession = await (await request("/api/auth/refresh", {})).json();
   token=newSession.token;
@@ -180,30 +193,27 @@ try {
   assert.equal((await request("/api/teams")).status,200);
   const newStatus=await (await request("/api/auth/fastcas/status")).json();
   assert.equal(newStatus.links[0].state,"active");
-  // With no local password, removing the only sign-in method is refused.
-  assert.equal((await request(`/api/auth/fastcas/links/${newStatus.links[0].id}/revoke`, {password})).status,409);
-  assert.deepEqual(newStatus.proof,{method:"none",recent:true});
-  assert.equal((await request("/api/auth/fastcas/local-password",{password:"new-fastwrite-password-32-characters"},{origin:"https://attacker.test"})).status,403);
-  const setPassword=await request("/api/auth/fastcas/local-password",{password:"new-fastwrite-password-32-characters"});
-  assert.equal(setPassword.status,200);
-  const localLoginId=(await setPassword.json()).loginId as string;
-  assert.notEqual(localLoginId,"new@example.test"); // The existing local user owns that login address.
-  const recoveredStatus=await (await request("/api/auth/fastcas/status")).json();
-  assert.equal(recoveredStatus.proof.localLoginId,localLoginId);
-  assert.equal(recoveredStatus.proof.method,"password");
-  assert.equal((await request(`/api/auth/fastcas/links/${newStatus.links[0].id}/revoke`,{password:"new-fastwrite-password-32-characters"})).status,200);
+  assert.equal(newStatus.proof.method, "password");
+  assert.equal(newStatus.proof.localLoginId, localLoginId);
+  assert.equal((await request("/api/auth/fastcas/local-password", {password})).status, 409);
+  assert.equal((await request(`/api/auth/fastcas/links/${newStatus.links[0].id}/revoke`, {password:"incorrect-password"})).status, 401);
+  assert.equal((await request(`/api/auth/fastcas/links/${newStatus.links[0].id}/revoke`, {password})).status, 200);
   assert.equal((await request("/api/auth/me")).status,401);
   providerUnavailable=true;
-  const recoveredLogin=await (await request("/api/auth/login",{email:localLoginId,password:"new-fastwrite-password-32-characters"})).json();
+  const recoveredLogin=await (await request("/api/auth/login",{email:localLoginId,password})).json();
   providerUnavailable=false;
   assert.equal(recoveredLogin.user.id,newSession.user.id);
   token=recoveredLogin.token;
   assert.equal((await request(`/api/projects/${project.id}`)).status,403);
   assert.equal((await (await request("/api/auth/login",{email:"new@example.test",password})).json()).user.id,sameEmail.user.id);
-  console.log("FastWrite FastCAS-only signup gained a local password and kept its account after unlinking");
+  console.log("FastWrite verified FastCAS signup created local credentials and kept its account after unlinking");
   jar.clear(); token=""; cookies.clear();
-  const interrupted=await request("/api/auth/fastcas/signup");
-  const interruptedCallback=await complete(interrupted.headers.get("location")!,"interrupted@example.test");
+  const interruptedLogin=await request("/api/auth/fastcas/login");
+  const interruptedProfile=await complete(interruptedLogin.headers.get("location")!,"interrupted@example.test");
+  assert.equal((await request(interruptedProfile.pathname+interruptedProfile.search)).status,302);
+  const interrupted=await request("/api/auth/fastcas/signup", {email:"interrupted@example.test", displayName:"Interrupted user", password});
+  assert.equal(interrupted.status,200);
+  const interruptedCallback=await complete((await interrupted.json()).url,"interrupted@example.test");
   loseActivationResponse=true;
   assert.equal((await request(interruptedCallback.pathname+interruptedCallback.search)).status,500);
   const resume=await request("/api/auth/fastcas/login");

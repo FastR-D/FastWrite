@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { strToU8, zipSync } from "fflate";
 import type { AgentTaskPlanResponse, DraftPlanResponse, FileContentResponse, PaperProject, ReferencePaper, ReferenceSettings, ReviseResponse, StyleReferenceContext } from "@fastwrite/shared";
+import { provisionAccount } from "../../test-support/accounts";
 import { createApplication } from "../app";
 import { referencePdf } from "./fixtures";
 import { referenceTestOutline, referenceTestProvider } from "./test-provider";
@@ -15,7 +16,7 @@ async function fixture(auth = false) {
   const calls: Array<{ operation: string; input: unknown }> = [];
   const app = await createApplication(directory, { agentProvider: referenceTestProvider(calls), features: { serverAuth: auth }, referenceDownloader: async url => url.startsWith("https://api.crossref.org/works/") ? { bytes: new TextEncoder().encode(JSON.stringify({ message: { title: ["DOI reference"], link: [{ URL: "https://papers.example.test/example.pdf", "content-type": "application/pdf" }] } })), contentType: "application/json" } : { bytes: referencePdf([["Introduction", "Downloaded full paper text."]]), contentType: "application/pdf" }, ...(auth ? { bootstrapAdmin: { email: "reference-admin@example.test", password: "reference-testing-password" } } : {}) });
   const request = (path: string, init?: RequestInit) => app(new Request(`http://fastwrite.test${path}`, init));
-  return { request, calls };
+  return { request: Object.assign(request, { provision: (init: RequestInit) => provisionAccount(app, new Request("http://fastwrite.test/test/accounts", init), { email: "reference-admin@example.test", password: "reference-testing-password" }) }), calls };
 }
 async function ready(request: Awaited<ReturnType<typeof fixture>>["request"], root: string, token?: string) {
   const upload = await request(`${root}/reference-papers?name=Example.zip`, { method: "POST", ...(token ? { headers: { authorization: `Bearer ${token}` } } : {}), body: zipSync({ "main.tex": strToU8("\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nREFERENCE_FACT_999. Problem before gap before response.\\section{Conclusion}\nEnd with a scoped interpretation.\\end{document}") }) });
@@ -92,8 +93,8 @@ describe("reference writing API", () => {
   });
   test("project authorization protects list, sources, settings and analysis", async () => {
     const { request } = await fixture(true);
-    const owner = await (await request("/api/auth/register", json("POST", { email: "reference-owner@example.test", password: "reference-testing-password" }))).json() as { token: string };
-    const other = await (await request("/api/auth/register", json("POST", { email: "reference-other@example.test", password: "reference-testing-password" }))).json() as { token: string };
+    const owner = await (await request.provision(json("POST", { email: "reference-owner@example.test", password: "reference-testing-password" }))).json() as { token: string };
+    const other = await (await request.provision(json("POST", { email: "reference-other@example.test", password: "reference-testing-password" }))).json() as { token: string };
     const project = await (await request("/api/projects", json("POST", { name: "Private references" }, owner.token))).json() as PaperProject;
     const root = `/api/projects/${project.id}`, paper = await ready(request, root, owner.token);
     for (const suffix of ["reference-papers", `reference-papers/${paper.id}/text`, `reference-papers/${paper.id}/source`, "reference-selections", "reference-profiles"]) expect((await request(`${root}/${suffix}`, { headers: { authorization: `Bearer ${other.token}` } })).status).toBe(403);

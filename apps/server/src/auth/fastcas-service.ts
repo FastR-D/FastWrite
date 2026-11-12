@@ -1,8 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
-import { FastCAS, type Configuration, type Link, type TransactionStore } from "@fastrd/fastcas/server";
+import { FastCASError, FastCAS, type Configuration, type Link, type TransactionStore } from "@fastrd/fastcas/server";
 import type { JsonDatabase } from "../storage/database";
 import { ApiError } from "../http";
 import type { AuthResult, AuthService, Principal } from "./auth-service";
+import { prepareLocalAccount, insertLocalAccount } from "./admin-users";
 export type FastCASConfiguration = Configuration & { allowRegistration?: boolean; loginEnabled?: boolean; linkEnabled?: boolean };
 
 export class FastCASTransactions implements TransactionStore {
@@ -10,6 +11,7 @@ export class FastCASTransactions implements TransactionStore {
   async put(transaction: Parameters<TransactionStore["put"]>[0]) {
     await this.database.mutate(state => {
       state.fastcasTransactions = state.fastcasTransactions.filter(item => item.expiresAt > Date.now());
+      state.fastcasSignups = state.fastcasSignups.filter(item => item.expiresAt > Date.now());
       if (state.fastcasTransactions.some(item => item.state === transaction.state)) throw new Error("Duplicate login transaction");
       state.fastcasTransactions.push(transaction);
     });
@@ -44,11 +46,32 @@ export class FastCASService {
     const binding = randomBytes(32).toString("base64url");
     return { binding, url: await this.sdk.beginLogin({ browserBinding: binding, returnTo }) };
   }
-  async beginRegistration(returnTo = "/panel") {
-    if (this.configuration.loginEnabled === false || !this.configuration.allowRegistration) throw new ApiError(403, "fastcas_signup_disabled", "Creating accounts with FastCAS is not enabled");
-    const binding = randomBytes(32).toString("base64url");
-    const newLocalAccountRef = `user_${crypto.randomUUID()}`;
-    return { binding, url: await this.sdk.beginRegistration({ browserBinding: binding, newLocalAccountRef, returnTo }) };
+  private signup(binding: string) {
+    if (!this.configuration.allowRegistration || this.configuration.loginEnabled === false || this.configuration.linkEnabled === false) throw new ApiError(403, "fastcas_signup_disabled", "FastCAS 注册绑定已关闭");
+    const pending = this.database.snapshot().fastcasSignups.find(item => item.bindingHash === hash(binding) && item.issuer === this.configuration.issuer && item.expiresAt > Date.now() && !item.prepared);
+    if (!binding || !pending) throw new ApiError(401, "fastcas_signup_expired", "FastCAS 验证已过期，请重新登录");
+    return pending;
+  }
+  registrationStatus(binding: string) {
+    const pending = this.signup(binding);
+    return { email: pending.email, displayName: pending.displayName };
+  }
+  async beginRegistration(binding = "", input?: { email: string; displayName?: string; password: string }) {
+    const pending = this.signup(binding);
+    if (!input) throw new ApiError(400, "fastcas_profile_required", "请填写 FastWrite 账号资料");
+    const prepared = await prepareLocalAccount(input);
+    const state = this.database.snapshot();
+    if (state.users.some(item => item.emailNormalized === prepared.user.emailNormalized) || state.externalIdentities.some(item => item.issuer === "fastwrite:local" && item.subject === prepared.user.emailNormalized)) throw new ApiError(409, "account_exists", "此邮箱已有 FastWrite 账号，请登录后在账号认证中绑定");
+    // A user-supplied login email is not proof of ownership for invitations.
+    if (pending.email.trim().toLowerCase() !== prepared.loginEmail) prepared.user.emailNormalized = `${prepared.user.id}@identity.invalid`;
+    const nextBinding = randomBytes(32).toString("base64url");
+    const url = await this.sdk.beginRegistration({ browserBinding: nextBinding, newLocalAccountRef: prepared.user.id, returnTo: pending.returnTo });
+    await this.database.mutate(state => {
+      const current = state.fastcasSignups.find(item => item.bindingHash === pending.bindingHash && !item.prepared && item.expiresAt > Date.now());
+      if (!current) throw new ApiError(401, "fastcas_signup_expired", "请重新使用 FastCAS 登录");
+      current.bindingHash = hash(nextBinding); current.prepared = prepared;
+    });
+    return { binding: nextBinding, url };
   }
   async beginLink(principal: Principal, password: string, returnTo = "/panel") {
     if (this.configuration.linkEnabled === false) throw new ApiError(403, "fastcas_link_disabled", "New FastCAS account links are disabled");
@@ -57,12 +80,12 @@ export class FastCASService {
     const binding = randomBytes(32).toString("base64url");
     return { binding, url: await this.sdk.beginLink({ browserBinding: binding, localAccountRef: principal.user.id, localSessionId: principal.sessionId, returnTo }) };
   }
-  async callback(url: URL, binding: string, refreshCookie: string): Promise<{ returnTo: string; result?: AuthResult }> {
+  async callback(url: URL, binding: string, refreshCookie: string): Promise<{ returnTo: string; result?: AuthResult; registrationRequired?: boolean }> {
     const tx = this.database.snapshot().fastcasTransactions.find(item => item.state === url.searchParams.get("state"));
     if (!tx) throw new ApiError(401, "fastcas_transaction_invalid", "Login expired or already used");
     if ((tx.purpose === "login" || tx.purpose === "register") && this.configuration.loginEnabled === false) throw new ApiError(403, "fastcas_login_disabled", "FastCAS login is disabled");
     if (tx.purpose === "link" && this.configuration.linkEnabled === false) throw new ApiError(403, "fastcas_link_disabled", "New FastCAS account links are disabled");
-    if (tx.purpose === "register" && !this.configuration.allowRegistration) throw new ApiError(403, "fastcas_signup_disabled", "Creating accounts with FastCAS is not enabled");
+    if (tx.purpose === "register" && (!this.configuration.allowRegistration || this.configuration.linkEnabled === false)) throw new ApiError(403, "fastcas_signup_disabled", "Creating accounts with FastCAS is not enabled");
     if (tx.purpose === "link") {
       const state = this.database.snapshot();
       const local = state.sessions.find(item => item.id === tx.localSessionId && item.userId === tx.localAccountRef && !item.revokedAt && item.expiresAt > new Date().toISOString() && item.refreshTokenHash === hash(refreshCookie));
@@ -70,17 +93,17 @@ export class FastCASService {
     }
     const verified = await this.sdk.finishLogin(url, { browserBinding: binding, ...(tx.localAccountRef ? { localAccountRef: tx.localAccountRef } : {}), ...(tx.localSessionId ? { localSessionId: tx.localSessionId } : {}) });
     if (verified.transaction.purpose === "link" || verified.transaction.purpose === "register") {
+      const registration = tx.purpose === "register" ? this.database.snapshot().fastcasSignups.find(item => item.bindingHash === hash(binding) && item.issuer === this.configuration.issuer && item.expiresAt > Date.now() && item.prepared?.user.id === tx.localAccountRef) : undefined;
+      if (tx.purpose === "register" && (!registration || registration.subject !== verified.identity.subject)) throw new ApiError(401, "fastcas_signup_identity_changed", "FastCAS 身份已改变或验证已过期，请重新登录");
       const prepared = await this.sdk.prepareLink(verified);
       await this.database.mutate(state => {
         const localId = tx.localAccountRef!;
-        if (prepared.local_account_ref !== localId) throw new ApiError(409, "fastcas_binding_conflict", "The returned account reference does not match");
+        if (prepared.local_account_ref !== localId || prepared.subject !== verified.identity.subject || prepared.client_id !== this.configuration.clientId) throw new ApiError(409, "fastcas_binding_conflict", "The returned account reference does not match");
         if (tx.purpose === "register") {
           if (state.users.some(user => user.id === localId)) throw new ApiError(409, "fastcas_account_exists", "Registration cannot associate an existing local account");
-          const now = new Date().toISOString();
-          // Unverified email claims must not inherit email-based invitations.
-          const email = verified.identity.emailVerified && verified.identity.email ? verified.identity.email.trim().toLowerCase() : `${localId}@identity.invalid`;
-          state.users.push({ id: localId, emailNormalized: email, displayName: (verified.identity.name || "FastCAS user").slice(0,100), platformRole: "user", status: "active", authzVersion: 1, createdAt: now, updatedAt: now });
-          state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: localId, action: "auth.fastcas_register", resourceType: "user", resourceId: localId, createdAt: now });
+          insertLocalAccount(state, registration!.prepared!);
+          state.fastcasSignups = state.fastcasSignups.filter(item => item.bindingHash !== hash(binding));
+          state.auditEvents.push({ id: `audit_${crypto.randomUUID()}`, actorUserId: localId, action: "auth.fastcas_register", resourceType: "user", resourceId: localId, createdAt: new Date().toISOString() });
         } else {
           const local = state.sessions.find(item => item.id === tx.localSessionId && !item.revokedAt && item.expiresAt > new Date().toISOString());
           if (!local || local.userId !== localId || !state.users.some(user => user.id === localId && user.status === "active")) throw new ApiError(401, "fastcas_local_session_changed", "Local session expired");
@@ -101,7 +124,17 @@ export class FastCASService {
       if (remote.state === "prepared") { if (this.configuration.linkEnabled === false) throw new ApiError(403, "fastcas_link_disabled", "New FastCAS account links are disabled"); remote = await this.sdk.activateLink(remote.id); }
       await this.saveLink(remote);
     }
-    const link = await this.sdk.resolveLink(verified.identity.subject);
+    let link: Link;
+    try { link = await this.sdk.resolveLink(verified.identity.subject); }
+    catch (error) {
+      if (!(error instanceof FastCASError) || error.status !== 404 || !this.configuration.allowRegistration || this.configuration.linkEnabled === false) throw error;
+      if (this.database.snapshot().fastcasLinks.some(item => item.issuer === this.configuration.issuer && item.link.subject === verified.identity.subject)) throw new ApiError(403, "fastcas_not_linked", "此身份原有关联已失效，请登录 FastWrite 后重新绑定");
+      await this.database.mutate(state => {
+        state.fastcasSignups = state.fastcasSignups.filter(item => item.expiresAt > Date.now() && item.bindingHash !== hash(binding));
+        state.fastcasSignups.push({ bindingHash: hash(binding), issuer: this.configuration.issuer, subject: verified.identity.subject, email: verified.identity.emailVerified ? verified.identity.email ?? "" : "", displayName: verified.identity.name ?? "", returnTo: verified.transaction.returnTo, expiresAt: Date.now() + 5 * 60_000 });
+      });
+      return { returnTo: "/panel", registrationRequired: true };
+    }
     return { returnTo: verified.transaction.returnTo, result: await this.auth.loginFastCAS(verified.identity, link) };
   }
   async reconcile(principal: Principal, id: string) {

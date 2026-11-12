@@ -2,17 +2,19 @@ import { expect, test, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { provisionAccount } from "../../test-support/accounts";
 import { createApplication } from "../app";
 import { GithubService } from "./github-service";
 
 test("project creation and upload lifecycle authenticate before side effects and preserve ownership", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fastwrite-import-access-"));
   const app = await createApplication(directory, { features: { serverAuth: true }, bootstrapAdmin: { email: "admin@example.test", password: "test-password-long-enough" } });
-  const request = (path: string, token?: string, method = "GET", body?: unknown) => app(new Request(`http://test${path}`, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), "content-type": "application/json" }, ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }) }));
+  const fixtureApp = (request: Request) => new URL(request.url).pathname === "/test/accounts" ? provisionAccount(app, request, { email: "admin@example.test", password: "test-password-long-enough" }) : app(request);
+  const request = (path: string, token?: string, method = "GET", body?: unknown) => fixtureApp(new Request(`http://test${path}`, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), "content-type": "application/json" }, ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }) }));
   const github = spyOn(GithubService.prototype, "import");
   try {
-    const owner = await (await request("/api/auth/register", undefined, "POST", { email: "owner@example.test", password: "test-password-long-enough" })).json() as any;
-    const other = await (await request("/api/auth/register", undefined, "POST", { email: "other@example.test", password: "test-password-long-enough" })).json() as any;
+    const owner = await (await request("/test/accounts", undefined, "POST", { email: "owner@example.test", password: "test-password-long-enough" })).json() as any;
+    const other = await (await request("/test/accounts", undefined, "POST", { email: "other@example.test", password: "test-password-long-enough" })).json() as any;
     for (const path of ["/api/projects", "/api/upload-sessions", "/api/project-imports/github"]) expect((await request(path, undefined, "POST", {})).status).toBe(401);
     expect(github).not.toHaveBeenCalled();
     expect((await request("/api/projects", owner.token, "POST", { name: "Denied team", teamId: "someone-elses-team" })).status).toBe(403);

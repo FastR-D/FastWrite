@@ -2,13 +2,15 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { provisionAccount } from "../../test-support/accounts";
 import { createApplication } from "../app";
 
 test("authenticated lazy trees retain expandable directories while enforcing path ACLs", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fastwrite-tree-access-"));
   try {
     const app = await createApplication(directory, { features: { serverAuth: true }, bootstrapAdmin: { email: "admin@example.test", password: "test-password-long-enough" } });
-    const request = (path: string, token?: string, method = "GET", body?: unknown) => app(new Request("http://test" + path, {
+    const fixtureApp = (request: Request) => new URL(request.url).pathname === "/test/accounts" ? provisionAccount(app, request, { email: "admin@example.test", password: "test-password-long-enough" }) : app(request);
+  const request = (path: string, token?: string, method = "GET", body?: unknown) => fixtureApp(new Request("http://test" + path, {
       method, headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
     }));
@@ -17,8 +19,8 @@ test("authenticated lazy trees retain expandable directories while enforcing pat
       expect(response.status).toBeLessThan(300);
       return await response.json() as any;
     };
-    const owner = await json("/api/auth/register", undefined, "POST", { email: "owner@example.test", password: "test-password-long-enough" });
-    const editor = await json("/api/auth/register", undefined, "POST", { email: "editor@example.test", password: "test-password-long-enough" });
+    const owner = await json("/test/accounts", undefined, "POST", { email: "owner@example.test", password: "test-password-long-enough" });
+    const editor = await json("/test/accounts", undefined, "POST", { email: "editor@example.test", password: "test-password-long-enough" });
     const project = await json("/api/projects", owner.token, "POST", { name: "Lazy tree" });
     const base = "/api/projects/" + project.id;
     const invite = await json(base + "/invitations", owner.token, "POST", { email: "editor@example.test", role: "editor" });

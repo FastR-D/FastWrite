@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AgentRun, AgentTaskPlan, ChangeSet, ChangeSetConflictDetails, ClaimEvidenceLink, CompletionResponse, ComplianceReport, FastReadBundleReceipt, FileContentResponse, PaperClaim, PaperMemory, PaperProject, ProjectResearchWorkDetails, ResearchRun, ResearchWork, ReviseResponse, SaveFileResponse, SourceEvidence, UploadSession, WorkingStatus, WorkspaceTreeNode } from "@fastwrite/shared";
 import type { AgentProvider, AgentTaskPlanOutput, CompletionAgentInput, DraftGeneratedFile, ReviseAgentInput } from "./agent/provider";
+import { provisionAccount } from "../test-support/accounts";
 import { createApplication, mimeType } from "./app";
 import type { IdentityProvider } from "./auth/identity-provider";
 import type { MailTransport } from "./notifications/mail-delivery-service";
@@ -19,7 +20,8 @@ async function testApplication(agentProvider?: AgentProvider, features?: { serve
   const directory = await mkdtemp(join(tmpdir(), "fastwrite-test-"));
   temporaryDirectories.push(directory);
   const app = await createApplication(directory, { ...(features?.serverAuth ? { bootstrapAdmin: { email: "platform-admin@example.test", password: "correct-horse-battery-staple" } } : {}), ...(agentProvider ? { agentProvider } : {}), ...(features ? { features } : {}), ...(oidcProvider ? { oidcProvider } : {}), ...(casProvider ? { casProvider } : {}), ...(mailTransport ? { mailTransport } : {}), ...(researchFetcher ? { researchFetcher } : {}) });
-  return (path: string, init?: RequestInit) => app(new Request(`http://fastwrite.test${path}`, init));
+  const request = (path: string, init?: RequestInit) => app(new Request(`http://fastwrite.test${path}`, init));
+  return Object.assign(request, { provision: (init: RequestInit) => features?.serverAuth ? provisionAccount(app, new Request("http://fastwrite.test/test/accounts", init), { email: "platform-admin@example.test", password: "correct-horse-battery-staple" }) : request("/api/auth/register", init) });
 }
 
 describe("workspace API", () => {
@@ -44,7 +46,7 @@ describe("workspace API", () => {
 
   test("registers local accounts, creates a personal workspace, and accepts scoped invitations", async () => {
     const request = await testApplication();
-    const ownerResponse = await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@example.test", password: "correct-horse-battery-staple", displayName: "Owner" }) });
+    const ownerResponse = await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@example.test", password: "correct-horse-battery-staple", displayName: "Owner" }) });
     expect(ownerResponse.status).toBe(201);
     const originalRefreshCookie = ownerResponse.headers.get("set-cookie")?.split(";", 1)[0];
     expect(originalRefreshCookie).toContain("fastwrite.refresh=");
@@ -68,7 +70,7 @@ describe("workspace API", () => {
     const listed = await request(`/api/projects/${project.id}/invitations`, { headers: ownerHeaders });
     expect(listed.status).toBe(200);
     expect(JSON.stringify(await listed.json())).not.toContain("tokenHash");
-    const editor = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const editor = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const resentResponse = await request(`/api/invitations/${invitation.invitation.id}/resend`, { method: "POST", headers: ownerHeaders });
     expect(resentResponse.status).toBe(200);
     const resent = await resentResponse.json() as { token: string; invitation: { id: string; tokenHash?: string; message?: string } };
@@ -104,7 +106,7 @@ describe("workspace API", () => {
       logout: async () => undefined
     };
     const request = await testApplication(undefined, { serverAuth: true }, provider);
-    expect(await (await request("/api/auth/providers")).json()).toEqual({ local: true, oidc: true, cas: false, fastcas: false, fastcasSignup: false });
+    expect(await (await request("/api/auth/providers")).json()).toEqual({ local: true, registration: false, oidc: true, cas: false, fastcas: false, fastcasSignup: false });
     const start = await request("/api/auth/oidc/login?returnTo=/projects?view=recent");
     expect(start.status).toBe(302);
     expect(start.headers.get("location")).toBe("https://idp.example.test/authorize?state=opaque");
@@ -134,7 +136,7 @@ describe("workspace API", () => {
       logout: async () => undefined
     };
     const request = await testApplication(undefined, { serverAuth: true }, provider);
-    const bootstrap = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "group-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const bootstrap = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "group-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
     const ownerHeaders = { authorization: `Bearer ${bootstrap.token}`, "content-type": "application/json" };
     const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Group ACL" }) })).json() as PaperProject;
     const start = await request("/api/auth/oidc/login");
@@ -161,7 +163,7 @@ describe("workspace API", () => {
   test("syncs an external identity group into an owner-configured team binding", async () => {
     const provider: IdentityProvider = { beginLogin: async () => ({ kind: "redirect", url: "https://idp.example.test/authorize", binding: "team-group-state" }), finishLogin: async () => ({ issuer: "https://idp.example.test", subject: "team-group-user", email: "team-group@example.test", groups: ["lab-members", "lab-admin"], emailVerified: true }), logout: async () => undefined };
     const request = await testApplication(undefined, { serverAuth: true }, provider);
-    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-group-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const owner = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-group-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
     const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
     const team = await (await request("/api/teams", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Mapped Lab" }) })).json() as { id: string };
     expect((await request(`/api/teams/${team.id}/group-bindings/new`, { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ idpGroup: "https://idp.example.test:lab-members", role: "member" }) })).status).toBe(200);
@@ -188,8 +190,8 @@ describe("workspace API", () => {
 
   test("searches only readable project files without exposing denied paths", async () => {
     const request = await testApplication(undefined, { serverAuth: true });
-    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "search-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
-    const editor = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "search-editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const owner = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "search-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const editor = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "search-editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
     const editorHeaders = { authorization: `Bearer ${editor.token}`, "content-type": "application/json" };
     const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Search ACL" }) })).json() as PaperProject;
@@ -228,12 +230,12 @@ describe("workspace API", () => {
   test("limits administrator account controls to audited metadata and revokes sessions", async () => {
     const request = await testApplication(undefined, { serverAuth: true });
     const admin = await (await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
-    const user = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "managed-user@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const user = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "managed-user@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const adminHeaders = { authorization: `Bearer ${admin.token}`, "content-type": "application/json" };
     const userHeaders = { authorization: `Bearer ${user.token}`, "content-type": "application/json" };
     expect((await request("/api/admin/users", { headers: userHeaders })).status).toBe(403);
     const health = await request("/api/admin/health", { headers: adminHeaders });
-    expect(await health.json()).toMatchObject({ users: 2, activeSessions: 2 });
+    expect(await health.json()).toMatchObject({ users: 2, activeSessions: 3 });
     const users = await request("/api/admin/users", { headers: adminHeaders });
     const listedUsers = await users.json() as Array<{ id: string; activeSessionCount: number }>;
     expect(listedUsers).toEqual(expect.arrayContaining([expect.objectContaining({ id: user.user.id, activeSessionCount: 1 })]));
@@ -257,13 +259,13 @@ describe("workspace API", () => {
   test("enforces commenter permissions when server authentication is enabled", async () => {
     const sentMail: Array<{ to: string; subject: string; text: string }> = [];
     const request = await testApplication(undefined, { serverAuth: true }, undefined, undefined, { send: async (message) => { sentMail.push(message); } });
-    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "strict-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const owner = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "strict-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
     const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Strict permissions" }) })).json() as PaperProject;
     const created = await request(`/api/projects/${project.id}/files`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ path: "paper.tex", content: "Hello world" }) });
     expect(created.status).toBe(201);
     const editorInvitation = await (await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "strict-editor@example.test", role: "editor" }) })).json() as { token: string };
-    const editor = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "strict-editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const editor = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "strict-editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     expect((await request(`/api/invitations/${editorInvitation.token}/accept`, { method: "POST", headers: { authorization: `Bearer ${editor.token}` } })).status).toBe(200);
     const editorHeaders = { authorization: `Bearer ${editor.token}`, "content-type": "application/json" };
     expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ path: "restricted/raw-results.tex", content: "\\section{Secret Results}\nOur restricted method improves accuracy by ten percent." }) })).status).toBe(201);
@@ -293,7 +295,7 @@ describe("workspace API", () => {
     const audit = await request(`/api/projects/${project.id}/audit`, { headers: ownerHeaders });
     expect((await audit.json() as Array<{ action: string }>).some((event) => event.action === "project.create")).toBe(true);
     const invitation = await (await request(`/api/projects/${project.id}/invitations`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ email: "commenter@example.test", role: "commenter" }) })).json() as { token: string };
-    const commenter = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "commenter@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const commenter = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "commenter@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     expect((await request(`/api/invitations/${invitation.token}/accept`, { method: "POST", headers: { authorization: `Bearer ${commenter.token}` } })).status).toBe(200);
     const commenterHeaders = { authorization: `Bearer ${commenter.token}`, "content-type": "application/json" };
     expect((await request(`/api/projects/${project.id}/files`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ path: "reviews/reviewer-notes.tex", content: "Initial reviewer notes" }) })).status).toBe(201);
@@ -331,9 +333,9 @@ describe("workspace API", () => {
       }
     };
     const request = await testApplication(provider, { serverAuth: true });
-    await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "review-acl-bootstrap@example.test", password: "correct-horse-battery-staple" }) });
-    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "review-acl-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
-    const reviewer = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "review-acl-editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "review-acl-bootstrap@example.test", password: "correct-horse-battery-staple" }) });
+    const owner = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "review-acl-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const reviewer = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "review-acl-editor@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
     const reviewerHeaders = { authorization: `Bearer ${reviewer.token}`, "content-type": "application/json" };
     const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Review ACL" }) })).json() as PaperProject;
@@ -376,8 +378,8 @@ describe("workspace API", () => {
 
   test("routes authenticated project access requests to an owner for approval", async () => {
     const request = await testApplication(undefined, { serverAuth: true });
-    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "access-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
-    const requester = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "access-requester@example.test", password: "correct-horse-battery-staple", displayName: "External reviewer" }) })).json() as { token: string; user: { id: string } };
+    const owner = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "access-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const requester = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "access-requester@example.test", password: "correct-horse-battery-staple", displayName: "External reviewer" }) })).json() as { token: string; user: { id: string } };
     const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
     const requesterHeaders = { authorization: `Bearer ${requester.token}`, "content-type": "application/json" };
     const project = await (await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Access request paper" }) })).json() as PaperProject;
@@ -398,7 +400,7 @@ describe("workspace API", () => {
 
   test("creates a team-owned project and records an audited ownership transfer", async () => {
     const request = await testApplication();
-    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const owner = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const headers = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
     const team = await (await request("/api/teams", { method: "POST", headers, body: JSON.stringify({ name: "Paper lab" }) })).json() as { id: string };
     const project = await (await request("/api/projects", { method: "POST", headers, body: JSON.stringify({ name: "Team paper", teamId: team.id }) })).json() as PaperProject;
@@ -410,8 +412,8 @@ describe("workspace API", () => {
 
   test("lets a team owner manage members and pending invitations", async () => {
     const request = await testApplication(undefined, { serverAuth: true });
-    const owner = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-governance-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
-    const member = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-governance-member@example.test", password: "correct-horse-battery-staple", displayName: "Lab member" }) })).json() as { token: string; user: { id: string } };
+    const owner = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-governance-owner@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const member = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "team-governance-member@example.test", password: "correct-horse-battery-staple", displayName: "Lab member" }) })).json() as { token: string; user: { id: string } };
     const ownerHeaders = { authorization: `Bearer ${owner.token}`, "content-type": "application/json" };
     const team = await (await request("/api/teams", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Governance lab" }) })).json() as { id: string };
     await request("/api/projects", { method: "POST", headers: ownerHeaders, body: JSON.stringify({ name: "Team manuscript", teamId: team.id }) });
@@ -469,7 +471,7 @@ describe("workspace API", () => {
 
   test("applies team Harness policy before allowing a personal profile for a team project", async () => {
     const request = await testApplication();
-    const registered = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "policy@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const registered = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "policy@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
     const headers = { authorization: `Bearer ${registered.token}`, "content-type": "application/json" };
     const team = await (await request("/api/teams", { method: "POST", headers, body: JSON.stringify({ name: "Policy lab" }) })).json() as { id: string };
     const project = await (await request("/api/projects", { method: "POST", headers, body: JSON.stringify({ name: "Policy paper", teamId: team.id }) })).json() as PaperProject;
@@ -569,8 +571,8 @@ describe("workspace API", () => {
 
   test("does not expose an authenticated compile job to another user", async () => {
     const request = await testApplication(undefined, { serverAuth: true });
-    const first = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: `job-a-${crypto.randomUUID()}@example.test`, password: "job-password-123" }) })).json() as { token: string };
-    const second = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: `job-b-${crypto.randomUUID()}@example.test`, password: "job-password-123" }) })).json() as { token: string };
+    const first = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: `job-a-${crypto.randomUUID()}@example.test`, password: "job-password-123" }) })).json() as { token: string };
+    const second = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: `job-b-${crypto.randomUUID()}@example.test`, password: "job-password-123" }) })).json() as { token: string };
     const project = await (await request("/api/projects", { method: "POST", headers: { authorization: `Bearer ${first.token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "Private queued compile" }) })).json() as { id: string };
     const queued = await request(`/api/projects/${project.id}/compile`, { method: "POST", headers: { authorization: `Bearer ${first.token}` } });
     const job = await queued.json() as { id: string };
@@ -720,7 +722,7 @@ describe("workspace API", () => {
 
   test("anchors account comments with Yjs relative positions across edits", async () => {
     const request = await testApplication();
-    const account = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "comments@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
+    const account = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "comments@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string };
     const headers = { authorization: `Bearer ${account.token}`, "content-type": "application/json" };
     const project = await (await request("/api/projects", { method: "POST", headers, body: JSON.stringify({ name: "Comment anchors" }) })).json() as PaperProject;
     const opened = await (await request(`/api/projects/${project.id}/collaboration?path=main.tex`, { headers })).json() as { fileVersion: number; update: string };
@@ -735,7 +737,7 @@ describe("workspace API", () => {
 
   test("issues collaboration access only to an authenticated project editor", async () => {
     const request = await testApplication();
-    const account = await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "collaboration-access@example.test", password: "correct-horse-battery-staple", displayName: "Trusted editor" }) })).json() as { token: string; user: { id: string } };
+    const account = await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "collaboration-access@example.test", password: "correct-horse-battery-staple", displayName: "Trusted editor" }) })).json() as { token: string; user: { id: string } };
     const headers = { authorization: `Bearer ${account.token}`, "content-type": "application/json" };
     const project = await (await request("/api/projects", { method: "POST", headers, body: JSON.stringify({ name: "Access-controlled room" }) })).json() as PaperProject;
     expect((await request(`/api/collaboration/access?projectId=${project.id}&path=main.tex`)).status).toBe(401);
@@ -765,7 +767,7 @@ describe("workspace API", () => {
 
   test("enforces two-person, scoped, one-time support access grants", async () => {
     const request = await testApplication(undefined, { serverAuth: true });
-    const register = async (email: string) => await (await request("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
+    const register = async (email: string) => await (await request.provision({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const requester = await (await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@example.test", password: "correct-horse-battery-staple" }) })).json() as { token: string; user: { id: string } };
     const approver = await register("support-approver@example.test");
     const requesterHeaders = { authorization: `Bearer ${requester.token}`, "content-type": "application/json" };
@@ -2285,7 +2287,7 @@ describe("workspace API", () => {
 
   test("working status, stage, unstage and commit move a file through the index", async () => {
     const request = await testApplication();
-    const registered = await request("/api/auth/register", {
+    const registered = await request.provision({
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ email: "git-owner@example.test", password: "correct-horse-battery-staple", displayName: "Owner" })
     });
@@ -2327,7 +2329,7 @@ describe("workspace API", () => {
 
   test("stage refuses an empty path list and commit refuses an empty message", async () => {
     const request = await testApplication();
-    const registered = await request("/api/auth/register", {
+    const registered = await request.provision({
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ email: "empty-guard@example.test", password: "correct-horse-battery-staple", displayName: "Owner" })
     });

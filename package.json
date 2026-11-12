@@ -35,6 +35,7 @@
     "e2e:ai-workspace": "node scripts/e2e-ai-workspace.mjs",
     "e2e:workbench-ui": "node scripts/e2e-workbench-ui.mjs",
     "e2e:projects-ui": "node scripts/e2e-projects-ui.mjs",
+    "e2e:admin-users": "node scripts/e2e-admin-users.mjs",
     "e2e:panel-teams": "node scripts/e2e-panel-teams.mjs",
     "e2e:new-paper": "node scripts/e2e-new-paper.mjs",
     "e2e:typography": "node scripts/e2e-typography.mjs",

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { provisionAccount } from "../../test-support/accounts";
 import { createApplication } from "../app";
 import type { AgentProvider } from "../agent/provider";
 import type { ServerCompileResult } from "../compiler/latex-compile-service";
@@ -34,13 +35,16 @@ async function setup(
     ...(options.provider ? { agentProvider: options.provider } : {}),
     ...(options.compiler ? { latexCompiler: options.compiler } : {}),
   });
+  const fixtureApp = (request: Request) => new URL(request.url).pathname === "/test/accounts" && options.authenticated
+    ? provisionAccount(app, request, { email: "platform@example.test", password: "integration-bootstrap-password" })
+    : app(new URL(request.url).pathname === "/test/accounts" ? new Request(new URL("/api/auth/register", request.url).href, request) : request);
   const request = (
     path: string,
     body?: unknown,
     token?: string,
     method = body === undefined ? "GET" : "POST",
   ) =>
-    app(
+    fixtureApp(
       new Request(`http://fastwrite.test${path}`, {
         method,
         headers: {
@@ -51,7 +55,7 @@ async function setup(
       }),
     );
   const user = (await (
-    await request("/api/auth/register", {
+    await request("/test/accounts", {
       email: "owner@example.test",
       password: "long-unique-test-password",
     })

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import * as Y from "yjs";
 import type { CollaborationReviewSessionView, CommentThreadView } from "@fastwrite/shared";
+import { provisionAccount } from "../../test-support/accounts";
 import { createApplication } from "../app";
 
 const directories: string[] = [];
@@ -11,8 +12,9 @@ afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(p
 async function fixture(latexCompiler?: import("../app").ApplicationOptions["latexCompiler"]) {
   const directory = await mkdtemp(join(tmpdir(), "fastwrite-team-writing-")); directories.push(directory);
   const app = await createApplication(directory, { ...(latexCompiler ? { latexCompiler } : {}), features: { serverAuth: true }, bootstrapAdmin: { email: "admin@example.test", password: "test-admin-password-for-collaboration" } });
-  const request = async (path: string, token?: string, method = "GET", body?: unknown) => app(new Request(`http://test${path}`, { method, headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
-  const register = async (name: string) => (await (await request("/api/auth/register", undefined, "POST", { email: `${name}@example.test`, password: "collaboration-testing-password", displayName: name })).json()) as { token: string; user: { id: string } };
+  const fixtureApp = (request: Request) => new URL(request.url).pathname === "/test/accounts" ? provisionAccount(app, request, { email: "admin@example.test", password: "test-admin-password-for-collaboration" }) : app(request);
+  const request = async (path: string, token?: string, method = "GET", body?: unknown) => fixtureApp(new Request(`http://test${path}`, { method, headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+  const register = async (name: string) => (await (await request("/test/accounts", undefined, "POST", { email: `${name}@example.test`, password: "collaboration-testing-password", displayName: name })).json()) as { token: string; user: { id: string } };
   const owner = await register("Owner"), reviewer = await register("Reviewer"), viewer = await register("Viewer");
   const project = await (await request("/api/projects", owner.token, "POST", { name: "Collaborative paper" })).json() as { id: string };
   const root = `/api/projects/${project.id}`;

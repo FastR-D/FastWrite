@@ -33,7 +33,7 @@ bun start
 
 设置 `FASTWRITE_SERVER_AUTH=true` 后，Harness 状态与 MCP 目录查询需要登录；共享 CLI 的原始会话、运行记录、事件、审批及全局 Harness 配置修改仅允许平台管理员访问。项目内 AI 操作继续遵循项目权限，指定项目的 MCP 审计需要该项目的 Harness 使用权限，全局审计仅限管理员。原始 Harness WebSocket 使用与 HTTP 相同的 `Authorization: Bearer ...` 或 `X-FastWrite-Session` 请求头认证，不接受 URL 中的登录令牌；连接在握手、历史回放、每次事件推送及定时检查时校验权限。浏览器原生 WebSocket 无法设置这些请求头，浏览器客户端可使用已认证的 HTTP 事件接口。
 
-启用 `FASTWRITE_SERVER_AUTH=true` 时，若数据库没有有效管理员，必须同时设置 `FASTWRITE_BOOTSTRAP_ADMIN_EMAIL` 和 `FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD`（自行生成至少 12 位的唯一密码），否则服务拒绝启动。没有默认管理员账号或密码；公开注册始终创建普通用户。初始化成功后可以移除这两个变量，已有管理员可正常登录。修改初始化变量不会重置已有账号密码；升级前已使用旧版默认账号的部署需单独轮换该账号密码。
+启用 `FASTWRITE_SERVER_AUTH=true` 时，若数据库没有有效管理员，必须同时设置 `FASTWRITE_BOOTSTRAP_ADMIN_EMAIL` 和 `FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD`（自行生成至少 12 位的唯一密码），否则服务拒绝启动。没有默认管理员账号或密码。部署模式（`FASTWRITE_SERVER_AUTH=true` 或 `NODE_ENV=production`）关闭普通用户注册入口及 `/api/auth/register` 接口；本地未开启鉴权时仍可注册普通用户。管理员在 `/panel` 左侧“用户管理”中新增、编辑、删除用户或管理团队成员资格，操作需要填写审计原因；删除前需先转移用户拥有的项目和团队，不能删除自己或停用最后一位有效管理员。初始化成功后可以移除这两个变量，已有管理员可正常登录。修改初始化变量不会重置已有账号密码；升级前已使用旧版默认账号的部署需单独轮换该账号密码。
 
 ## 开发说明
 

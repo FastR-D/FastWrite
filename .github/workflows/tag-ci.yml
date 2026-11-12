@@ -55,7 +55,7 @@ jobs:
       runtime-env: |
         FASTWRITE_ALLOW_LEGACY_API_KEYS=false
         FASTWRITE_DATA_DIR=/home/dev/fastwrite-shared/data
-        FASTWRITE_FASTCAS_ALLOW_SIGNUP=false
+        FASTWRITE_FASTCAS_ALLOW_SIGNUP=true
         FASTWRITE_FASTCAS_CLIENT_ID=fastwrite
         FASTWRITE_FASTCAS_ISSUER=https://cas.fastrd.io
         FASTWRITE_FASTCAS_LOOPBACK_HTTP=false

@@ -83,6 +83,7 @@ import { PresenceService } from "./collaboration/presence-service";
 import { CommentService } from "./comments/comment-service";
 import { CasIdentityProvider, OidcIdentityProvider, type IdentityProvider } from "./auth/identity-provider";
 import { FastCASService, type FastCASConfiguration } from "./auth/fastcas-service";
+import { AdminUsers, type UserInput } from "./auth/admin-users";
 import { FastCASError } from "@fastrd/fastcas/server";
 import { MailDeliveryService, SmtpMailTransport, type MailTransport } from "./notifications/mail-delivery-service";
 import { InProcessJobQueue, type JobRecord, type JobStore } from "./jobs/job-queue";
@@ -581,14 +582,19 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     ...["GET", "DELETE"].map(method => route(method, "/api/projects/:projectId/mcp", async (request, params) => { mcpTokens.authenticate(request, required(params, "projectId")); return json({ jsonrpc: "2.0", error: { code: -32000, message: "Stateless MCP endpoint supports POST only" }, id: null }, 405, { Allow: "POST" }); })),
     route("GET", "/api/health", async () => json({ status: "ok", version: "0.1.0" })),
     route("GET", "/api/metrics", async () => new Response(metrics.prometheus(), { headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8" } })),
-    route("POST", "/api/auth/register", async (request) => { const result = await auth.register(await readJson<{ email: string; password: string; displayName?: string }>(request)); await teams.personalWorkspace({ user: result.user, sessionId: "register" }); return authResponse(result, 201); }),
+    route("POST", "/api/auth/register", async (request) => { if (authEnabled || process.env.NODE_ENV === "production") throw new ApiError(403, "registration_disabled", "普通注册已关闭，请联系管理员或使用 FastCAS 登录并绑定账号"); const result = await auth.register(await readJson<{ email: string; password: string; displayName?: string }>(request)); await teams.personalWorkspace({ user: result.user, sessionId: "register" }); return authResponse(result, 201); }),
     route("POST", "/api/auth/login", async (request) => authResponse(await auth.login(await readJson<{ email: string; password: string }>(request)))),
     route("POST", "/api/auth/dev-session", async (request) => { requireSameOrigin(request); return json(await auth.developmentSession(), 200, { "cache-control": "no-store" }); }),
-    route("GET", "/api/auth/providers", async () => json({ local: true, oidc: Boolean(oidc), cas: Boolean(cas), fastcas: Boolean(fastcas && fastcas.configuration.loginEnabled !== false), fastcasSignup: Boolean(fastcas?.configuration.allowRegistration && fastcas.configuration.loginEnabled !== false) })),
-    route("GET", "/api/auth/fastcas/signup", async (_request, _params, url) => {
+    route("GET", "/api/auth/providers", async () => json({ local: true, registration: !authEnabled && process.env.NODE_ENV !== "production", oidc: Boolean(oidc), cas: Boolean(cas), fastcas: Boolean(fastcas && fastcas.configuration.loginEnabled !== false), fastcasSignup: Boolean(fastcas?.configuration.allowRegistration && fastcas.configuration.loginEnabled !== false && fastcas.configuration.linkEnabled !== false) })),
+    route("GET", "/api/auth/fastcas/signup", async request => {
       if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
-      const signup = await fastcas.beginRegistration(url.searchParams.get("returnTo") ?? "/panel");
-      return new Response(null, { status: 302, headers: { location: signup.url.href, "set-cookie": loginBindingCookie("fastcas", signup.binding), "cache-control": "no-store" } });
+      return json(fastcas.registrationStatus(requestCookie(request, "fastwrite.fastcas.login")), 200, { "cache-control": "no-store" });
+    }),
+    route("POST", "/api/auth/fastcas/signup", async request => {
+      requireFastCASOrigin(request);
+      if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
+      const signup = await fastcas.beginRegistration(requestCookie(request, "fastwrite.fastcas.login"), await readJson(request));
+      return json({ url: signup.url.href }, 200, { "set-cookie": loginBindingCookie("fastcas", signup.binding), "cache-control": "no-store" });
     }),
     route("GET", "/api/auth/fastcas/login", async (_request, _params, url) => {
       if (!fastcas) throw new ApiError(404, "fastcas_not_configured", "FastCAS is not configured");
@@ -608,9 +614,9 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
       const finished = await fastcas.callback(url, requestCookie(request, "fastwrite.fastcas.login"), requestCookie(request, "fastwrite.refresh"));
       if (finished.result) await teams.personalWorkspace({ user: finished.result.user, sessionId: "fastcas-login" });
       const target = new URL(finished.returnTo, url.origin);
-      target.searchParams.set("fastcas", finished.result ? "complete" : "linked");
+      target.searchParams.set("fastcas", finished.registrationRequired ? "register" : finished.result ? "complete" : "linked");
       const location = target.pathname + target.search + target.hash;
-      return finished.result ? externalAuthCallback("fastcas", finished.result, location) : new Response(null, { status: 302, headers: { location, "set-cookie": expiredLoginBindingCookie("fastcas"), "cache-control": "no-store" } });
+      return finished.result ? externalAuthCallback("fastcas", finished.result, location) : new Response(null, { status: 302, headers: { location, ...(finished.registrationRequired ? {} : { "set-cookie": expiredLoginBindingCookie("fastcas") }), "cache-control": "no-store" } });
     }),
     route("GET", "/api/auth/fastcas/status", async request => json(fastcas ? fastcas.status(principal(request, true)!) : { enabled: false, links: [] })),
     route("POST", "/api/auth/fastcas/local-password", async request => {
@@ -662,7 +668,12 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     route("GET", "/api/admin/health", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const state = database.snapshot(); return json({ users: state.users.length, activeSessions: state.sessions.filter((item) => !item.revokedAt && item.expiresAt > new Date().toISOString()).length, teams: state.teams.length, projects: state.projects.length, collaborationDocuments: state.collaborationDocuments.filter((item) => item.status === "active").length, pendingInvitations: state.invitations.filter((item) => !item.revokedAt && !item.acceptedAt && item.expiresAt > new Date().toISOString()).length, mail: mailDelivery.status(), postgres: agentSettings.postgresMirror?.() ?? { configured: false, healthy: false, failures: 0 }, jobs: { queued: state.jobs.filter((job) => job.status === "queued").length, running: state.jobs.filter((job) => job.status === "running").length, failed: state.jobs.filter((job) => job.status === "failed").length } }); }),
     route("GET", "/api/admin/postgres/compare", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); if (!agentSettings.postgresCompare) throw new ApiError(404, "postgres_not_configured", "PostgreSQL is not configured"); return json(await agentSettings.postgresCompare()); }),
     route("GET", "/api/admin/identity-providers", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); return json({ oidc: { configured: Boolean(oidc), ...(config.oidc ? { issuer: config.oidc.issuer, redirectUri: config.oidc.redirectUri, clientId: config.oidc.clientId } : {}) }, cas: { configured: Boolean(cas), ...(config.cas ? { serverUrl: config.cas.serverUrl, serviceUrl: config.cas.serviceUrl } : {}) }, local: { configured: true } }); }),
-    route("GET", "/api/admin/users", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const state = database.snapshot(); return json(state.users.map((user) => ({ id: user.id, emailNormalized: user.emailNormalized, displayName: user.displayName, platformRole: user.platformRole, status: user.status, createdAt: user.createdAt, updatedAt: user.updatedAt, activeSessionCount: state.sessions.filter((session) => session.userId === user.id && !session.revokedAt && session.expiresAt > new Date().toISOString()).length }))); }),
+    route("POST", "/api/admin/users", async request => { const actor = principal(request, true)!; const user = await new AdminUsers(database).create(actor, await readJson<UserInput>(request)); await teams.personalWorkspace({ user, sessionId: "admin-create" }); return json(user, 201); }),
+    route("PATCH", "/api/admin/users/:userId", async (request, params) => json(await new AdminUsers(database).update(principal(request, true)!, required(params, "userId"), await readJson<UserInput>(request)))),
+    route("DELETE", "/api/admin/users/:userId", async (request, params) => { const body = await readJson<{ reason: string }>(request); await new AdminUsers(database).remove(principal(request, true)!, required(params, "userId"), body.reason); return new Response(null, { status: 204 }); }),
+    route("GET", "/api/admin/users/:userId/teams", async (request, params) => json(new AdminUsers(database).teams(principal(request, true)!, required(params, "userId")))),
+    route("PUT", "/api/admin/users/:userId/teams/:teamId", async (request, params) => { const body = await readJson<{ role: "owner" | "admin" | "member" | ""; reason: string }>(request); await new AdminUsers(database).setTeam(principal(request, true)!, required(params, "userId"), required(params, "teamId"), body.role, body.reason); return new Response(null, { status: 204 }); }),
+    route("GET", "/api/admin/users", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const state = database.snapshot(); return json(state.users.map((user) => ({ id: user.id, emailNormalized: user.emailNormalized, localLoginId: state.externalIdentities.find(identity => identity.userId === user.id && identity.issuer === "fastwrite:local")?.subject, displayName: user.displayName, platformRole: user.platformRole, status: user.status, createdAt: user.createdAt, updatedAt: user.updatedAt, activeSessionCount: state.sessions.filter((session) => session.userId === user.id && !session.revokedAt && session.expiresAt > new Date().toISOString()).length }))); }),
     route("POST", "/api/admin/users/:userId/disable", async (request, params) => { const body = await readJson<{ reason?: string }>(request); await auth.disable(required(params, "userId"), principal(request, true)!, body.reason ?? ""); return new Response(null, { status: 204 }); }),
     route("POST", "/api/admin/users/:userId/sessions/revoke", async (request, params) => { const body = await readJson<{ reason?: string }>(request); await auth.revokeSessions(required(params, "userId"), principal(request, true)!, body.reason ?? ""); return new Response(null, { status: 204 }); }),
     route("PATCH", "/api/admin/users/:userId/platform-role", async (request, params) => { const body = await readJson<{ role?: "platform_admin" | "support_auditor" | "user"; reason?: string }>(request); if (body.role !== "platform_admin" && body.role !== "support_auditor" && body.role !== "user") throw new ApiError(400, "platform_role_invalid", "A valid platform role is required"); return json(await auth.updatePlatformRole(required(params, "userId"), body.role, principal(request, true)!, body.reason ?? "")); }),

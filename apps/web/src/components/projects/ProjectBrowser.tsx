@@ -4,6 +4,7 @@ import { publicationTargetAbbreviation } from "../../lib/labels";
 import { projectPath } from "../../lib/navigation";
 import { Button, Icon, IconButton, Link, Select, Table, TableCell, TableRow, TextField, icons } from "../ui";
 import { ProjectActionDialog, type ProjectAction } from "./ProjectActionDialog";
+import { UserManagementPanel } from "./UserManagementPanel";
 import { TeamsPanel } from "./TeamsPanel";
 import styles from "./ProjectBrowser.module.css";
 
@@ -16,6 +17,8 @@ const filters = [
 ] as const;
 
 interface ProjectBrowserProps {
+  canManageUsers?: boolean;
+  currentUserId?: string | undefined;
   projects: PaperProject[];
   loading: boolean;
   error: string;
@@ -28,9 +31,10 @@ interface ProjectBrowserProps {
   onUpdated: (project: PaperProject) => void;
 }
 
-export function ProjectBrowser({ projects, loading, error, deleting, notice, onNew, onImport, onRetry, onDelete, onUpdated }: ProjectBrowserProps) {
+export function ProjectBrowser({ canManageUsers = false, currentUserId, projects, loading, error, deleting, notice, onNew, onImport, onRetry, onDelete, onUpdated }: ProjectBrowserProps) {
   const [activeAction, setActiveAction] = useState<{ project: PaperProject; action: ProjectAction } | null>(null);
-  const [teamsView, setTeamsView] = useState(false);
+  const [view, setView] = useState<"projects" | "teams" | "users">("projects");
+  const teamsView = view === "teams";
   const [source, setSource] = useState<SourceFilter>("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ProjectSort>("updated");
@@ -62,20 +66,21 @@ export function ProjectBrowser({ projects, loading, error, deleting, notice, onN
             key={filter.value}
             variant="ghost"
             className={styles.filter}
-            aria-current={!teamsView && source === filter.value ? "page" : undefined}
+            aria-current={view === "projects" && source === filter.value ? "page" : undefined}
             icon={<Icon name={filter.icon} />}
-            onClick={() => { setTeamsView(false); setSource(filter.value); }}
+            onClick={() => { setView("projects"); setSource(filter.value); }}
           >
             <span className={styles.filterLabel}>{filter.label}</span>
             <span className={styles.filterCount}>{loading ? "—" : projects.filter(project => filter.value === "all" || project.source.type === filter.value).length}</span>
           </Button>)}
           <div className={styles.navDivider} />
-          <Button variant="ghost" className={styles.filter} aria-current={teamsView ? "page" : undefined} icon={<Icon name={icons.organization} />} onClick={() => setTeamsView(true)}><span className={styles.filterLabel}>团队与协作</span></Button>
+          <Button variant="ghost" className={styles.filter} aria-current={teamsView ? "page" : undefined} icon={<Icon name={icons.organization} />} onClick={() => setView("teams")}><span className={styles.filterLabel}>团队与协作</span></Button>
+          {canManageUsers ? <Button variant="ghost" className={styles.filter} aria-current={view === "users" ? "page" : undefined} icon={<Icon name={icons.account} />} onClick={() => setView("users")}><span className={styles.filterLabel}>用户管理</span></Button> : null}
         </nav>
       </aside>
 
-      <main className={styles.main} aria-labelledby={teamsView ? "teams-title" : "projects-title"}>
-        {teamsView ? <TeamsPanel /> : <>
+      <main className={styles.main} aria-labelledby={view === "users" ? "users-title" : teamsView ? "teams-title" : "projects-title"}>
+        {view === "users" && canManageUsers ? <UserManagementPanel currentUserId={currentUserId} /> : teamsView ? <TeamsPanel /> : <>
         <header className={styles.heading}>
           <div className={styles.title}>
             <h1 id="projects-title">{title}</h1>
