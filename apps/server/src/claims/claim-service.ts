@@ -23,13 +23,14 @@ export class ClaimService {
     for (const path of [project.mainDocument, ...paths.filter((candidate) => candidate !== project.mainDocument)]) {
       const file = await this.workspaces.readTextFile(projectId, path);
       const occurrences = new Map<string, number>();
-      for (const match of file.content.matchAll(/[^.!?\n]+[.!?]/g)) {
-        const exactText = match[0].trim();
+      for (const sentence of claimSentences(file.content)) {
+        const exactText = sentence.text.trim();
         if (exactText.length < 20 || !isClaimCandidate(exactText)) continue;
-        const normalizedText = exactText.replace(/\s+/g, " ").trim();
+        const semantics = claimSemantics(exactText, path);
+        const { normalizedText } = semantics;
         const occurrence = occurrences.get(normalizedText) ?? 0;
         occurrences.set(normalizedText, occurrence + 1);
-        const startOffset = (match.index ?? 0) + match[0].indexOf(exactText);
+        const startOffset = sentence.startOffset + sentence.text.indexOf(exactText);
         const anchor: ClaimAnchor = {
           path,
           fileVersion: file.file.version,
@@ -39,16 +40,12 @@ export class ClaimService {
           prefix: file.content.slice(Math.max(0, startOffset - 40), startOffset),
           suffix: file.content.slice(startOffset + exactText.length, startOffset + exactText.length + 40)
         };
-        const numbers = [...exactText.matchAll(/(-?\d+(?:\.\d+)?)\s*(%|ms|s|×|x|points?)?/gi)].map((item) => ({ raw: item[0], normalized: Number(item[1]), ...(item[2] ? { unit: item[2] } : {}) }));
         const timestamp = now();
         found.push({
           id: stableClaimId(projectId, path, normalizedText, occurrence),
           projectId,
           anchor,
-          type: claimType(exactText),
-          surface: hasCitation(exactText) ? "citation" : hasNumericClaim(exactText) ? "number" : /caption/i.test(path) ? "caption" : "text",
-          normalizedText,
-          ...(numbers.length ? { numbers } : {}),
+          ...semantics,
           reviewStatus: "detected",
           anchorStatus: "current",
           createdBy: "scanner",
@@ -120,8 +117,9 @@ export class ClaimService {
     const source = normalizeWorkspacePath(from);
     const target = normalizeWorkspacePath(to);
     await this.database.mutate((state) => {
+      const claimIds = new Set(state.paperClaims.filter((claim) => claim.projectId === projectId).map((claim) => claim.id));
       for (const claim of state.paperClaims.filter((item) => item.projectId === projectId && (item.anchor.path === source || item.anchor.path.startsWith(`${source}/`)))) { claim.anchor.path = `${target}${claim.anchor.path.slice(source.length)}`; claim.anchorStatus = "stale"; claim.updatedAt = now(); }
-      for (const link of state.claimEvidenceLinks) if (link.kind === "workspace" && (link.path === source || link.path.startsWith(`${source}/`))) { link.path = `${target}${link.path.slice(source.length)}`; link.anchor.path = `${target}${link.anchor.path.slice(source.length)}`; }
+      for (const link of state.claimEvidenceLinks) if (claimIds.has(link.claimId) && link.kind === "workspace" && (link.path === source || link.path.startsWith(`${source}/`))) { link.path = `${target}${link.path.slice(source.length)}`; link.anchor.path = `${target}${link.anchor.path.slice(source.length)}`; }
     });
     await this.refresh(projectId);
   }
@@ -227,12 +225,36 @@ function refreshClaimAnchor(claim: PaperClaim, file: OpenedClaimFile): void {
   const contextual = contextCandidate(file.content, previous);
   if (contextual) {
     claim.anchor = anchorAt(previous.path, file.content, file.version, contextual.startOffset, contextual.exactText);
+    Object.assign(claim, claimSemantics(contextual.exactText, previous.path));
+    if (!claim.numbers) delete claim.numbers;
     claim.anchorStatus = "reanchored";
     if (claim.reviewStatus === "supported") claim.reviewStatus = "needs-review";
     claim.updatedAt = now();
     return;
   }
   markClaimOrphaned(claim);
+}
+
+function* claimSentences(content: string): Generator<{ text: string; startOffset: number }> {
+  let startOffset = 0;
+  for (let index = 0; index < content.length; index++) {
+    const char = content[index];
+    if (char === "\n") { startOffset = index + 1; continue; }
+    if (char !== "." && char !== "!" && char !== "?") continue;
+    if (char === "." && /\d/.test(content[index - 1] ?? "") && /\d/.test(content[index + 1] ?? "")) continue;
+    if (index > startOffset) yield { text: content.slice(startOffset, index + 1), startOffset };
+    startOffset = index + 1;
+  }
+}
+
+function claimSemantics(text: string, path: string): Pick<PaperClaim, "type" | "surface" | "numbers"> & { normalizedText: string } {
+  const numbers = [...text.matchAll(/(-?\d+(?:\.\d+)?)\s*(%|ms|s|×|x|points?)?/gi)].map((item) => ({ raw: item[0], normalized: Number(item[1]), ...(item[2] ? { unit: item[2] } : {}) }));
+  return {
+    type: claimType(text),
+    surface: hasCitation(text) ? "citation" : hasNumericClaim(text) ? "number" : /caption/i.test(path) ? "caption" : "text",
+    normalizedText: text.replace(/\s+/g, " ").trim(),
+    numbers: numbers.length ? numbers : undefined
+  };
 }
 
 function markClaimOrphaned(claim: PaperClaim): void { if (claim.anchorStatus !== "orphaned") claim.updatedAt = now(); claim.anchorStatus = "orphaned"; if (claim.reviewStatus === "supported") claim.reviewStatus = "needs-review"; }
