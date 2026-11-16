@@ -1232,6 +1232,29 @@ describe("workspace API", () => {
     expect((await (await request(`/api/projects/${project.id}/reviews`)).json() as unknown[])).toHaveLength(1);
   });
 
+  test("preserves distinct multilingual Review findings while merging matching titles", async () => {
+    const provider: AgentProvider = {
+      async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
+      async review() {
+        return { overallAssessment: "Review findings.", recommendation: "borderline", strengths: [], weaknesses: [], nextSteps: [],
+          issues: ["缺少消融实验", "威胁模型不完整", "缺少消融实验", "Résumé incomplet", "Re\u0301sume\u0301 incomplet!", "⚠️", "❗", "कला", "किला"].map((title, index) => ({
+            category: "clarity" as const, severity: "major" as const, title, rationale: `Finding ${index}`, impact: "Needs review", suggestion: "Inspect evidence", evidence: [],
+          })) };
+      },
+    };
+    const request = await testApplication(provider);
+    const project = await (await request("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Multilingual Review" }) })).json() as PaperProject;
+    const response = await request(`/api/projects/${project.id}/reviews`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourceOnly: true }) });
+    expect(response.status).toBe(201);
+    const reviewed = await response.json() as { report: { issues: Array<{ title: string; rationale: string }> } };
+    const titles = reviewed.report.issues.map((issue) => issue.title);
+    for (const title of ["缺少消融实验", "威胁模型不完整", "Résumé incomplet", "⚠️", "❗", "कला", "किला"]) expect(titles.filter((item) => item === title)).toHaveLength(1);
+    expect(titles).not.toContain("Re\u0301sume\u0301 incomplet!");
+    expect(reviewed.report.issues.find((issue) => issue.title === "缺少消融实验")?.rationale).toContain("Finding 2");
+    const reports = await (await request(`/api/projects/${project.id}/reviews`)).json() as Array<{ issues: Array<{ title: string }> }>;
+    expect(reports[0]?.issues.map((issue) => issue.title)).toEqual(titles);
+  });
+
   test("cancels an in-flight Review without persisting a partial report", async () => {
     const provider: AgentProvider = {
       async revise(input) { return { replacement: input.selection.text, rationale: "unused" }; },
