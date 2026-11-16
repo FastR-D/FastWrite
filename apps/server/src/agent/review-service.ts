@@ -222,7 +222,9 @@ function citationEvidenceIssues(documents: Array<{ path: string; content: string
 function dedupeIssues(issues: ReviewIssue[]): ReviewIssue[] {
   const byKey = new Map<string, ReviewIssue>();
   for (const issue of issues) {
-    const key = issue.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const key = issue.title.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim();
+    // A title without comparable text provides no evidence of duplication.
+    if (!key) { byKey.set(issue.id, issue); continue; }
     const existing = byKey.get(key);
     if (!existing) byKey.set(key, issue);
     else { existing.evidence.push(...issue.evidence.filter((evidence) => !existing.evidence.some((item) => item.path === evidence.path && item.excerpt === evidence.excerpt))); existing.rationale = `${existing.rationale}\n${issue.rationale}`.trim(); }
