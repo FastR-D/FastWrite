@@ -172,7 +172,12 @@ export class ClaimService {
     return this.database.mutate((state) => {
       if (!state.paperClaims.some((claim) => claim.projectId === projectId && claim.id === claimId)) throw new ApiError(404, "claim_not_found", "Claim not found");
       if (checked.kind === "literature" && !state.sourceEvidence.some((evidence) => evidence.id === checked.evidenceId && evidence.projectId === projectId)) throw new ApiError(400, "evidence_not_found", "Evidence does not belong to this project");
-      const duplicate = state.claimEvidenceLinks.find((candidate) => candidate.claimId === claimId && candidate.kind === checked.kind && (candidate.kind !== "literature" || checked.kind !== "literature" || candidate.evidenceId === checked.evidenceId));
+      const duplicate = state.claimEvidenceLinks.find((candidate) => {
+        if (candidate.claimId !== claimId || candidate.kind !== checked.kind) return false;
+        if (candidate.kind === "literature" && checked.kind === "literature") return candidate.evidenceId === checked.evidenceId;
+        if (candidate.kind === "workspace" && checked.kind === "workspace") return candidate.path === checked.path && candidate.anchor.fileVersion === checked.anchor.fileVersion && candidate.anchor.startOffset === checked.anchor.startOffset && candidate.anchor.endOffset === checked.anchor.endOffset && candidate.anchor.exactText === checked.anchor.exactText;
+        return true;
+      });
       if (duplicate) return duplicate;
       const created = { ...checked, id: `claim_link_${crypto.randomUUID()}`, claimId } as ClaimEvidenceLink;
       state.claimEvidenceLinks.push(created);

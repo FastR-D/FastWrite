@@ -49,6 +49,32 @@ test("HTTP file rename preserves another project's supported workspace evidence"
   ]);
 });
 
+test("HTTP workspace evidence keeps distinct files and anchored passages with idempotent retries", async () => {
+  const { request, save } = await fixture();
+  const project = await request<PaperProject>("/projects", "POST", { name: "Independent support" }, 201);
+  const base = `/projects/${project.id}`;
+  await save(project.id, "The evaluated result improves accuracy by 10%.");
+  const [claim] = await request<PaperClaim[]>(`${base}/claim-scans`, "POST", undefined, 201);
+  const content = "First independent measurement.\nSecond independent measurement.\n";
+  for (const path of ["evidence.tex", "other.tex"]) await request(`${base}/files`, "POST", { path, content }, 201);
+  const link = async (path: string, startOffset: number, endOffset: number) => {
+    const opened = await request<FileContentResponse>(`${base}/file?path=${path}`);
+    return request<ClaimEvidenceLink>(`${base}/claims/${claim!.id}/links`, "POST", { kind: "workspace", path, anchor: {
+      path, fileVersion: opened.file.version, startOffset, endOffset, exactText: opened.content.slice(startOffset, endOffset), prefix: "", suffix: "",
+    } }, 201);
+  };
+  const first = await link("evidence.tex", 0, content.indexOf("\n"));
+  const second = await link("evidence.tex", content.indexOf("\n") + 1, content.length - 1);
+  const other = await link("other.tex", 0, content.indexOf("\n"));
+  expect(new Set([first.id, second.id, other.id]).size).toBe(3);
+  expect((await link("evidence.tex", 0, content.indexOf("\n"))).id).toBe(first.id);
+  const links = await request<ClaimEvidenceLink[]>(`${base}/claim-links`);
+  expect(links).toHaveLength(3);
+  expect(links.map((item) => item.id)).toEqual([first.id, second.id, other.id]);
+  await request(`${base}/claims/${claim!.id}/links/${second.id}`, "DELETE", undefined, 204);
+  expect((await request<ClaimEvidenceLink[]>(`${base}/claim-links`)).map((item) => item.id)).toEqual([first.id, other.id]);
+});
+
 test("HTTP scan and save keep decimal anchors and current reanchored semantics", async () => {
   const { request, save } = await fixture();
   const project = await request<PaperProject>("/projects", "POST", { name: "Claim semantics" }, 201);
