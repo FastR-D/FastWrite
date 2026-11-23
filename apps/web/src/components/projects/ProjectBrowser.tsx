@@ -8,20 +8,28 @@ import { UserManagementPanel } from "./UserManagementPanel";
 import { TeamsPanel } from "./TeamsPanel";
 import styles from "./ProjectBrowser.module.css";
 
-type SourceFilter = "all" | "local" | "github";
 type ProjectSort = "updated" | "oldest" | "name";
 const filters = [
   { value: "all", label: "全部项目", icon: icons.files },
   { value: "local", label: "本地项目", icon: icons.folder },
   { value: "github", label: "GitHub 项目", icon: icons.github },
+  { value: "site", label: "全站项目", icon: icons.database },
 ] as const;
+
+type ProjectFilter = (typeof filters)[number]["value"];
+
+export interface ProjectListState {
+  projects: PaperProject[];
+  loading: boolean;
+  error: string;
+}
 
 interface ProjectBrowserProps {
   canManageUsers?: boolean;
   currentUserId?: string | undefined;
-  projects: PaperProject[];
-  loading: boolean;
-  error: string;
+  relatedProjects: ProjectListState;
+  siteProjects: ProjectListState | undefined;
+  deleteError: string;
   deleting: string | null;
   notice: ReactNode;
   onNew: () => void;
@@ -31,16 +39,19 @@ interface ProjectBrowserProps {
   onUpdated: (project: PaperProject) => void;
 }
 
-export function ProjectBrowser({ canManageUsers = false, currentUserId, projects, loading, error, deleting, notice, onNew, onImport, onRetry, onDelete, onUpdated }: ProjectBrowserProps) {
+export function ProjectBrowser({ canManageUsers = false, currentUserId, relatedProjects, siteProjects, deleteError, deleting, notice, onNew, onImport, onRetry, onDelete, onUpdated }: ProjectBrowserProps) {
   const [activeAction, setActiveAction] = useState<{ project: PaperProject; action: ProjectAction } | null>(null);
   const [view, setView] = useState<"projects" | "teams" | "users">("projects");
   const teamsView = view === "teams";
-  const [source, setSource] = useState<SourceFilter>("all");
+  const [selectedFilter, setSelectedFilter] = useState<ProjectFilter>("all");
+  const source = selectedFilter === "site" && !siteProjects ? "all" : selectedFilter;
+  const { projects, loading, error } = source === "site" ? siteProjects ?? relatedProjects : relatedProjects;
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ProjectSort>("updated");
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const visibleProjects = useMemo(() => projects.filter(project => {
-    if (source !== "all" && project.source.type !== source) return false;
+  const sourceProjects = useMemo(() => source === "local" || source === "github"
+    ? projects.filter(project => project.source.type === source) : projects, [projects, source]);
+  const visibleProjects = useMemo(() => sourceProjects.filter(project => {
     const searchable = [project.name, project.mainDocument,
       project.source.type === "github" ? project.source.repository : project.source.displayName,
       publicationTargetAbbreviation(project.publicationTarget, project.skill.id),
@@ -48,10 +59,10 @@ export function ProjectBrowser({ canManageUsers = false, currentUserId, projects
     return searchable.includes(normalizedQuery);
   }).sort((a, b) => sort === "name"
     ? a.name.localeCompare(b.name, "zh-CN", { numeric: true })
-    : (sort === "oldest" ? 1 : -1) * (Date.parse(a.updatedAt) - Date.parse(b.updatedAt))), [projects, source, normalizedQuery, sort]);
+    : (sort === "oldest" ? 1 : -1) * (Date.parse(a.updatedAt) - Date.parse(b.updatedAt))), [sourceProjects, normalizedQuery, sort]);
   const title = filters.find(filter => filter.value === source)!.label;
-  const sourceCount = projects.filter(project => source === "all" || project.source.type === source).length;
-  const filtered = source !== "all" || Boolean(normalizedQuery);
+  const sourceCount = sourceProjects.length;
+  const filtered = source === "local" || source === "github" || Boolean(normalizedQuery);
 
   return (
     <div className={styles.browser}>
@@ -62,17 +73,24 @@ export function ProjectBrowser({ canManageUsers = false, currentUserId, projects
         </div>
         <nav className={styles.navigation} aria-label="项目来源">
           <p className={styles.navHeading}>工作区</p>
-          {filters.map(filter => <Button
-            key={filter.value}
-            variant="ghost"
-            className={styles.filter}
-            aria-current={view === "projects" && source === filter.value ? "page" : undefined}
-            icon={<Icon name={filter.icon} />}
-            onClick={() => { setView("projects"); setSource(filter.value); }}
-          >
-            <span className={styles.filterLabel}>{filter.label}</span>
-            <span className={styles.filterCount}>{loading ? "—" : projects.filter(project => filter.value === "all" || project.source.type === filter.value).length}</span>
-          </Button>)}
+          {filters.map(filter => {
+            const list = filter.value === "site" ? siteProjects : relatedProjects;
+            if (!list) return null;
+            const count = filter.value === "local" || filter.value === "github"
+              ? list.projects.filter(project => project.source.type === filter.value).length
+              : list.projects.length;
+            return <Button
+              key={filter.value}
+              variant="ghost"
+              className={styles.filter}
+              aria-current={view === "projects" && source === filter.value ? "page" : undefined}
+              icon={<Icon name={filter.icon} />}
+              onClick={() => { setView("projects"); setSelectedFilter(filter.value); }}
+            >
+              <span className={styles.filterLabel}>{filter.label}</span>
+              <span className={styles.filterCount}>{list.loading ? "—" : count}</span>
+            </Button>;
+          })}
           <div className={styles.navDivider} />
           <Button variant="ghost" className={styles.filter} aria-current={teamsView ? "page" : undefined} icon={<Icon name={icons.organization} />} onClick={() => setView("teams")}><span className={styles.filterLabel}>团队与协作</span></Button>
           {canManageUsers ? <Button variant="ghost" className={styles.filter} aria-current={view === "users" ? "page" : undefined} icon={<Icon name={icons.account} />} onClick={() => setView("users")}><span className={styles.filterLabel}>用户管理</span></Button> : null}
@@ -103,6 +121,7 @@ export function ProjectBrowser({ canManageUsers = false, currentUserId, projects
           </div>
         </div>
         {error ? <div className={`page-error ${styles.error}`} role="alert"><strong>无法加载项目</strong><span>{error}</span><Button size="small" onClick={onRetry}>重试</Button></div> : null}
+        {deleteError ? <div className={`page-error ${styles.error}`} role="alert">{deleteError}</div> : null}
 
         {loading ? <div className={styles.loading} role="status" aria-label="正在加载项目">
           <span className={styles.loadingLabel}>正在加载项目…</span>
@@ -133,9 +152,9 @@ export function ProjectBrowser({ canManageUsers = false, currentUserId, projects
           </TableRow>)}
         </Table> : !error ? <div className={styles.empty}>
           <Icon name={filtered ? icons.search : icons.files} size={32} />
-          <h2>{filtered ? "没有匹配的项目" : "开始你的第一篇论文"}</h2>
-          <p>{filtered ? "试试其他关键词，或查看全部项目。" : "新建论文，或导入本地目录与 GitHub 仓库。"}</p>
-          {filtered ? <Button variant="secondary" onClick={() => { setQuery(""); setSource("all"); }}>清除筛选</Button> : <Button variant="primary" icon={<Icon name={icons.add} />} onClick={onNew}>新建论文</Button>}
+          <h2>{filtered ? "没有匹配的项目" : source === "site" ? "全站暂无项目" : "开始你的第一篇论文"}</h2>
+          {filtered ? <p>{source === "site" ? "试试其他关键词。" : "试试其他关键词，或查看全部项目。"}</p> : source !== "site" ? <p>新建论文，或导入本地目录与 GitHub 仓库。</p> : null}
+          {filtered ? <Button variant="secondary" onClick={() => { setQuery(""); if (source !== "site") setSelectedFilter("all"); }}>清除筛选</Button> : <Button variant="primary" icon={<Icon name={icons.add} />} onClick={onNew}>新建论文</Button>}
         </div> : null}
         </>}
       </main>

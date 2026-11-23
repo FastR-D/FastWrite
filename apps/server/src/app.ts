@@ -679,6 +679,11 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     route("POST", "/api/auth/refresh", async (request) => { requireSameOrigin(request); return authResponse(await auth.refresh(request)); }),
     route("POST", "/api/auth/logout", async (request) => { await auth.logout(request); return new Response(null, { status: 204, headers: { "set-cookie": expiredRefreshCookie() } }); }),
     route("GET", "/api/auth/me", async (request) => json(principal(request, true)!.user)),
+    route("GET", "/api/admin/projects", async (request) => {
+      const actor = principal(request, true)!;
+      requireRole(actor.user, "platform_admin");
+      return json(workspaces.listProjects());
+    }),
     route("GET", "/api/admin/health", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); const state = database.snapshot(); return json({ users: state.users.length, activeSessions: state.sessions.filter((item) => !item.revokedAt && item.expiresAt > new Date().toISOString()).length, teams: state.teams.length, projects: state.projects.length, collaborationDocuments: state.collaborationDocuments.filter((item) => item.status === "active").length, pendingInvitations: state.invitations.filter((item) => !item.revokedAt && !item.acceptedAt && item.expiresAt > new Date().toISOString()).length, mail: mailDelivery.status(), postgres: agentSettings.postgresMirror?.() ?? { configured: false, healthy: false, failures: 0 }, jobs: { queued: state.jobs.filter((job) => job.status === "queued").length, running: state.jobs.filter((job) => job.status === "running").length, failed: state.jobs.filter((job) => job.status === "failed").length } }); }),
     route("GET", "/api/admin/postgres/compare", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); if (!agentSettings.postgresCompare) throw new ApiError(404, "postgres_not_configured", "PostgreSQL is not configured"); return json(await agentSettings.postgresCompare()); }),
     route("GET", "/api/admin/identity-providers", async (request) => { const actor = principal(request, true)!; requireAdminReadRole(actor.user); return json({ oidc: { configured: Boolean(oidc), ...(config.oidc ? { issuer: config.oidc.issuer, redirectUri: config.oidc.redirectUri, clientId: config.oidc.clientId } : {}) }, cas: { configured: Boolean(cas), ...(config.cas ? { serverUrl: config.cas.serverUrl, serviceUrl: config.cas.serviceUrl } : {}) }, local: { configured: true } }); }),
@@ -1066,7 +1071,8 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     route("GET", "/api/ctan-pkg/:packageName", async (_request, params) => texPackages.ctanPackageInfo(required(params, "packageName"))),
     route("GET", "/api/projects", async (request) => {
       const current = principal(request, false);
-      return json(!authEnabled || current?.user.platformRole === "platform_admin" ? workspaces.listProjects() : workspaces.listProjects().filter((project) => current && authorization.projectRole(current.user.id, project.id)));
+      if (!current) return json(authEnabled ? [] : workspaces.listProjects());
+      return json(authorization.relatedProjects(current.user.id, workspaces.listProjects()));
     }),
     route("POST", "/api/projects", async (request) => {
       const current = principal(request);

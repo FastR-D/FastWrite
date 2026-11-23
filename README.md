@@ -13,7 +13,7 @@ bun install
 bun run dev
 ```
 
-打开 <http://localhost:3002>。开发模式只监听这一个 HTTP 端口，页面、API 和 WebSocket 共用入口；Vite 通过本地 Unix socket 连接 API，保留热更新。请在仓库根目录启动，避免单独启动前端。`bun run dev` 自动进入专用开发管理员 `Admin (开发)`，可查看全部项目，并通过 `/admin` 查看平台全局信息。
+打开 <http://localhost:3002>。开发模式只监听这一个 HTTP 端口，页面、API 和 WebSocket 共用入口；Vite 通过本地 Unix socket 连接 API，保留热更新。请在仓库根目录启动，避免单独启动前端。`bun run dev` 自动进入专用开发管理员 `Admin (开发)`，可在工作区侧边栏的「全站项目」查看所有项目，并通过 `/admin` 查看平台全局信息。
 
 `bun run main` 启动相同的前后端开发服务，但使用正常登录流程并强制开启服务端认证；开发管理员的令牌在此模式下无效。两个命令使用相同的数据目录。首次运行 `main` 且没有正式管理员时，需要设置 `FASTWRITE_BOOTSTRAP_ADMIN_EMAIL` 和 `FASTWRITE_BOOTSTRAP_ADMIN_PASSWORD`（至少 12 位），之后使用该账号登录；开发管理员不计作正式管理员，也没有可用于正常登录的默认密码。
 

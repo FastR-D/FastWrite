@@ -49,14 +49,43 @@ try {
   await expect(page.getByRole('button', { name: '新增用户', exact: true })).toBeVisible();
   await page.screenshot({ path: join(output, 'users-mobile-390.png') });
   await page.setViewportSize({ width: 1440, height: 960 });
-  // Ordinary members never see the administration navigation.
   const member = await (await context.request.post(`${setup.origin}/api/auth/login`, { data: { email: 'browser-member@example.test', password: 'browser-member-test-password' } })).json();
+  const adminHeaders = { authorization: `Bearer ${admin.token}` };
+  const memberHeaders = { authorization: `Bearer ${member.token}` };
+  const adminProject = '管理员的个人论文';
+  const memberProject = '普通成员的个人论文';
+  for (const [headers, name] of [[adminHeaders, adminProject], [memberHeaders, memberProject]]) {
+    const response = await context.request.post(`${setup.origin}/api/projects`, { headers, data: { name } });
+    assert.equal(response.status(), 201);
+  }
+  await page.reload();
+  const projectNav = page.getByRole('navigation', { name: '项目来源' });
+  for (const label of [/全部项目/, /本地项目/]) {
+    await projectNav.getByRole('button', { name: label }).click();
+    await expect(page.getByRole('link', { name: new RegExp(adminProject) })).toBeVisible();
+    await expect(page.getByRole('link', { name: new RegExp(memberProject) })).toHaveCount(0);
+  }
+  await projectNav.getByRole('button', { name: /全站项目/ }).click();
+  await expect(page.getByRole('heading', { name: '全站项目', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: new RegExp(adminProject) })).toBeVisible();
+  await expect(page.getByRole('link', { name: new RegExp(memberProject) })).toBeVisible();
+  const denied = await context.request.get(`${setup.origin}/api/admin/projects`, { headers: memberHeaders });
+  assert.equal(denied.status(), 403);
+
   const memberContext = await browser.newContext({ serviceWorkers: 'block' });
   await memberContext.addInitScript(token => localStorage.setItem('fastwrite.session-token', token), member.token);
   const memberPage = await memberContext.newPage(); await memberPage.goto(`${setup.origin}/panel`);
   await expect(memberPage.getByRole('button', { name: '团队与协作', exact: true })).toBeVisible();
   await expect(memberPage.getByRole('button', { name: '用户管理', exact: true })).toHaveCount(0);
+  await expect(memberPage.getByRole('button', { name: /全站项目/ })).toHaveCount(0);
+  await expect(memberPage.getByRole('link', { name: new RegExp(memberProject) })).toBeVisible();
+  await expect(memberPage.getByRole('link', { name: new RegExp(adminProject) })).toHaveCount(0);
   await memberContext.close();
+  page.once('dialog', confirmation => confirmation.accept());
+  await page.getByRole('button', { name: `删除 ${memberProject}`, exact: true }).click();
+  await expect(page.getByRole('link', { name: new RegExp(memberProject) })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: new RegExp(adminProject) })).toBeVisible();
+  await projectNav.getByRole('button', { name: '用户管理', exact: true }).click();
   await row.getByRole('button', { name: '删除 修改后的用户', exact: true }).click();
   dialog = page.getByRole('dialog', { name: '删除用户', exact: true });
   await dialog.getByRole('textbox', { name: '操作原因（至少 8 个字符）' }).fill('浏览器验证删除测试用户');

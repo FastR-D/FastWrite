@@ -1,6 +1,6 @@
-import { normalizeWorkspacePath, type ProjectAclAction, type ProjectRole, type TeamRole } from "@fastwrite/shared";
+import { normalizeWorkspacePath, type PaperProject, type ProjectAclAction, type ProjectRole, type TeamRole } from "@fastwrite/shared";
 import { ApiError } from "../http";
-import type { JsonDatabase } from "../storage/database";
+import type { DatabaseState, JsonDatabase } from "../storage/database";
 import type { Principal } from "./auth-service";
 
 export type ProjectAction = "project:read" | "project:write" | "project:invite" | "project:manage" | "comment:write" | "compile:run" | "review:run" | "agent:propose" | "changeset:approve" | "harness:use" | "github:sync";
@@ -20,8 +20,17 @@ export class AuthorizationService {
   projectRole(userId: string, projectId: string): ProjectRole | undefined {
     const state = this.database.snapshot(); const project = state.projects.find((item) => item.id === projectId);
     if (!project) throw new ApiError(404, "project_not_found", "Project not found");
+    return this.resolveProjectRole(state, userId, project);
+  }
+
+  relatedProjects(userId: string, projects: PaperProject[]): PaperProject[] {
+    const state = this.database.snapshot();
+    return projects.filter(project => this.resolveProjectRole(state, userId, project));
+  }
+
+  private resolveProjectRole(state: DatabaseState, userId: string, project: PaperProject): ProjectRole | undefined {
     if (project.personalOwnerUserId === userId) return "owner";
-    const member = state.projectMembers.find((item) => item.projectId === projectId && item.userId === userId);
+    const member = state.projectMembers.find((item) => item.projectId === project.id && item.userId === userId);
     if (member) return member.role;
     if (project.teamId) {
       const teamMember = state.teamMembers.find((item) => item.teamId === project.teamId && item.userId === userId);

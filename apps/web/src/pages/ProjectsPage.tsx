@@ -8,64 +8,68 @@ import type {
   PublicationVenueOption,
   WritingProfile,
 } from "@fastwrite/shared";
-import { api } from "../api/client";
+import { api, ApiClientError } from "../api/client";
 import { ImportDialog } from "../components/import/ImportDialog";
 import { FastCASDialog } from "../components/FastCASDialog";
 import { Button, Checkbox, Dialog, Field, Icon, Link, Select, TextArea, TextField, ThemeToggle, icons } from "../components/ui";
 import { PublicationTargetPicker } from "../components/ui/PublicationTargetPicker";
 import { navigate, projectPath } from "../lib/navigation";
-import { ProjectBrowser } from "../components/projects/ProjectBrowser";
+import { ProjectBrowser, type ProjectListState } from "../components/projects/ProjectBrowser";
 import styles from "./ProjectsPage.module.css";
+
+type ProjectAccount = Awaited<ReturnType<typeof api.auth.me>>;
+const initialProjectList: ProjectListState = { projects: [], loading: true, error: "" };
 
 export function ProjectsPage() {
   const invitationToken = new URLSearchParams(window.location.search).get(
     "invite",
   );
-  const [projects, setProjects] = useState<PaperProject[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [relatedProjects, setRelatedProjects] = useState(initialProjectList);
+  const [siteProjects, setSiteProjects] = useState(initialProjectList);
+  const [projectListRevision, setProjectListRevision] = useState(0);
+  const [deleteError, setDeleteError] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [fastcasOpen, setFastcasOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [account, setAccount] = useState<{
-    displayName: string;
-    emailNormalized: string;
-    platformRole?: string;
-    id?: string;
-  } | null>(null);
+  const [account, setAccount] = useState<ProjectAccount | null>(null);
+  const accountId = account?.id;
+  const isPlatformAdmin = account?.platformRole === "platform_admin";
   const [invitationState, setInvitationState] = useState<
     "idle" | "accepting" | "accepted" | "error"
   >(invitationToken ? "idle" : "idle");
   const [invitationError, setInvitationError] = useState("");
 
-  const loadProjects = useCallback(async (signal?: AbortSignal) => {
-    if (!localStorage.getItem("fastwrite.session-token")) {
-      setProjects([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      setProjects(await api.projects.list(signal));
-    } catch (loadError) {
-      if ((loadError as DOMException).name !== "AbortError")
-        setError(
-          userFacingError(loadError, "无法加载项目"),
-        );
-    } finally {
-      setLoading(false);
-    }
+  const refreshProjects = useCallback(() => {
+    setDeleteError("");
+    setProjectListRevision(revision => revision + 1);
   }, []);
 
   useEffect(() => {
+    if (!accountId) return;
     const controller = new AbortController();
-    void loadProjects(controller.signal);
+    const load = async (list: typeof api.projects.list, setList: typeof setRelatedProjects) => {
+      setList(current => ({ ...current, loading: true, error: "" }));
+      try {
+        const projects = await list(controller.signal);
+        if (!controller.signal.aborted) setList({ projects, loading: false, error: "" });
+      } catch (failure) {
+        if (!controller.signal.aborted) {
+          const accessDenied = failure instanceof ApiClientError && (failure.status === 401 || failure.status === 403);
+          setList(current => ({
+            projects: accessDenied ? [] : current.projects,
+            loading: false,
+            error: userFacingError(failure, "无法加载项目"),
+          }));
+        }
+      }
+    };
+    void load(api.projects.list, setRelatedProjects);
+    if (isPlatformAdmin) void load(api.admin.projects, setSiteProjects);
     return () => controller.abort();
-  }, [loadProjects]);
+  }, [accountId, isPlatformAdmin, projectListRevision]);
   useEffect(() => {
     if (!localStorage.getItem("fastwrite.session-token")) return;
     api.auth
@@ -88,14 +92,14 @@ export function ProjectsPage() {
       await api.invitations.accept(invitationToken);
       setInvitationState("accepted");
       window.history.replaceState({}, "", "/panel");
-      await loadProjects();
+      refreshProjects();
     } catch (failure) {
       setInvitationState("error");
       setInvitationError(
         userFacingError(failure, "无法接受邀请"),
       );
     }
-  }, [account, invitationState, invitationToken, loadProjects]);
+  }, [account, invitationState, invitationToken, refreshProjects]);
 
   useEffect(() => {
     if (account && invitationToken) void acceptInvitation();
@@ -111,7 +115,6 @@ export function ProjectsPage() {
           onAuthenticated={(next) => {
             setAccount(next);
             setAccountOpen(false);
-            void loadProjects();
           }}
         />
       </>
@@ -123,12 +126,12 @@ export function ProjectsPage() {
   const deleteProject = async (project: PaperProject) => {
     if (!window.confirm(`将项目“${project.name}”移入回收站？`)) return;
     setDeleting(project.id);
-    setError("");
+    setDeleteError("");
     try {
       await api.projects.delete(project.id);
-      await loadProjects();
+      refreshProjects();
     } catch (failure) {
-      setError(
+      setDeleteError(
         userFacingError(failure, "无法删除项目"),
       );
     } finally {
@@ -163,7 +166,9 @@ export function ProjectsPage() {
                 ? void api.auth.logout().finally(() => {
                     localStorage.removeItem("fastwrite.session-token");
                     setAccount(null);
-                    void loadProjects();
+                    setRelatedProjects(initialProjectList);
+                    setSiteProjects(initialProjectList);
+                    setDeleteError("");
                   })
                 : setAccountOpen(true)
             }
@@ -176,17 +181,17 @@ export function ProjectsPage() {
       </header>
       <FastCASDialog open={fastcasOpen} onClose={() => setFastcasOpen(false)} />
       <ProjectBrowser
-        canManageUsers={account?.platformRole === "platform_admin"}
-        currentUserId={account?.id}
-        projects={projects}
-        loading={loading}
-        error={error}
+        canManageUsers={isPlatformAdmin}
+        currentUserId={account.id}
+        relatedProjects={relatedProjects}
+        siteProjects={isPlatformAdmin ? siteProjects : undefined}
+        deleteError={deleteError}
         deleting={deleting}
         onNew={() => setNewOpen(true)}
         onImport={() => setImportOpen(true)}
-        onRetry={() => void loadProjects()}
+        onRetry={refreshProjects}
         onDelete={(project) => void deleteProject(project)}
-        onUpdated={updated => setProjects(current => current.map(project => project.id === updated.id ? updated : project))}
+        onUpdated={refreshProjects}
         notice={invitationToken ? (
           <div
             className={invitationState === "error" ? "page-error" : "form-notice"}
@@ -214,7 +219,6 @@ export function ProjectsPage() {
         onAuthenticated={(next) => {
           setAccount(next);
           setAccountOpen(false);
-          void loadProjects();
         }}
       />
       <NotificationsDialog
@@ -232,10 +236,7 @@ function AccountDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  onAuthenticated: (user: {
-    displayName: string;
-    emailNormalized: string;
-  }) => void;
+  onAuthenticated: (user: ProjectAccount) => void;
 }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");

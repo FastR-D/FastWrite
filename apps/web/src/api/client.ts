@@ -240,6 +240,7 @@ export const api = {
     logout: () => request<void>("/api/auth/logout", { method: "POST" })
   },
   admin: {
+    projects: (signal?: AbortSignal) => request<PaperProject[]>("/api/admin/projects", signal ? { signal } : undefined),
     health: () => request<{ users: number; activeSessions: number; teams: number; projects: number; collaborationDocuments: number; pendingInvitations: number; mail?: { configured: boolean; pending: number; sent: number; failed: number }; postgres?: { configured: boolean; healthy: boolean; failures: number; lastError?: string }; jobs?: { queued: number; running: number; failed: number } }>("/api/admin/health"),
     identityProviders: () => request<{ oidc: { configured: boolean; issuer?: string; redirectUri?: string; clientId?: string }; cas: { configured: boolean; serverUrl?: string; serviceUrl?: string }; local: { configured: boolean } }>("/api/admin/identity-providers"),
     users: () => request<Array<{ id: string; emailNormalized: string; localLoginId?: string; displayName: string; platformRole: string; status: string; createdAt: string; updatedAt: string; activeSessionCount: number }>>("/api/admin/users"),
