@@ -1,0 +1,331 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar h2 {
+  margin: 0 auto 0 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.panelIcon {
+  display: grid;
+  flex: 0 0 25px;
+  height: 25px;
+  place-items: center;
+  border-radius: var(--fw-radius-surface);
+  color: var(--blue-700);
+  background: var(--blue-50);
+}
+
+.panel .iconAction {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.composer {
+  display: grid;
+  gap: 7px;
+  padding: 10px 10px 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.composer .commitInput {
+  min-height: 51px;
+  border-color: var(--border);
+  background: var(--slate-50);
+  padding: 7px 8px;
+  font-size: 12px;
+}
+
+.composer .commitInput:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+.composer .commitButton {
+  width: 100%;
+  min-height: 28px;
+  justify-content: center;
+}
+
+.error {
+  margin: 0;
+  color: var(--red-700);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 3px 0 10px;
+}
+
+.group + .group,
+.scroll > .group {
+  border-top: 1px solid var(--border);
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  min-height: 31px;
+  gap: 5px;
+  padding: 1px 7px 1px 6px;
+}
+
+.panel .disclosure {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 0 3px;
+  color: var(--text-secondary);
+}
+
+.disclosure strong {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 660;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 20px;
+  text-align: center;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  background: var(--slate-100);
+}
+
+.panel .fileRow,
+.commitRow {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  position: relative;
+  border-radius: var(--fw-radius-control);
+  margin: 0 5px;
+}
+
+.fileRow:hover,
+.fileRow:focus-within,
+.commitRow:hover,
+.commitRow:focus-within {
+  background: var(--surface-hover);
+}
+
+.panel .fileRow.selectedRow,
+.commitRow[data-selected] {
+  background: var(--blue-50);
+  box-shadow: inset 2px 0 var(--blue-500);
+}
+
+.panel :is(.fileOpen, .commitOpen) {
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-start;
+  text-align: left;
+  font-weight: 400;
+  background: transparent;
+}
+
+.panel :is(.fileOpen, .commitOpen, .disclosure) > span:first-child {
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+.panel .fileOpen {
+  position: relative;
+  padding: 0 4px 0 8px;
+  min-height: 30px;
+}
+
+.fileIcon {
+  flex: 0 0 auto;
+  color: var(--blue-600);
+}
+
+.fileLabel {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.fileName,
+.directory,
+.commitSubject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileName {
+  font-size: 12px;
+}
+
+.directory {
+  flex: 0 2 auto;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.fileActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 1px;
+}
+
+.statusMarker {
+  display: grid;
+  flex: 0 0 21px;
+  place-items: center;
+  color: var(--text-secondary);
+  font: 650 11px var(--fw-font-mono);
+}
+
+.statusMarker[data-status="A"],
+.statusMarker[data-status="U"] { color: var(--green-600); }
+.statusMarker[data-status="D"] { color: var(--red-600); }
+.statusMarker[data-status="R"],
+.statusMarker[data-status="T"] { color: var(--blue-700); }
+.statusMarker[data-status="M"],
+.statusMarker[data-status="!"] { color: var(--amber-700); }
+
+.clean,
+.notice {
+  margin: 0;
+  padding: 9px 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.clean {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 36px;
+}
+
+.historyIcon {
+  margin-right: 5px;
+  color: var(--text-muted);
+}
+
+.commit {
+  position: relative;
+}
+
+.commit::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 18px;
+  border-left: 1px solid var(--border);
+}
+
+.commit:first-child::before { top: 15px; }
+.commit:last-child::before { height: 15px; }
+
+.commitRow {
+  min-height: 40px;
+  gap: 1px;
+  padding-right: 2px;
+}
+
+.panel .commitOpen {
+  gap: 8px;
+  height: auto;
+  min-height: 40px;
+  padding: 4px 0 4px 8px;
+}
+
+.commitNode {
+  align-self: flex-start;
+  flex: 0 0 9px;
+  height: 9px;
+  margin-top: 6px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.headCommit .commitNode {
+  border-color: var(--blue-600);
+  background: var(--blue-600);
+  box-shadow: 0 0 0 2px var(--blue-50);
+}
+
+.commitLabel {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.commitMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.commitMeta code {
+  font: inherit;
+  font-family: var(--fw-font-mono);
+}
+
+.head {
+  padding: 0 4px;
+  border-radius: 3px;
+  color: var(--blue-700);
+  background: var(--blue-50);
+  font: 650 9px/15px var(--fw-font-mono);
+}
+
+.commitDetails {
+  margin: 1px 0 3px 19px;
+}
+
+.panel .moreHistory {
+  margin: 4px 6px 0;
+}

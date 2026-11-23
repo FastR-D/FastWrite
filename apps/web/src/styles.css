@@ -993,43 +993,7 @@ code { font-family: var(--fw-font-mono); }
 .activity-badge { position: absolute; right: 0; bottom: 1px; min-width: 16px; height: 16px; display: grid; place-items: center; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); padding: 0 4px; font-size: 10px; line-height: 16px; }
 .workspace-sidebar .sidebar-section, .workbench-git { flex: 1; min-height: 0; }
 .workbench-outline { height: 100%; max-height: none; }
-.workbench-git { overflow: auto; }
-.source-control-view > p, .source-control-view > label { margin: 10px; font-size: 12px; }
-.source-control-history { display: grid; gap: 2px; padding: 6px 10px 10px; border-bottom: 1px solid var(--border); }
-.source-control-history button { display: grid; height: auto; justify-content: stretch; gap: 2px; text-align: left; padding: 7px 8px; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
-.source-control-history button:hover, .source-control-history button:focus-visible { background: var(--surface-hover); outline: 2px solid var(--focus); outline-offset: -2px; }
-.source-control-history strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.source-control-history small { color: var(--muted); font-size: 11px; }
-/*
- * The Source Control body: commit box over the Changes / Staged / Merge groups.
- *
- * Only layout and the marker colours live here. The commit field, its button
- * and the row's actions are library components, and their appearance is theirs
- * — a rule here at equal specificity loses to a module anyway, so anything
- * added must be scoped to a container to have an effect.
- */
-.working-changes { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
-.working-group { display: flex; flex-direction: column; gap: 2px; }
-.working-group__header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.working-group__header h3 { margin: 0; color: var(--text-secondary); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
-.working-group__header h3 span { font-weight: 400; }
-.working-group__files { display: flex; flex-direction: column; }
-/*
- * The row is one flex line: the open control takes the slack so its hover
- * surface spans the width, and the actions sit outside it at a fixed size.
- */
-.working-file { display: flex; align-items: center; gap: 2px; }
-.working-file .working-file__open { flex: 1; min-width: 0; justify-content: flex-start; gap: 5px; padding: 0 6px; font-weight: 400; }
-.working-file__marker { flex: 0 0 auto; width: 11px; color: var(--text-muted); font: 700 11px monospace; }
-.working-file__path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.working-file__note { flex: 0 0 auto; color: var(--text-muted); font-size: 10px; }
-.working-file__actions { display: flex; flex: 0 0 auto; }
-/* VSCode's SCM colours, on the tokens this file already has for both themes. */
-.working-file__marker--A, .working-file__marker--U { color: var(--green-600); }
-.working-file__marker--D { color: var(--red-600); }
-.working-file__marker--R, .working-file__marker--T { color: var(--blue-600); }
-/* Escaped: `!` is not a valid ident character, so the selector needs it. */
-.working-file__marker--\! { color: var(--amber-700); }
+.workbench-git { overflow: hidden; }
 .workbench-actions { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; padding: 6px; border-bottom: 1px solid var(--border); font-size: 11px; }
 .workbench-actions button:not(.vscrui-button), .workbench-actions select { border: 1px solid var(--border); background: var(--surface); color: inherit; padding: 5px; border-radius: 3px; cursor: pointer; }
 .source-editor-container, .workspace-diff { height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; flex: 1; overflow: hidden; }

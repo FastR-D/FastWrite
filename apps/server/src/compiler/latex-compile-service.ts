@@ -79,12 +79,13 @@ export class LatexCompileService {
       const mainDocument = normalizeWorkspacePath(snapshot.mainDocument);
       const identity = { projectVersion: snapshot.projectVersion, snapshotId, compiler: settings.engine, environmentId: settings.environmentId };
       await mkdir(output, { recursive: true });
-      const compilerOutput = environment.image || this.policy.mode === "bubblewrap" ? "/workspace/output" : output;
+      const useBubblewrap = !environment.image && this.policy.mode === "bubblewrap";
+      const compilerOutput = environment.image || useBubblewrap ? "/workspace/output" : output;
       const argumentsList = executable.endsWith("latexmk") || executable.includes("latexmk")
         ? [executable, "-norc", engineFlag(settings.engine), "-no-shell-escape", "-file-line-error", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-outdir=${compilerOutput}`, `-auxdir=${compilerOutput}`, `./${mainDocument}`]
         : [executable, "-no-shell-escape", "-file-line-error", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", `-output-directory=${compilerOutput}`, `./${mainDocument}`];
       if (environment.image) containerName = `fastwrite-compile-${snapshotId}`;
-      const command = environment.image ? [Bun.which("docker")!, "run", "--rm", "--name", containerName!, "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--memory", `${this.policy.memoryMb}m`, "--cpus", "2", "--pids-limit", String(this.policy.pids), "--user", `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`, "--mount", `type=bind,src=${source},dst=/workspace/source,readonly`, "--mount", `type=bind,src=${output},dst=/workspace/output`, "--tmpfs", "/tmp:rw,nosuid,nodev,size=128m", "--env", "HOME=/tmp", "--env", "openin_any=p", "--env", "openout_any=p", "--env", "shell_escape=f", "--workdir", "/workspace/source", "--entrypoint", "latexmk", environment.image, ...argumentsList.slice(1)] : this.policy.mode === "bubblewrap" ? this.bubblewrapCommand(argumentsList, source, output, await this.environments.roots(settings.environmentId)) : argumentsList;
+      const command = environment.image ? [Bun.which("docker")!, "run", "--rm", "--name", containerName!, "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--memory", `${this.policy.memoryMb}m`, "--cpus", "2", "--pids-limit", String(this.policy.pids), "--user", `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`, "--mount", `type=bind,src=${source},dst=/workspace/source,readonly`, "--mount", `type=bind,src=${output},dst=/workspace/output`, "--tmpfs", "/tmp:rw,nosuid,nodev,size=128m", "--env", "HOME=/tmp", "--env", "openin_any=p", "--env", "openout_any=p", "--env", "shell_escape=f", "--workdir", "/workspace/source", "--entrypoint", "latexmk", environment.image, ...argumentsList.slice(1)] : useBubblewrap ? this.bubblewrapCommand(argumentsList, source, output, await this.environments.roots(settings.environmentId)) : argumentsList;
       const { exitCode, log } = await runCompilerProcess(command, { cwd: source, ...(signal ? { signal } : {}), timeoutMs: this.policy.timeoutMs, env: { ...compileEnvironment(compilerOutput), PATH: this.environments.path(settings.environmentId) } });
       const workspacePaths = await listWorkspacePaths(source);
       const finalLogPath = await findOutputFile(output, `${basename(mainDocument, ".tex")}.log`);
@@ -101,7 +102,7 @@ export class LatexCompileService {
       const stem = basename(mainDocument, ".tex");
       const pdfPath = await findOutputFile(output, `${stem}.pdf`);
       const syncPath = await findOutputFile(output, `${stem}.synctex.gz`);
-      if (exitCode !== 0) return record({ ...identity, diagnostics, success: false, engine: "server", log, error: describeLatexFailure(exitCode, log), workspacePaths });
+      if (exitCode !== 0) return record({ ...identity, diagnostics, success: false, engine: "server", log, error: describeLatexFailure(exitCode, log, useBubblewrap), workspacePaths });
       const pdf = pdfPath ? await readFile(pdfPath).catch(() => null) : null;
       if (!pdf) return record({ ...identity, diagnostics, success: false, engine: "server", log, error: "LaTeX 编译结束，但未生成 PDF。", workspacePaths });
       const syncTexData = syncPath ? await readFile(syncPath).then((data) => promisify(gunzip)(data).then((value) => value.toString("utf8"))).catch(() => undefined) : undefined;
@@ -140,7 +141,8 @@ async function findOutputFile(root: string, filename: string): Promise<string | 
   return null;
 }
 
-function describeLatexFailure(exitCode: number, log: string): string {
+function describeLatexFailure(exitCode: number, log: string, useBubblewrap: boolean): string {
+  if (useBubblewrap && log.trimStart().startsWith("bwrap:")) return "服务器编译沙箱启动失败，请联系管理员检查 Bubblewrap 的运行权限。";
   const missingPackage = /File [`']([^`']+\.sty)[`'] not found\./.exec(log)?.[1];
   if (missingPackage) return `本地 LaTeX 缺少 ${missingPackage}，请在此设备上安装对应的 TeX 包后重新编译。`;
   return `本地 LaTeX 编译失败（退出码 ${exitCode}），请查看编译日志。`;

@@ -22,6 +22,8 @@ required_commands=(latexmk pdflatex xelatex lualatex biber bibtex makeindex pand
 missing=()
 for command_name in "${required_commands[@]}"; do command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name"); done
 missing_assets=()
+kpsewhich ctex.sty >/dev/null 2>&1 || missing_assets+=("ctex.sty")
+kpsewhich FandolSong-Regular.otf >/dev/null 2>&1 || missing_assets+=("FandolSong-Regular.otf")
 kpsewhich fontawesome6.sty >/dev/null 2>&1 || missing_assets+=("fontawesome6.sty")
 [[ "$(fc-match -f '%{family}\n' JuliaMono 2>/dev/null | head -1)" == *JuliaMono* ]] || missing_assets+=("JuliaMono")
 if ! command -v Rscript >/dev/null 2>&1 || ! Rscript -e 'quit(status=ifelse(requireNamespace("rmarkdown", quietly=TRUE),0,1))' >/dev/null 2>&1; then
@@ -42,7 +44,7 @@ if ((available_kib < 8 * 1024 * 1024)); then echo "Refusing installation: less t
 
 if [[ "$PACKAGE_FAMILY" == *debian* || "$PACKAGE_FAMILY" == *ubuntu* ]]; then
   sudo apt-get update
-  tex_packages=(texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra texlive-pictures texlive-science texlive-publishers texlive-luatex texlive-xetex)
+  tex_packages=(texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra texlive-pictures texlive-science texlive-publishers texlive-luatex texlive-xetex texlive-lang-chinese)
   ((INSTALL_FULL)) && tex_packages=(texlive-full)
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     "${tex_packages[@]}" latexmk biber pandoc r-base r-cran-rmarkdown \

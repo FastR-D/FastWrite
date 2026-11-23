@@ -1,59 +1,56 @@
 import type { WorkingFile } from "@fastwrite/shared";
-import { Button, Icon, IconButton, icons } from "../ui";
+import { Button, Icon, IconButton, ListRow, icons } from "../ui";
+import styles from "./SourceControlView.module.css";
 
-/**
- * The marker a row shows. Untracked is `U` because that is what VSCode shows
- * and what users read; git's own short format uses `??` for untracked and `U`
- * for unmerged, so the two conventions collide — this component resolves the
- * collision in favour of the one people recognise, and gives conflicts `!`
- * instead.
- */
-export function fileMarker(file: WorkingFile): string {
-  if (file.conflicted) return "!";
-  if (file.untracked) return "U";
-  return file.unstaged ?? file.staged ?? "M";
+export type ChangeGroup = "changes" | "staged" | "merge";
+
+export const gitFileStatus: Record<string, string> = {
+  M: "已修改",
+  A: "已添加",
+  D: "已删除",
+  U: "未跟踪",
+  R: "已重命名",
+  T: "类型变更",
+  "!": "冲突"
+};
+
+export function GitFileLabel({ path, oldPath }: { path: string; oldPath?: string | undefined }) {
+  const boundary = path.lastIndexOf("/");
+  const name = path.slice(boundary + 1);
+  const directory = boundary === -1 ? "" : path.slice(0, boundary);
+  const icon = /\.(tex|sty|cls|bib)$/i.test(name) ? icons.fileCode : /\.(png|jpe?g|svg|webp)$/i.test(name) ? icons.fileMedia : icons.fileText;
+
+  return <>
+    <Icon name={icon} size={15} className={styles.fileIcon ?? ""} aria-hidden />
+    <span className={styles.fileLabel}>
+      <span className={styles.fileName}>{oldPath ? oldPath.split("/").pop() + " → " : ""}{name}</span>
+      {directory ? <small className={styles.directory}>{directory}</small> : null}
+    </span>
+  </>;
 }
 
-export interface WorkingFileRowProps {
+export function WorkingFileRow({ file, group, selected, busy, onOpen, onStage, onUnstage, onDiscard }: {
   file: WorkingFile;
-  /** Which group is rendering it — decides which actions are offered. */
-  group: "changes" | "staged" | "merge";
+  group: ChangeGroup;
+  selected: boolean;
+  busy: boolean;
   onOpen: () => void;
-  onStage?: () => void;
-  onUnstage?: () => void;
-  onDiscard?: () => void;
-}
+  onStage?: (() => void) | undefined;
+  onUnstage?: (() => void) | undefined;
+  onDiscard?: (() => void) | undefined;
+}) {
+  const pathLabel = file.oldPath ? file.oldPath + " → " + file.path : file.path;
+  const marker = group === "merge" ? "!" : group === "staged" ? file.staged ?? "M" : file.untracked ? "U" : file.unstaged ?? "M";
 
-export function WorkingFileRow({ file, group, onOpen, onStage, onUnstage, onDiscard }: WorkingFileRowProps) {
-  const label = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
-  const marker = fileMarker(file);
-  return (
-    <div className={`working-file working-file--${group}`}>
-      {/*
-        The row's own control is a library Button for the same reason its
-        actions are: this file sits outside components/ui, where the raw-control
-        guard forbids the bare element. Ghost, because the row is a list item
-        rather than a toolbar action.
-      */}
-      <Button variant="ghost" size="small" className="working-file__open" onClick={onOpen} title={label}>
-        <b className={`working-file__marker working-file__marker--${marker}`} aria-hidden="true">{marker}</b>
-        <span className="working-file__path">{label}</span>
-        {file.conflicted ? <span className="working-file__note">冲突</span> : null}
-      </Button>
-      {/*
-        Actions are real buttons rather than decorative icons on the row, so they
-        are reachable by Tab. A hover-only affordance is unreachable by keyboard,
-        and this list is the sidebar's primary control surface.
-
-        IconButton rather than Button with an Icon child: it is the library's
-        icon-only control, so the accessible name lands on both aria-label and
-        title in one place instead of being restated at each call site.
-      */}
-      <span className="working-file__actions">
-        {group === "changes" && onStage ? <IconButton label={`暂存 ${file.path}`} icon={<Icon name={icons.add} />} onClick={onStage} /> : null}
-        {group === "changes" && onDiscard ? <IconButton label={`放弃文件更改： ${file.path}`} icon={<Icon name={icons.discard} />} onClick={onDiscard} /> : null}
-        {group === "staged" && onUnstage ? <IconButton label={`取消暂存 ${file.path}`} icon={<Icon name={icons.discard} />} onClick={onUnstage} /> : null}
-      </span>
+  return <ListRow className={styles.fileRow + (selected ? " " + styles.selectedRow : "")}>
+    <Button size="small" variant="ghost" className={styles.fileOpen} aria-label={pathLabel} title={pathLabel} aria-pressed={selected} onClick={onOpen}>
+      <GitFileLabel path={file.path} oldPath={file.oldPath} />
+    </Button>
+    <div className={styles.fileActions}>
+      {onDiscard ? <IconButton className={styles.iconAction} label={"放弃文件更改： " + file.path} icon={<Icon name={icons.discard} size={13} />} disabled={busy} onClick={onDiscard} /> : null}
+      {onStage ? <IconButton className={styles.iconAction} label={"暂存 " + file.path} icon={<Icon name={icons.add} size={13} />} disabled={busy} onClick={onStage} /> : null}
+      {onUnstage ? <IconButton className={styles.iconAction} label={"取消暂存 " + file.path} icon={<Icon name={icons.remove} size={13} />} disabled={busy} onClick={onUnstage} /> : null}
     </div>
-  );
+    <span className={styles.statusMarker} data-status={marker} aria-label={gitFileStatus[marker]} title={gitFileStatus[marker]}>{marker}</span>
+  </ListRow>;
 }

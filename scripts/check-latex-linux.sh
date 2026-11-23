@@ -6,6 +6,9 @@ check_command() { if command -v "$1" >/dev/null 2>&1; then printf 'PASS command 
 for command_name in latexmk pdflatex xelatex lualatex biber bibtex makeindex pandoc Rscript fc-cache; do check_command "$command_name"; done
 
 if command -v pdflatex >/dev/null 2>&1; then pdflatex --version | head -1; fi
+for asset in ctex.sty FandolSong-Regular.otf; do
+  if kpsewhich "$asset" >/dev/null 2>&1; then echo "PASS TeX asset $asset"; else echo "FAIL TeX asset $asset"; failed=1; fi
+done
 if kpsewhich fontawesome6.sty >/dev/null 2>&1; then echo "PASS TeX package fontawesome6"; else echo "FAIL TeX package fontawesome6"; failed=1; fi
 if [[ "$(fc-match -f '%{family}\n' JuliaMono 2>/dev/null | head -1)" == *JuliaMono* ]]; then echo "PASS font JuliaMono"; else echo "FAIL font JuliaMono"; failed=1; fi
 if command -v Rscript >/dev/null 2>&1 && Rscript -e 'quit(status=ifelse(requireNamespace("rmarkdown", quietly=TRUE),0,1))' >/dev/null 2>&1; then echo "PASS R package rmarkdown"; else echo "FAIL R package rmarkdown"; failed=1; fi

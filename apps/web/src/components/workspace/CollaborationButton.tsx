@@ -18,9 +18,13 @@ export function CollaborationButton({ registry, path }: { registry: DocumentRegi
   const entry = path ? registry.get(path) : undefined;
   const enabled = entry?.mode === "collaboration";
   const provider = entry?.collaboration;
-  const peers = provider?.peers().length ?? 0;
+  const connected = provider?.connected ?? false;
+  const peers = connected ? provider?.peers().length ?? 0 : 0;
   const states = { initializing: "正在初始化", cached: "已缓存", connecting: "正在连接", synced: "已连接", persisted: "已写入文件", offline: "离线，已保留本地更改", conflict: "同步冲突" };
-  const status = error || (provider?.error ? userFacingError(provider.error) : "") || (enabled ? states[provider?.state ?? "initializing"] : "协作同步当前文件");
+  const state = provider?.state ?? "initializing";
+  const connecting = state === "initializing" || state === "connecting";
+  const label = !enabled ? "连接协作" : connected ? "协作已开启" : state === "conflict" ? "协作需重连" : connecting ? "正在连接协作" : "协作离线";
+  const status = error || (provider?.error ? userFacingError(provider.error) : "") || (enabled ? states[connected || connecting || state === "conflict" ? state : "offline"] : "协作同步当前文件");
   const toggle = async () => {
     if (!entry || busy) return;
     setBusy(true);
@@ -37,7 +41,7 @@ export function CollaborationButton({ registry, path }: { registry: DocumentRegi
 
   return <>
     <Button size="small" variant="secondary" icon={<Icon name={icons.personAdd} />} aria-pressed={enabled} disabled={!entry?.access?.realtime || busy} loading={busy} title={status} onClick={() => { void toggle(); }}>
-      {enabled ? (provider?.state === "offline" ? "协作离线" : provider?.state === "conflict" ? "协作需重连" : "协作已开启") : "连接协作"}{peers ? ` · ${peers}` : ""}
+      {label}{peers ? ` · ${peers}` : ""}
     </Button>
     {error ? <span role="alert">{error}</span> : null}
   </>;

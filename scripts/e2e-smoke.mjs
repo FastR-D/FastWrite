@@ -8,7 +8,8 @@ let browser, page;
 const errors = [];
 try {
   browser = await launchTestBrowser();
-  const context = await browser.newContext({ viewport: { width: 1440, height: 960 } }); page = await context.newPage();
+  // Keep the fixture's script and API routes visible to Playwright interception.
+  const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, serviceWorkers: "block" }); page = await context.newPage();
   page.on("pageerror", error => errors.push(error.message));
   const accessibility = async () => {
     const url = setup.origin + "/__e2e__/axe.min.js";

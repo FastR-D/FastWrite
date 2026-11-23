@@ -46,6 +46,19 @@ function projectId(): string {
   return `paper_${crypto.randomUUID()}`;
 }
 
+const latexTitleEscapes: Record<string, string> = {
+  "\\": "\\textbackslash{}",
+  "{": "\\{",
+  "}": "\\}",
+  "#": "\\#",
+  "$": "\\$",
+  "%": "\\%",
+  "&": "\\&",
+  "_": "\\_",
+  "^": "\\textasciicircum{}",
+  "~": "\\textasciitilde{}"
+};
+
 export interface ProjectOwner { userId: string; teamId?: string; }
 
 export class WorkspaceService {
@@ -92,9 +105,14 @@ export class WorkspaceService {
     const id = projectId();
     const root = join(this.projectsDirectory, id, "workspace");
     await mkdir(dirname(join(root, normalizedMain)), { recursive: true });
-    const template = `\\documentclass{article}\n\\title{${name.replace(/[{}\\]/g, "")} }\n\\author{}\n\\begin{document}\n\\maketitle\n\n\\section{Introduction}\n\n\\end{document}\n`;
+    // Fullwidth punctuation also needs CJK typesetting in otherwise Latin titles.
+    const needsCjk = /\p{Script=Han}|[\u3000-\u303f\uff01-\uff60\uffe0-\uffe6]/u.test(name);
+    const compilation: CompileSettings | undefined = needsCjk ? { engine: "xelatex", environmentId: "system" } : undefined;
+    const cjkPreamble = needsCjk ? "\\usepackage[UTF8,scheme=plain,fontset=fandol]{ctex}\n" : "";
+    const title = name.trim().replace(/[\r\n]+/g, " ").replace(/[\\{}#$%&_~^]/g, char => latexTitleEscapes[char]!);
+    const template = `\\documentclass{article}\n${cjkPreamble}\\title{${title}}\n\\author{}\n\\begin{document}\n\\maketitle\n\n\\section{Introduction}\n\n\\end{document}\n`;
     await writeFile(join(root, normalizedMain), template, "utf8");
-    return this.registerProject(id, name, normalizedMain, venue, { type: "local", displayName: "New paper" }, [normalizedMain], publicationTarget, owner);
+    return this.registerProject(id, name, normalizedMain, venue, { type: "local", displayName: "New paper" }, [normalizedMain], publicationTarget, owner, compilation);
   }
 
   async importStagingDirectory(input: {
@@ -566,7 +584,8 @@ export class WorkspaceService {
     source: ImportSource,
     files: string[],
     publicationTarget?: PublicationTarget,
-    owner?: ProjectOwner
+    owner?: ProjectOwner,
+    compilation?: CompileSettings
   ): Promise<PaperProject> {
     const timestamp = now();
     const skill = paperSkillForProfile(venue);
@@ -577,6 +596,7 @@ export class WorkspaceService {
       mainDocument,
       skill,
       ...(target ? { publicationTarget: target } : {}),
+      ...(compilation ? { compilation } : {}),
       source,
       createdAt: timestamp,
       updatedAt: timestamp,

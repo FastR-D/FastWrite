@@ -344,10 +344,17 @@ export class GitHistory {
   async side(projectDirectory: string, ref: string, requestedPath: string): Promise<HistoryFileSide> {
     const path = historyPath(requestedPath);
     if (ref === "empty") return { ref: "empty", path, exists: false, binary: false, size: 0 };
-    const oid = await this.resolveCommit(projectDirectory, ref);
-    const entry = (await this.tree(projectDirectory, oid)).find(item => item.path === path);
-    if (!entry) return { ref: oid, path, exists: false, binary: false, size: 0 };
-    const bytes = await runGitBytes([`--git-dir=${join(projectDirectory, "history.git")}`, "cat-file", "blob", entry.oid]);
+    const oid = ref === "index" ? ref : await this.resolveCommit(projectDirectory, ref);
+    const context = [`--git-dir=${join(projectDirectory, "history.git")}`];
+    const blob = oid === "index"
+      ? (await runGitOutput([...context, "--literal-pathspecs", "ls-files", "--stage", "-z", "--", path])).split("\0").flatMap(record => {
+        const separator = record.indexOf("\t");
+        const [, hash, stage] = record.slice(0, separator).split(" ");
+        return stage === "0" && record.slice(separator + 1) === path ? [hash] : [];
+      })[0]
+      : (await this.tree(projectDirectory, oid)).find(item => item.path === path)?.oid;
+    if (!blob) return { ref: oid, path, exists: false, binary: false, size: 0 };
+    const bytes = await runGitBytes([...context, "cat-file", "blob", blob]);
     let content: string | undefined;
     try { if (!bytes.includes(0)) content = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { /* Binary is represented by metadata. */ }
     return { ref: oid, path, exists: true, binary: content === undefined, size: bytes.length, ...(content !== undefined ? { content } : {}) };

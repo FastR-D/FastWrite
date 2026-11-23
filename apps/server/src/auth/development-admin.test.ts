@@ -32,7 +32,8 @@ test("development administrator has global access without reusable login credent
   const member = await registration.json() as { token: string };
   const project = await app(new Request("http://localhost/api/projects", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${member.token}` }, body: JSON.stringify({ name: "Member private project", mainDocument: "main.tex", venue: "general" }) }));
   expect(project.status).toBe(201);
-  const projects = await app(new Request("http://localhost/api/projects", { headers: { authorization: `Bearer ${token}` } }));
+  const projects = await app(new Request("http://localhost/api/admin/projects", { headers: { authorization: `Bearer ${token}` } }));
+  expect(projects.status).toBe(200);
   expect((await projects.json() as Array<{ name: string }>).map(project => project.name)).toContain("Member private project");
   const main = await createApplication(directory, { developmentAdmin: false, features: { serverAuth: true }, bootstrapAdmin: { email: "real-admin@example.test", password: "unique-real-admin-password" } });
   expect((await main(new Request("http://localhost/api/auth/dev-session", { method: "POST" }))).status).toBe(404);

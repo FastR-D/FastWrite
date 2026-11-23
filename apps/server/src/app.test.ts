@@ -2342,6 +2342,17 @@ describe("workspace API", () => {
     const staged = await (await request(`${base}/history/working-status`, { headers: ownerHeaders })).json() as WorkingStatus;
     expect(staged.files.find((file) => file.path === "main.tex")).toMatchObject({ staged: "M", unstaged: null });
 
+    const current = await (await request(`${base}/file?path=main.tex`, { headers: ownerHeaders })).json() as FileContentResponse;
+    await request(`${base}/file?path=main.tex`, {
+      method: "PUT", headers: ownerHeaders,
+      body: JSON.stringify({ content: "% third\n", baseVersion: current.file.version })
+    });
+    const compare = await request(`${base}/history-compare?baseRef=${staged.head}&targetRef=index&path=main.tex`, { headers: ownerHeaders });
+    expect(compare.status).toBe(200);
+    expect(await compare.json()).toMatchObject({ original: { content: "% first\n" }, modified: { ref: "index", content: "% second\n" } });
+    const index = await request(`${base}/history/index/side?path=main.tex`, { headers: ownerHeaders });
+    expect(await index.json()).toMatchObject({ content: "% second\n" });
+
     expect((await request(`${base}/history/unstage`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ paths: ["main.tex"] }) })).status).toBe(204);
     expect((await request(`${base}/history/stage`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ paths: ["main.tex"] }) })).status).toBe(204);
     expect((await request(`${base}/history/commit`, { method: "POST", headers: ownerHeaders, body: JSON.stringify({ message: "Edit main" }) })).status).toBe(201);

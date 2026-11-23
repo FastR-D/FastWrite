@@ -183,11 +183,11 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   const [resizing, setResizing] = useState<
     "sidebar" | "pdf" | "ai" | "outline" | null
   >(null);
-  const [panelCollapsed, setPanelCollapsed] = useStoredBoolean(`fastwrite.workbench-layout:${projectId}:bottom-collapsed`, false);
+  const [panelCollapsed, setPanelCollapsed] = useStoredBoolean(`fastwrite.workbench-layout:${projectId}:bottom-collapsed`, window.innerHeight < 640 || window.innerWidth < 540);
   const [bottomPanelTab, setBottomPanelTab] = useStoredString(`fastwrite.workbench-layout:${projectId}:bottom-tab`, "ai", ["ai", "problems", "output"] as const);
-  const [compactViewport, setCompactViewport] = useState(() => ({ sidebar: window.innerWidth < 760, pdf: window.innerWidth < 1080, panel: window.innerHeight < 640 || window.innerWidth < 540 }));
+  const [compactViewport, setCompactViewport] = useState(() => ({ sidebar: window.innerWidth < 760, pdf: window.innerWidth < 1080 }));
   useEffect(() => {
-    const adapt = () => setCompactViewport({ sidebar: window.innerWidth < 760, pdf: window.innerWidth < 1080, panel: window.innerHeight < 640 || window.innerWidth < 540 });
+    const adapt = () => setCompactViewport({ sidebar: window.innerWidth < 760, pdf: window.innerWidth < 1080 });
     adapt(); window.addEventListener("resize", adapt);
     return () => window.removeEventListener("resize", adapt);
   }, []);
@@ -671,7 +671,11 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
     setActiveSkill(null);
     setSettingsActive(false);
     const key = diffRequestKey(request);
-    setComparisonTabs(tabs => tabs.some(tab => tab.key === key) ? tabs : [...tabs, { key, request }]);
+    setComparisonTabs(tabs => {
+      if (!tabs.some(tab => tab.key === key)) return [...tabs, { key, request }];
+      if (request.baseRef === "index" || request.targetRef === "index") return tabs.map(tab => tab.key === key ? { key, request } : tab);
+      return tabs;
+    });
     setHistoryDiff(request);
     if (window.innerWidth < 1600 && diffPdfWidth.current === null) { diffPdfWidth.current = pdfWidth; setPdfWidth(0); }
   };
@@ -711,7 +715,6 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
   // Keep the activity bar and an explicitly selected view usable on narrow screens.
   const sidebarForcedCollapsed = false;
   const pdfForcedCollapsed = compactViewport.pdf;
-  const bottomPanelHidden = panelCollapsed || compactViewport.panel;
 
   return (
     <div className="workspace-page">
@@ -982,7 +985,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 </p>
               )}
             </section>
-            <div id="sidebar-git" hidden={sidebarView !== "git"} className="workbench-git"><SourceControlView registry={registry} projectId={projectId} version={project.version} selectedPath={selectedPath} onCompare={openHistoryDiff} onFlush={async () => {
+            <div id="sidebar-git" hidden={sidebarView !== "git"} className="workbench-git"><SourceControlView key={projectId} active={sidebarView === "git" && !sidebarForcedCollapsed && sidebarWidth > 0} projectId={projectId} version={project.version} selectedPath={selectedPath} mainDocument={project.mainDocument} activeDiff={historyDiff} onCompare={openHistoryDiff} onFlush={async () => {
               /*
                * Flush before every Git mutation, not just commit. `stage` copies
                * the on-disk content, and a `discard` is undone by a save that
@@ -1125,9 +1128,9 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
                 { id: "output", label: "输出" }
               ]}
             />
-            <Button variant="ghost" aria-expanded={!bottomPanelHidden} aria-controls="bottom-workbench-panel" onClick={() => setPanelCollapsed(!panelCollapsed)}>{bottomPanelHidden ? "显示面板" : "隐藏面板"}</Button>
+            <Button variant="ghost" aria-expanded={!panelCollapsed} aria-controls="bottom-workbench-panel" onClick={() => setPanelCollapsed(!panelCollapsed)}>{panelCollapsed ? "显示面板" : "隐藏面板"}</Button>
           </div>
-          <div id="bottom-workbench-panel" className="workbench-bottom-panel" style={{ height: aiHeight }} hidden={bottomPanelHidden}>
+          <div id="bottom-workbench-panel" className="workbench-bottom-panel" style={{ height: aiHeight }} hidden={panelCollapsed}>
           <PanelDivider
             label="调整底部面板大小"
             orientation="horizontal"
@@ -1246,7 +1249,7 @@ export function WorkspacePage({ projectId }: WorkspacePageProps) {
             </div>)}</div> : <div className="bottom-panel-empty"><Icon name={compileState.state === "error" ? icons.warning : icons.passFilled} /><span>{compileState.state === "error" ? "编译器未提供源文件位置。" : "编译项目后即可查看诊断信息。"}</span>{compileState.state === "error" ? <Button size="small" variant="ghost" onClick={() => setBottomPanelTab("output")}>查看编译输出</Button> : null}</div>}
           </div>
           <div className="bottom-panel-content bottom-panel-output" role="tabpanel" hidden={bottomPanelTab !== "output"}>
-            <header><Icon name={icons.filePdf} /><span>编译输出</span><small>{compileState.compiledVersion === null ? "尚未编译" : `工作区版本 ${compileState.compiledVersion}`}</small></header>
+            <header><Icon name={icons.filePdf} /><span>编译输出</span><small>{compileState.state === "error" ? "编译失败" : compileState.state === "compiling" || compileState.state === "loading" ? "正在编译" : compileState.compiledVersion === null ? "尚未编译" : `工作区版本 ${compileState.compiledVersion}`}</small></header>
             <pre>{compileState.log ? compileState.log.slice(-24_000) : compileState.progress}</pre>
           </div>
           </div>

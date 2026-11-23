@@ -1,6 +1,28 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import wasm from "vite-plugin-wasm";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { gzip } from "node:zlib";
+
+const gzipAsset = promisify(gzip);
+
+function precompressAssets(): Plugin {
+  return {
+    name: "fastwrite-precompress-assets",
+    async writeBundle({ dir }, bundle) {
+      if (!dir) return;
+      await Promise.all(Object.keys(bundle).filter(name => /^assets\/.*\.(?:m?js|css)$/.test(name)).map(async name => {
+        const path = join(dir, name);
+        const original = await readFile(path);
+        if (original.length < 1024) return;
+        const compressed = await gzipAsset(original);
+        if (compressed.length < original.length) await writeFile(`${path}.gz`, compressed);
+      }));
+    }
+  };
+}
 
 function siglumStaticHeaders(): Plugin {
   return {
@@ -23,7 +45,7 @@ function siglumStaticHeaders(): Plugin {
 export default defineConfig(() => {
   const socketPath = process.env.FASTWRITE_DEV_SOCKET;
   return {
-    plugins: [siglumStaticHeaders(), react(), wasm()],
+    plugins: [siglumStaticHeaders(), react(), wasm(), precompressAssets()],
     server: {
       host: "127.0.0.1",
       port: 3002,
@@ -42,6 +64,8 @@ export default defineConfig(() => {
       sourcemap: true,
       rollupOptions: {
         output: {
+          // Keep Vite's shared preload helper out of the editor-only Monaco chunk.
+          onlyExplicitManualChunks: true,
           manualChunks(id) {
             if (!id.includes("node_modules")) return;
             if (id.includes("monaco-editor")) return "monaco";

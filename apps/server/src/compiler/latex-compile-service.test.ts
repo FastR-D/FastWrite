@@ -13,7 +13,7 @@ test.each(["host", "bubblewrap"] as const)("%s compilation isolates configuratio
   let captured: { args: string[]; env: Record<string, string> } | undefined;
   const spawn = spyOn(Bun, "spawn").mockImplementation(((args: string[], options: any) => {
     captured = { args, env: options.env };
-    return { exited: Promise.resolve(1), stdout: new Response("blocked test compile").body, stderr: new Response("").body, kill() {} };
+    return { exited: Promise.resolve(1), stdout: new Response("").body, stderr: new Response("bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted").body, kill() {} };
   }) as any);
   const workspaces = {
     getProject() {},
@@ -24,7 +24,10 @@ test.each(["host", "bubblewrap"] as const)("%s compilation isolates configuratio
     }
   } as unknown as WorkspaceService;
   try {
-    await new LatexCompileService(root, workspaces, { mode }).compile("test");
+    const result = await new LatexCompileService(root, workspaces, { mode }).compile("test");
+    expect(result.success).toBe(false);
+    expect(result.log).toContain("Failed RTM_NEWADDR");
+    expect(result.error).toContain(mode === "bubblewrap" ? "服务器编译沙箱启动失败" : "退出码 1");
     expect(captured!.args).toContain("-norc");
     expect(captured!.args).toContain("-no-shell-escape");
     expect(captured!.args.at(-1)).toBe("./-shell-escape.tex");

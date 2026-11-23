@@ -40,6 +40,7 @@ export const icons = {
 
   /* Actions */
   add: "add",
+  remove: "remove",
   check: "check",
   edit: "edit",
   refresh: "refresh",

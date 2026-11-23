@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import type { SourceTab } from "../../lib/editor/tabState";
-import type { DiffRequest } from "./SourceControlView";
+import { gitRefLabel, type DiffRequest } from "./SourceControlView";
 import { Icon, icons, TabBar, type TabItem } from "../ui";
 import styles from "./EditorTabs.module.css";
 
@@ -44,7 +44,7 @@ export function EditorTabs({ tabs, activePath, dirty, onSelect, onPin, onClose, 
     }),
     ...comparisons.map(tab => {
       const { request } = tab;
-      const label = `${request.path} (${request.baseRef.slice(0, 8)} → ${request.targetRef === "working" ? "编辑内容" : request.targetRef === "working-tree" ? `已保存版本${request.projectVersion}` : request.targetRef.slice(0, 8)})`;
+      const label = `${request.path} (${gitRefLabel(request.baseRef)} → ${request.targetRef === "working" ? "编辑内容" : request.targetRef === "working-tree" ? `已保存版本${request.projectVersion}` : gitRefLabel(request.targetRef)})`;
       return {
         id: `diff:${tab.key}`,
         label,

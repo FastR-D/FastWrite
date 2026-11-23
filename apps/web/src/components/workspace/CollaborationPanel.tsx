@@ -80,8 +80,12 @@ export function CollaborationPanel({ projectId, registry, collaboration, selecti
   const online = [...new Map([...peers].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).map(peer => [peer.userId, peer])).values()];
   return <div className={styles.panel}>
     <header className={styles.header}>
-      <div><strong>论文协作</strong><small>{online.length ? `${online.length} 人在线` : "与合作者一起完成论文"}</small></div>
-      <IconButton label="刷新协作" icon={<Icon name={icons.refresh} />} onClick={refresh} />
+      <div><strong>论文协作</strong><small>{online.length ? `${online.length} 人正在浏览项目` : "与合作者一起完成论文"}</small></div>
+      <IconButton label="刷新协作" icon={<Icon name={icons.refresh} />} onClick={() => {
+        refresh();
+        const provider = selectedPath ? registry.get(selectedPath)?.collaboration : undefined;
+        if (provider && !provider.connected) void provider.reconnect().catch(failure => setError(userFacingError(failure, "无法连接协作")));
+      }} />
     </header>
     {selectedPath && access ? <div className={styles.mode}>
       <Field label="写作模式"><Select aria-label="写作模式" value={writingMode} onChange={value => onWritingModeChange(value as WritingMode)} options={[...(access.canWrite ? [{ value: "editing", label: "编辑" }] : []), ...(access.canComment ? [{ value: "reviewing", label: "审阅 · 跟踪修订" }] : []), { value: "viewing", label: "查看" }]} /></Field>
@@ -95,12 +99,12 @@ export function CollaborationPanel({ projectId, registry, collaboration, selecti
           {access?.canManage ? <Button size="small" icon={<Icon name={icons.share} />} onClick={onShare}>分享链接</Button> : null}
         </div>
         {access ? <p className={styles.hint}>你的权限：{roleLabel(access.role)}</p> : null}
-        <h3 className={styles.sectionTitle}>正在写作</h3>
+        <h3 className={styles.sectionTitle}>正在浏览项目</h3>
         {online.map(peer => <Button key={peer.userId} className={styles.person} variant="ghost" onClick={() => { void act(`peer:${peer.userId}`, () => onNavigate(peer.path, undefined, undefined, peer.line)); }} title="跳转到协作者所在位置">
           <span className={styles.avatar} style={{ backgroundColor: peer.color }}>{peer.name.slice(0, 1)}</span>
           <span><strong>{peer.name}{peer.userId === access?.userId ? "（你）" : ""}</strong><small>{peer.path}{peer.line ? `:${peer.line}` : ""}</small></span><span className={styles.online} />
         </Button>)}
-        {!online.length ? <p className={styles.hint}>暂无在线成员</p> : null}
+        {!online.length ? <p className={styles.hint}>暂无成员正在浏览</p> : null}
         <h3 className={styles.sectionTitle}>项目成员 · {members.length}</h3>
         {members.map(member => <div className={styles.member} key={member.userId}><span><strong>{member.user.displayName}</strong><small>{member.user.emailNormalized}</small></span><span className={styles.badge}>{roleLabel(member.role)}</span></div>)}
       </> : tab === "external" ? <>

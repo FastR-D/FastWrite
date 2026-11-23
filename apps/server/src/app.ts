@@ -446,7 +446,7 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
         void mailDelivery.dispatchPending();
         return response;
       }
-      const response = withRuntimeHeaders(await serveWeb(url.pathname));
+      const response = withRuntimeHeaders(await serveWeb(url.pathname, request.headers.get("accept-encoding")));
       metrics.observe(request.method, url.pathname, response.status);
       return response;
     } catch (error) {
@@ -1783,16 +1783,33 @@ async function authorizeMcpWorkspaceInput(projectId: string, principal: Principa
 function textPathsForAuthorization(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? textPathsForAuthorization(node.children) : node.kind === "text" ? [node.path] : []); }
 function workspacePathsForAuthorization(nodes: WorkspaceTreeNode[]): string[] { return nodes.flatMap((node) => node.type === "directory" ? workspacePathsForAuthorization(node.children) : [node.path]); }
 
-async function serveWeb(pathname: string): Promise<Response> {
+function acceptsGzip(header: string | null): boolean {
+  const encodings = new Map((header ?? "").split(",").map(value => {
+    const [encoding, ...parameters] = value.trim().toLowerCase().split(";");
+    const quality = parameters.find(parameter => /^\s*q\s*=/.test(parameter))?.split("=")[1];
+    return [encoding?.trim(), quality === undefined ? 1 : Number(quality)] as const;
+  }));
+  return (encodings.get("gzip") ?? encodings.get("*") ?? 0) > 0;
+}
+
+async function serveWeb(pathname: string, acceptEncoding: string | null): Promise<Response> {
   const requested = pathname === "/" ? "index.html" : pathname.replace(/^\//, "");
   const candidate = join(config.webDirectory, requested);
   if (existsSync(candidate) && (await stat(candidate)).isFile()) {
     const headers: Record<string, string> = { "content-type": mimeType(extname(candidate)) };
+    if (requested === "index.html") headers["cache-control"] = "no-cache";
+    if (/^assets\/[^/]+-[\w-]{8}\.[a-z0-9]+$/.test(requested)) headers["cache-control"] = "public, max-age=31536000, immutable";
     if (/^bundles\//.test(requested) || /^(?:busytex\.wasm|worker\.js)$/.test(requested)) headers["cache-control"] = "public, max-age=3600";
+    const compressed = `${candidate}.gz`;
+    if (/^assets\/.*\.(?:m?js|css)$/.test(requested) && existsSync(compressed)) {
+      headers.vary = "Accept-Encoding";
+      if (acceptsGzip(acceptEncoding)) return new Response(Bun.file(compressed), { headers: { ...headers, "content-encoding": "gzip" } });
+    }
     return new Response(Bun.file(candidate), { headers });
   }
+  if (requested.startsWith("assets/")) return new Response(null, { status: 404 });
   const index = join(config.webDirectory, "index.html");
-  if (existsSync(index)) return new Response(Bun.file(index), { headers: { "content-type": "text/html; charset=utf-8" } });
+  if (existsSync(index)) return new Response(Bun.file(index), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } });
   return json({ error: { code: "web_not_built", message: "Web client is not built. Run the development server or build the project." } }, 404);
 }
 

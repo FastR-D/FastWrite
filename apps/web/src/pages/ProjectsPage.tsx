@@ -157,25 +157,19 @@ export function ProjectsPage() {
               通知
             </Button>
           ) : null}
-          <Button
-            size="small"
-            variant="ghost"
-            icon={account ? <Icon name={icons.signOut} /> : <Icon name={icons.account} />}
-            onClick={() =>
-              account
-                ? void api.auth.logout().finally(() => {
-                    localStorage.removeItem("fastwrite.session-token");
-                    setAccount(null);
-                    setRelatedProjects(initialProjectList);
-                    setSiteProjects(initialProjectList);
-                    setDeleteError("");
-                  })
-                : setAccountOpen(true)
-            }
-          >
-            {account ? account.displayName : "登录"}
+          <span className={styles.accountName} title={account.displayName}>{account.displayName}</span>
+          <Button size="small" variant="ghost" onClick={() => setFastcasOpen(true)}>账号认证</Button>
+          <Button size="small" variant="ghost" icon={<Icon name={icons.signOut} />} onClick={() => {
+            void api.auth.logout().finally(() => {
+              localStorage.removeItem("fastwrite.session-token");
+              setAccount(null);
+              setRelatedProjects(initialProjectList);
+              setSiteProjects(initialProjectList);
+              setDeleteError("");
+            });
+          }}>
+            退出登录
           </Button>
-          {account ? <Button size="small" variant="ghost" onClick={() => setFastcasOpen(true)}>账号认证</Button> : null}
           <ThemeToggle />
         </div>
       </header>

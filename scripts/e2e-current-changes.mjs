@@ -37,18 +37,23 @@ try {
   const changes = page.getByRole('region', { name: "更改", exact: true });
   const staged = page.getByRole('region', { name: "已暂存更改", exact: true });
   await until(async () => { const text = await changes.innerText(); return ['main.tex', 'rename-old.tex', 'rename-new.tex', 'delete.tex', 'added.tex'].every(path => text.includes(path)); }, 'saved working tree change list');
-  const unstaged = await changes.innerText();
-  assert.match(unstaged, /M\s+main\.tex/);
-  assert.match(unstaged, /D\s+delete\.tex/);
-  assert.match(unstaged, /U\s+added\.tex/);
+  const statusOf = (path, marker) => changes.getByRole('listitem').filter({ has: page.getByRole('button', { name: path, exact: true }) }).getByText(marker, { exact: true });
+  assert.ok(await statusOf('main.tex', 'M').isVisible());
+  assert.ok(await statusOf('delete.tex', 'D').isVisible());
+  assert.ok(await statusOf('added.tex', 'U').isVisible());
   /*
    * git status does not pair an unstaged `mv`: it reports a delete plus an
    * untracked add. Staging both paths resolves it, because status detects staged
    * renames — which is what the stage-all below does, and why this case stages
    * first rather than expecting the pairing straight from the worktree.
    */
-  assert.match(unstaged, /D\s+rename-old\.tex/);
-  assert.match(unstaged, /U\s+rename-new\.tex/);
+  assert.ok(await statusOf('rename-old.tex', 'D').isVisible());
+  assert.ok(await statusOf('rename-new.tex', 'U').isVisible());
+  const disclosure = changes.getByRole('button', { name: '更改', exact: true });
+  await disclosure.click();
+  assert.equal(await disclosure.getAttribute('aria-expanded'), 'false');
+  assert.equal(await statusOf('main.tex', 'M').isVisible(), false);
+  await disclosure.click();
   assert.equal(await staged.count(), 0, 'nothing is staged before the stage-all');
 
   const beforeStage = await head();
@@ -68,11 +73,29 @@ try {
    */
   const beforeReload = await head();
   assert.equal(beforeReload, beforeStage, 'staging does not move HEAD');
+  await save('main.tex', `% UNSTAGED_AFTER_STAGE\n% SAVED_CURRENT\n${initial.content}`);
   await page.reload();
   await page.getByRole('textbox', { name: "源文件编辑器： main.tex", exact: true }).waitFor();
   const reloaded = page.getByRole('region', { name: "已暂存更改", exact: true });
   await until(async () => (await reloaded.innerText()).includes('rename-old.tex → rename-new.tex'), 'the index survives the reload');
   assert.equal(await head(), beforeReload, 're-reading the panel does not create or move a managed checkpoint');
+
+  await reloaded.getByRole('button', { name: 'main.tex', exact: true }).click();
+  const indexDiff = page.locator('.workspace-diff[data-diff-target="index"]:visible');
+  await until(async () => (await indexDiff.locator('.view-lines').allTextContents()).join('\n').includes('SAVED_CURRENT'), 'staged diff opens the index content');
+  assert.ok(!(await indexDiff.locator('.view-lines').allTextContents()).join('\n').includes('UNSTAGED_AFTER_STAGE'));
+  assert.equal(await indexDiff.getByRole('button', { name: '恢复文件', exact: true }).isEnabled(), false);
+  await changes.getByRole('button', { name: 'main.tex', exact: true }).click();
+  const workingDiff = page.locator('.workspace-diff[data-diff-target="working"]:visible');
+  await until(async () => (await workingDiff.locator('.view-lines').allTextContents()).join('\n').includes('UNSTAGED_AFTER_STAGE'), 'working diff opens the later edit');
+
+  await page.getByRole('textbox', { name: '提交说明', exact: true }).fill('Git sidebar regression');
+  await page.getByRole('button', { name: '提交', exact: true }).click();
+  const history = page.getByRole('region', { name: '提交历史', exact: true });
+  await history.getByRole('button', { name: /Git sidebar regression/ }).click();
+  await history.getByRole('list', { name: '提交的文件' }).getByRole('button', { name: 'main.tex', exact: true }).click();
+  await until(async () => (await page.locator('.workspace-diff:visible .view-lines').allTextContents()).join('\n').includes('SAVED_CURRENT'), 'commit timeline opens the file at that commit');
+  assert.equal(await changes.getByRole('button', { name: 'main.tex', exact: true }).isVisible(), true);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ result: 'pass', projectId: project.id, baseOid, cases: ['saved worktree A/M/D/R', 'staged rename pairs old and new path', 'read-only refresh'] }));
+  console.log(JSON.stringify({ result: 'pass', projectId: project.id, baseOid, cases: ['saved worktree A/M/D/R', 'collapsible groups', 'staged rename', 'read-only refresh', 'separate index and working diffs', 'commit timeline'] }));
 } finally { await browser.close(); }

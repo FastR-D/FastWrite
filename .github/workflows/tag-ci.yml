@@ -54,6 +54,8 @@ jobs:
       # Code-relative paths are supplied by the trusted FastDeploy server profile.
       runtime-env: |
         FASTWRITE_ALLOW_LEGACY_API_KEYS=false
+        FASTWRITE_COMPILE_PRODUCTION=true
+        FASTWRITE_COMPILE_SANDBOX=bubblewrap
         FASTWRITE_DATA_DIR=/home/dev/fastwrite-shared/data
         FASTWRITE_FASTCAS_ALLOW_SIGNUP=true
         FASTWRITE_FASTCAS_CLIENT_ID=fastwrite

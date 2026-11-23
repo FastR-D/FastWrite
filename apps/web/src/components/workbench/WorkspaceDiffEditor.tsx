@@ -6,7 +6,7 @@ import { api, ApiClientError } from "../../api/client";
 import type { DocumentRegistry, DocumentEntry } from "../../lib/editor/documentRegistry";
 import { compactGutterOptions, configureMonaco, languageForPath } from "../../lib/editor/monaco";
 import { Button, Select } from "../ui";
-import type { DiffRequest } from "./SourceControlView";
+import { gitRefLabel, type DiffRequest } from "./SourceControlView";
 
 const DIFF_LAYOUTS = [
   { value: "auto", label: "自动布局" },
@@ -25,6 +25,7 @@ export function WorkspaceDiffEditor({ allowEdit = true, registry, projectId, pro
   const [previewVersion, setPreviewVersion] = useState(projectVersion);
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const restorable = /^[0-9a-f]{7,64}$/i.test(request.targetRef);
   useEffect(() => {
     const controller = new AbortController(); setComparison(null); setError(""); setChangeCount(0); setPreviewVersion(projectVersion); setConfirmRestore(false);
     working.current = null;
@@ -41,6 +42,7 @@ export function WorkspaceDiffEditor({ allowEdit = true, registry, projectId, pro
           entry = registry.open(document);
         } catch (failure) {
           if (failure instanceof ApiClientError && failure.status === 404) return { original, modified: { ref: "working", path: request.path, exists: false, binary: false, size: 0 } };
+          if (failure instanceof ApiClientError && failure.status === 415) return api.projects.historyWorkingCompare(projectId, request.baseRef, request.path, projectVersion, request.oldPath, controller.signal);
           throw failure;
         }
       }
@@ -94,7 +96,7 @@ export function WorkspaceDiffEditor({ allowEdit = true, registry, projectId, pro
     const next = Math.max(1, target.modifiedStartLineNumber); modified.setPosition({ lineNumber: next, column: 1 }); modified.revealLineInCenter(next); modified.focus();
   };
   const restore = async (saveFirst: boolean) => {
-    if ((request.targetRef === "working" || request.targetRef === "working-tree") || !comparison?.modified.exists || comparison.modified.binary || restoring) return;
+    if (!restorable || !comparison?.modified.exists || comparison.modified.binary || restoring) return;
     setRestoring(true); setError("");
     try {
       const version = saveFirst ? await onSaveCheckpoint() : previewVersion;
@@ -104,9 +106,9 @@ export function WorkspaceDiffEditor({ allowEdit = true, registry, projectId, pro
     finally { setRestoring(false); }
   };
   return <section className="workspace-diff" aria-label="历史对比" data-diff-target={request.targetRef} data-diff-path={request.path}>
-    <div className="workbench-actions"><strong>{request.oldPath ? `${request.oldPath} → ` : ""}{request.path}</strong><Select aria-label="差异布局" value={mode} onChange={value => setMode(value as typeof mode)} options={DIFF_LAYOUTS} /><Button variant="ghost" disabled={!changeCount} onClick={() => jump(-1)}>上一处更改</Button><Button variant="ghost" disabled={!changeCount} onClick={() => jump(1)}>下一处更改</Button><span>{changeCount} 处更改</span><Button variant="ghost" disabled={(request.targetRef === "working" || request.targetRef === "working-tree") || !comparison?.modified.exists || comparison.modified.binary || restoring} onClick={() => setConfirmRestore(true)}>恢复文件</Button><Button variant="ghost" disabled={restoring} onClick={onClose}>关闭对比</Button></div>
+    <div className="workbench-actions"><strong>{request.oldPath ? `${request.oldPath} → ` : ""}{request.path}</strong><Select aria-label="差异布局" value={mode} onChange={value => setMode(value as typeof mode)} options={DIFF_LAYOUTS} /><Button variant="ghost" disabled={!changeCount} onClick={() => jump(-1)}>上一处更改</Button><Button variant="ghost" disabled={!changeCount} onClick={() => jump(1)}>下一处更改</Button><span>{changeCount} 处更改</span><Button variant="ghost" disabled={!restorable || !comparison?.modified.exists || comparison.modified.binary || restoring} onClick={() => setConfirmRestore(true)}>恢复文件</Button><Button variant="ghost" disabled={restoring} onClick={onClose}>关闭对比</Button></div>
     {confirmRestore ? <div className="diff-restore-confirmation" role="group" aria-label="确认恢复历史版本"><p>替换 {request.path} 为检查点版本 {request.targetRef.slice(0, 8)}。此次恢复将记录为新的历史提交。</p>{dirty ? <p>恢复前必须先将本地更改保存到检查点。</p> : null}<Button variant="primary" disabled={dirty || restoring} onClick={() => void restore(false)}>确认恢复</Button><Button variant="secondary" disabled={restoring} onClick={() => void restore(true)}>保存检查点后恢复</Button><Button variant="ghost" disabled={restoring} onClick={() => setConfirmRestore(false)}>取消</Button></div> : null}
-    <div className="diff-identities" data-original-exists={!comparison ? "unknown" : comparison.original.exists ? "true" : "false"} data-modified-exists={!comparison ? "unknown" : comparison.modified.exists ? "true" : "false"}><span>原始版本： {request.baseRef.slice(0, 8)} {comparison && !comparison.original.exists ? "· 文件不存在" : ""}</span><span>修改版本： {request.targetRef === "working" ? `当前编辑内容${allowEdit ? " · 可编辑" : " · 只读"}` : request.targetRef === "working-tree" ? `已保存工作区版本${request.projectVersion}` : request.targetRef.slice(0, 8)} {comparison && !comparison.modified.exists ? "· 文件不存在" : ""}</span></div>
+    <div className="diff-identities" data-original-exists={!comparison ? "unknown" : comparison.original.exists ? "true" : "false"} data-modified-exists={!comparison ? "unknown" : comparison.modified.exists ? "true" : "false"}><span>原始版本： {gitRefLabel(request.baseRef)} {comparison && !comparison.original.exists ? "· 文件不存在" : ""}</span><span>修改版本： {request.targetRef === "working" ? `当前编辑内容${allowEdit && working.current ? " · 可编辑" : " · 只读"}` : request.targetRef === "working-tree" ? `已保存工作区版本${request.projectVersion}` : gitRefLabel(request.targetRef)} {comparison && !comparison.modified.exists ? "· 文件不存在" : ""}</span></div>
     {error ? <p role="alert">{error}</p> : !comparison ? <p role="status">正在加载对比…</p> : comparison.original.binary || comparison.modified.binary ? <p>二进制对比 · 原始版本 {comparison.original.size} 字节 · 修改版本 {comparison.modified.size} 字节</p> : null}
     <div className="diff-editor-host" ref={host} />
   </section>;

@@ -3,7 +3,7 @@ import * as monaco from "./monacoRuntime";
 import { IndexeddbPersistence } from "y-indexeddb";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
-import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
+import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from "y-protocols/awareness";
 import { readSyncMessage, writeSyncStep1, writeUpdate, messageYjsSyncStep2 } from "y-protocols/sync";
 import { api } from "../../api/client";
 import type { DocumentEntry } from "./documentRegistry";
@@ -22,15 +22,16 @@ export class CollaborationProvider {
   private documentId: string | undefined;
   private persistence: IndexeddbPersistence | undefined;
   private socket: WebSocket | undefined;
+  private socketSynced = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private tokenExpired = false;
-  private tokenExpiresAt = 0;
   private localRevision = 0;
   private persistedRevision = 0;
   private persistTail: Promise<unknown> = Promise.resolve();
   private renewTimer: ReturnType<typeof setTimeout> | undefined;
   private metadataTimer: ReturnType<typeof setTimeout> | undefined;
   get dirty() { return this.localRevision > this.persistedRevision; }
+  get connected() { return this.socketSynced && this.socket?.readyState === WebSocket.OPEN; }
   private attempts = 0;
   private connecting = false;
   private selections = new Map<monaco.editor.IStandaloneCodeEditor, { anchor: Y.RelativePosition; head: Y.RelativePosition }>();
@@ -202,14 +203,12 @@ export class CollaborationProvider {
       if (state.documentId !== this.documentId) { this.state = "conflict"; this.error = new Error("协作文档已被替换，已保留本地文本用于比较。"); this.changed(); return; }
       Y.applyUpdate(this.doc, fromBase64(state.update), REMOTE);
       const grant = await api.projects.collaborationToken(this.projectId, this.entry.session.path);
-      this.tokenExpiresAt = Date.parse(grant.expiresAt);
-      clearTimeout(this.renewTimer);
-      this.renewTimer = setTimeout(() => { this.socket?.close(1000, "Renew collaboration token"); }, Math.max(1_000, this.tokenExpiresAt - Date.now() - 30_000));
       if (this.disposed) return;
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const socket = new WebSocket(`${protocol}//${location.host}/api/collaboration/socket?clientId=${this.clientId}&token=${encodeURIComponent(grant.token)}`);
       this.socket = socket; socket.binaryType = "arraybuffer";
-      socket.onopen = () => { this.attempts = 0; const encoder = encoding.createEncoder(); encoding.writeVarUint(encoder, 0); writeSyncStep1(encoder, this.doc); socket.send(encoding.toUint8Array(encoder)); this.onAwareness(null, LOCAL); };
+      this.renewTimer = setTimeout(() => socket.close(1000, "Renew collaboration token"), Math.max(1_000, Date.parse(grant.expiresAt) - Date.now() - 30_000));
+      socket.onopen = () => { if (this.disposed || this.socket !== socket) return; const encoder = encoding.createEncoder(); encoding.writeVarUint(encoder, 0); writeSyncStep1(encoder, this.doc); socket.send(encoding.toUint8Array(encoder)); this.onAwareness(null, LOCAL); };
       socket.onmessage = event => {
         if (this.disposed || this.socket !== socket || !(event.data instanceof ArrayBuffer)) return;
         try {
@@ -218,12 +217,20 @@ export class CollaborationProvider {
             const reply = encoding.createEncoder(); encoding.writeVarUint(reply, 0);
             const sync = readSyncMessage(decoder, reply, this.doc, REMOTE);
             if (encoding.length(reply) > 1) socket.send(encoding.toUint8Array(reply));
-            if (sync === messageYjsSyncStep2) { this.state = "synced"; this.error = null; this.changed(); }
+            if (sync === messageYjsSyncStep2) { this.socketSynced = true; this.attempts = 0; this.state = "synced"; this.error = null; this.changed(); }
           } else if (type === 1) applyAwarenessUpdate(this.awareness, decoding.readVarUint8Array(decoder), REMOTE);
           else socket.close(1003, "协作消息无效");
         } catch { socket.close(1003, "协作更新无效"); }
       };
-      socket.onclose = (event) => { if (this.socket === socket) { this.socket = undefined; if ([4003, 4008].includes(event.code)) this.tokenExpired = true; this.scheduleReconnect(); } };
+      socket.onclose = (event) => {
+        if (this.disposed || this.socket !== socket) return;
+        clearTimeout(this.renewTimer);
+        this.socket = undefined;
+        this.socketSynced = false;
+        removeAwarenessStates(this.awareness, [...this.awareness.getStates().keys()].filter(id => id !== this.doc.clientID), REMOTE);
+        if (event.code === 4003) this.tokenExpired = true;
+        this.scheduleReconnect();
+      };
     } catch (error) { this.tokenExpired = error instanceof Error && /401|403|expired|revoked/i.test(error.message); this.error = error; this.scheduleReconnect(); }
     finally { this.connecting = false; }
   }
@@ -257,6 +264,7 @@ export class CollaborationProvider {
     await this.ready();
     this.tokenExpired = false;
     this.error = null;
+    this.attempts = 0;
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
     if (this.socket && this.socket.readyState < WebSocket.CLOSING) this.socket.close(1000, "Reconnect");
     else { this.socket = undefined; await this.connect(); }
