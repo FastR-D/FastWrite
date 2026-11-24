@@ -1,9 +1,29 @@
 import { createHash } from "node:crypto";
+import { SQL } from "bun";
 import type { DatabaseState } from "./database";
 import type { PostgresRepository, VersionedRepository } from "./repository";
 import type { CollaborationPersistence } from "../collaboration/collaboration-bus";
 
-export type SqlClient = { query(sql: string, parameters?: unknown[]): Promise<{ rows?: any[] }>; end?: () => Promise<void> };
+export type SqlClient = {
+  query(sql: string, parameters?: unknown[]): Promise<{ rows?: any[] }>;
+  transaction?: <T>(operation: (client: SqlClient) => Promise<T>) => Promise<T>;
+  end?: () => Promise<void>;
+};
+
+export function postgresClient(url: string): SqlClient {
+  const pool = new SQL({ url, max: 4, connectionTimeout: 5 });
+  return {
+    query: async (sql, parameters = []) => ({ rows: await pool.unsafe(sql, parameters) }),
+    transaction: operation => pool.begin(async tx => {
+      const client: SqlClient = {
+        query: async (sql, parameters = []) => ({ rows: await tx.unsafe(sql, parameters) }),
+        transaction: callback => callback(client),
+      };
+      return await operation(client);
+    }),
+    end: () => pool.close({ timeout: 5 }),
+  };
+}
 
 export class SqlPostgresRepository implements PostgresRepository, VersionedRepository, CollaborationPersistence {
   private constructor(private readonly client: SqlClient, private state: DatabaseState) {}
@@ -16,15 +36,34 @@ export class SqlPostgresRepository implements PostgresRepository, VersionedRepos
     return { result, version: this.state.schemaVersion };
   }
   async mutate<T>(mutation: (state: DatabaseState) => T): Promise<T> { const next = structuredClone(this.state); const result = mutation(next); await this.writeState(next); this.state = next; return structuredClone(result); }
-  async transaction<T>(operation: (repository: PostgresRepository) => Promise<T>): Promise<T> { await this.client.query("BEGIN"); try { const result = await operation(this); await this.client.query("COMMIT"); return result; } catch (error) { await this.client.query("ROLLBACK"); throw error; } }
+  async transaction<T>(operation: (repository: PostgresRepository) => Promise<T>): Promise<T> {
+    const { result, state } = await this.inTransaction(async client => {
+      const repository = new SqlPostgresRepository(client, this.snapshot());
+      const result = await operation(repository);
+      return { result, state: repository.snapshot() };
+    });
+    this.state = state;
+    return result;
+  }
   async close(): Promise<void> { await this.client.end?.(); }
-  async importLegacy(state: DatabaseState, options: { commit?: boolean } = {}) { const legacyHash = hashState(state); if (options.commit) { await this.writeState(state); this.state = structuredClone(state); } return { imported: Boolean(options.commit), legacyHash, importedHash: hashState(state), counts: { users: state.users.length, teams: state.teams.length, projects: state.projects.length, jobs: state.jobs.length }, mismatches: [] as string[] }; }
+  async importLegacy(state: DatabaseState, options: { commit?: boolean } = {}) {
+    const legacyHash = hashState(state);
+    if (options.commit) {
+      const existing = await this.loadPersistedState();
+      if (existing && hashState(existing) !== legacyHash) throw new Error("PostgreSQL already has a different FastWrite state");
+      if (!existing) await this.writeState(state, true);
+      const imported = await this.loadPersistedState();
+      if (!imported || hashState(imported) !== legacyHash) throw new Error("FastWrite PostgreSQL import verification failed");
+      this.state = imported;
+    }
+    return { imported: Boolean(options.commit), legacyHash, importedHash: hashState(this.state), counts: { users: state.users.length, teams: state.teams.length, projects: state.projects.length, jobs: state.jobs.length }, mismatches: [] as string[] };
+  }
   async dualReadCompare() { const rows = await this.client.query("SELECT payload FROM fastwrite_state WHERE id = $1", ["singleton"]); const payload = rows.rows?.[0]?.payload as DatabaseState | undefined; if (!payload) return { equal: false, legacyHash: hashState(this.state), normalizedHash: "", mismatches: ["normalized_state_missing"] }; const legacyHash = hashState(this.state); const normalizedHash = hashState(payload); return { equal: legacyHash === normalizedHash, legacyHash, normalizedHash, mismatches: legacyHash === normalizedHash ? [] : ["state_hash_mismatch"] }; }
   async loadPersistedState(): Promise<DatabaseState | undefined> { const rows = await this.client.query("SELECT payload FROM fastwrite_state WHERE id = $1", ["singleton"]); const payload = rows.rows?.[0]?.payload as DatabaseState | undefined; return payload ? structuredClone(payload) : undefined; }
   async cutoverFromPersisted(): Promise<{ switched: boolean; hash?: string }> { const persisted = await this.loadPersistedState(); if (!persisted) return { switched: false }; this.state = persisted; return { switched: true, hash: hashState(persisted) }; }
   async rollbackTo(snapshot: DatabaseState): Promise<{ restored: boolean; hash: string }> { await this.writeState(snapshot); this.state = structuredClone(snapshot); return { restored: true, hash: hashState(snapshot) }; }
-  async appendUpdate(input: { documentId: string; sequence: number; update: string; bytes: number; createdAt: string }): Promise<void> { await this.client.query("INSERT INTO collaboration_updates (id, document_id, sequence, payload) VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (id) DO NOTHING", [`${input.documentId}:${input.sequence}`, input.documentId, input.sequence, JSON.stringify(input)]); }
-  async saveSnapshot(input: { documentId: string; sequence: number; update: string; createdAt: string }): Promise<void> { await this.client.query("INSERT INTO collaboration_snapshots (id, document_id, sequence, payload) VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, sequence = EXCLUDED.sequence, updated_at = now()", [`${input.documentId}:${input.sequence}`, input.documentId, input.sequence, JSON.stringify(input)]); await this.client.query("DELETE FROM collaboration_updates WHERE document_id = $1 AND sequence <= $2", [input.documentId, input.sequence]); }
+  async appendUpdate(input: { documentId: string; sequence: number; update: string; bytes: number; createdAt: string }): Promise<void> { await this.client.query("INSERT INTO collaboration_updates (id, document_id, sequence, payload) VALUES ($1, $2, $3, $4::text::jsonb) ON CONFLICT (id) DO NOTHING", [`${input.documentId}:${input.sequence}`, input.documentId, input.sequence, JSON.stringify(input)]); }
+  async saveSnapshot(input: { documentId: string; sequence: number; update: string; createdAt: string }): Promise<void> { await this.client.query("INSERT INTO collaboration_snapshots (id, document_id, sequence, payload) VALUES ($1, $2, $3, $4::text::jsonb) ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, sequence = EXCLUDED.sequence, updated_at = now()", [`${input.documentId}:${input.sequence}`, input.documentId, input.sequence, JSON.stringify(input)]); await this.client.query("DELETE FROM collaboration_updates WHERE document_id = $1 AND sequence <= $2", [input.documentId, input.sequence]); }
   async load(documentId: string): Promise<{ snapshots: Array<{ sequence: number; update: string }>; updates: Array<{ sequence: number; update: string }> }> { const snapshots = await this.client.query("SELECT sequence, payload FROM collaboration_snapshots WHERE document_id = $1 ORDER BY sequence DESC", [documentId]); const updates = await this.client.query("SELECT sequence, payload FROM collaboration_updates WHERE document_id = $1 ORDER BY sequence ASC", [documentId]); return { snapshots: (snapshots.rows ?? []).map((row) => ({ sequence: Number(row.sequence), update: String(row.payload.update) })), updates: (updates.rows ?? []).map((row) => ({ sequence: Number(row.sequence), update: String(row.payload.update) })) }; }
   private async ensureSchema(): Promise<void> {
     await this.client.query("CREATE TABLE IF NOT EXISTS fastwrite_state (id text PRIMARY KEY, payload jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())");
@@ -32,31 +71,47 @@ export class SqlPostgresRepository implements PostgresRepository, VersionedRepos
     await this.client.query("CREATE INDEX IF NOT EXISTS collaboration_updates_document_sequence_idx ON collaboration_updates (document_id, sequence)");
     await this.client.query("CREATE INDEX IF NOT EXISTS collaboration_snapshots_document_sequence_idx ON collaboration_snapshots (document_id, sequence DESC)");
   }
-  private async writeState(state: DatabaseState): Promise<void> {
+  private async inTransaction<T>(operation: (client: SqlClient) => Promise<T>): Promise<T> {
+    if (this.client.transaction) return this.client.transaction(operation);
     await this.client.query("BEGIN");
     try {
-      await this.client.query("INSERT INTO fastwrite_state (id, payload, updated_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()", ["singleton", JSON.stringify(state)]);
-      await this.replaceRows("users", state.users.map((payload) => [payload.id, payload]));
-      await this.replaceRows("teams", state.teams.map((payload) => [payload.id, payload]));
-      await this.replaceRows("projects", state.projects.map((payload) => [payload.id, payload]));
-      await this.replaceRows("jobs", state.jobs.map((payload) => [payload.id, payload, payload.status]));
-      await this.replaceRows("experiment_runs", state.experimentRuns.map((payload) => [payload.id, payload, payload.status]));
-      await this.replaceRows("audit_events", state.auditEvents.map((payload) => [payload.id, payload, payload.createdAt]));
-      await this.replaceRows("collaboration_updates", state.yDocumentUpdates.map((payload, index) => [`${payload.documentId}:${payload.sequence}:${index}`, payload.documentId, payload.sequence, payload]));
-      await this.replaceRows("collaboration_snapshots", state.yDocumentSnapshots.map((payload, index) => [`${payload.documentId}:${payload.sequence}:${index}`, payload.documentId, payload.sequence, payload]));
+      const result = await operation(this.client);
       await this.client.query("COMMIT");
+      return result;
     } catch (error) { await this.client.query("ROLLBACK"); throw error; }
   }
 
-  private async replaceRows(table: string, rows: unknown[][]): Promise<void> {
-    await this.client.query(`DELETE FROM ${table}`);
+  private async writeState(state: DatabaseState, initialImport = false): Promise<void> {
+    await this.inTransaction(async client => {
+      const statement = "INSERT INTO fastwrite_state (id, payload, updated_at) VALUES ($1, $2::text::jsonb, now())";
+      await client.query(initialImport ? statement : statement + " ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()", ["singleton", JSON.stringify(state)]);
+      await this.replaceRows(client, "users", state.users.map((payload) => [payload.id, payload]));
+      await this.replaceRows(client, "teams", state.teams.map((payload) => [payload.id, payload]));
+      await this.replaceRows(client, "projects", state.projects.map((payload) => [payload.id, payload]));
+      await this.replaceRows(client, "jobs", state.jobs.map((payload) => [payload.id, payload, payload.status]));
+      await this.replaceRows(client, "experiment_runs", state.experimentRuns.map((payload) => [payload.id, payload, payload.status]));
+      await this.replaceRows(client, "audit_events", state.auditEvents.map((payload) => [payload.id, payload, payload.createdAt]));
+      await this.replaceRows(client, "collaboration_updates", state.yDocumentUpdates.map((payload, index) => [`${payload.documentId}:${payload.sequence}:${index}`, payload.documentId, payload.sequence, payload]));
+      await this.replaceRows(client, "collaboration_snapshots", state.yDocumentSnapshots.map((payload, index) => [`${payload.documentId}:${payload.sequence}:${index}`, payload.documentId, payload.sequence, payload]));
+    });
+  }
+
+  private async replaceRows(client: SqlClient, table: string, rows: unknown[][]): Promise<void> {
+    await client.query(`DELETE FROM ${table}`);
     for (const row of rows) {
-      if (table === "jobs" || table === "experiment_runs") await this.client.query(`INSERT INTO ${table} (id, payload, status) VALUES ($1, $2::jsonb, $3)`, [row[0], JSON.stringify(row[1]), row[2]]);
-      else if (table === "audit_events") await this.client.query(`INSERT INTO ${table} (id, payload, created_at) VALUES ($1, $2::jsonb, $3)`, [row[0], JSON.stringify(row[1]), row[2]]);
-      else if (table === "collaboration_updates" || table === "collaboration_snapshots") await this.client.query(`INSERT INTO ${table} (id, document_id, sequence, payload) VALUES ($1, $2, $3, $4::jsonb)`, [row[0], row[1], row[2], JSON.stringify(row[3])]);
-      else await this.client.query(`INSERT INTO ${table} (id, payload) VALUES ($1, $2::jsonb)`, [row[0], JSON.stringify(row[1])]);
+      if (table === "jobs" || table === "experiment_runs") await client.query(`INSERT INTO ${table} (id, payload, status) VALUES ($1, $2::text::jsonb, $3)`, [row[0], JSON.stringify(row[1]), row[2]]);
+      else if (table === "audit_events") await client.query(`INSERT INTO ${table} (id, payload, created_at) VALUES ($1, $2::text::jsonb, $3)`, [row[0], JSON.stringify(row[1]), row[2]]);
+      else if (table === "collaboration_updates" || table === "collaboration_snapshots") await client.query(`INSERT INTO ${table} (id, document_id, sequence, payload) VALUES ($1, $2, $3, $4::text::jsonb)`, [row[0], row[1], row[2], JSON.stringify(row[3])]);
+      else await client.query(`INSERT INTO ${table} (id, payload) VALUES ($1, $2::text::jsonb)`, [row[0], JSON.stringify(row[1])]);
     }
   }
 }
 
-export function hashState(state: DatabaseState): string { return createHash("sha256").update(JSON.stringify(state)).digest("hex"); }
+export function hashState(state: DatabaseState): string {
+  const canonical = JSON.stringify(state, (_key, value: unknown) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(record).sort().map(key => [key, record[key]]));
+  });
+  return createHash("sha256").update(canonical).digest("hex");
+}

@@ -274,20 +274,23 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
   const metrics = options.metrics ?? new MetricsRegistry();
   const features = { ...config.features, ...options.features };
   if (process.env.FASTWRITE_JOB_WORKER_MODE === "external") throw new Error("External workers are unsupported by this JSON-backed runtime. Unset FASTWRITE_JOB_WORKER_MODE to process jobs in the server.");
-  const database = new JsonDatabase(dataDirectory);
-  await database.initialize();
-  const autoPostgres = options.postgresRepository ?? await configuredPostgresRepository(database.snapshot());
   const postgresCutover = process.env.FASTWRITE_POSTGRES_MODE === "cutover";
-  if (autoPostgres) {
+  const database = new JsonDatabase(dataDirectory);
+  if (!postgresCutover) await database.initialize();
+  const autoPostgres = options.postgresRepository ?? await configuredPostgresRepository(database.snapshot());
+  if (postgresCutover) {
+    if (!autoPostgres) throw new Error("FastWrite PostgreSQL cutover requires FASTWRITE_POSTGRES_URL");
     const persisted = await autoPostgres.loadPersistedState();
-    if (persisted && postgresCutover) await database.replaceState(persisted);
+    if (!persisted) throw new Error("FastWrite PostgreSQL is missing the initial state; run storage:postgres:migrate");
+    await database.replaceState(persisted, { persistLocal: false });
+    await autoPostgres.cutoverFromPersisted();
+    database.setPrimaryPersistence(async snapshot => { await autoPostgres.mutate(state => Object.assign(state, snapshot)); });
   }
   const postgresMirror = autoPostgres;
-  if (postgresCutover && postgresMirror) database.setPrimaryPersistence(async snapshot => { await postgresMirror.mutate(state => Object.assign(state, snapshot)); });
   let postgresMirrorError: string | undefined;
   let postgresMirrorFailures = 0;
   const persistToPostgres = async () => {
-    if (!postgresMirror) return;
+    if (!postgresMirror || postgresCutover) return;
     const snapshot = database.snapshot();
     try {
       await postgresMirror.mutate((state) => Object.assign(state, snapshot));
@@ -298,7 +301,6 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
       console.error(`FastWrite PostgreSQL mirror failed (${postgresMirrorFailures}): ${postgresMirrorError}`);
     }
   };
-  if (postgresCutover && postgresMirror) await persistToPostgres();
   const comparePostgres = async () => postgresMirror && "dualReadCompare" in postgresMirror ? await (postgresMirror as import("./storage/postgres-repository").SqlPostgresRepository).dualReadCompare() : { equal: true, legacyHash: "", normalizedHash: "", mismatches: [] as string[] };
   const auth = new AuthService(database, config.collaborationRoomTokenSecret, options.developmentAdmin ?? config.developmentAdmin);
   const bootstrapAdmin = options.bootstrapAdmin ?? config.bootstrapAdmin;
@@ -468,14 +470,13 @@ export async function createApplication(dataDirectory = config.dataDirectory, op
 
 async function configuredPostgresRepository(initialState: import("./storage/database").DatabaseState): Promise<import("./storage/repository").PostgresRepository | undefined> {
   if (!config.postgresUrl || !["mirror", "cutover"].includes(process.env.FASTWRITE_POSTGRES_MODE ?? "")) return undefined;
+  const { postgresClient, SqlPostgresRepository } = await import("./storage/postgres-repository");
+  const client = postgresClient(config.postgresUrl);
   try {
-    const pg = await import("pg" as string) as any;
-    const client = new pg.Client({ connectionString: config.postgresUrl });
-    await client.connect();
-    const { SqlPostgresRepository } = await import("./storage/postgres-repository");
-    return SqlPostgresRepository.connect(client, initialState);
+    return await SqlPostgresRepository.connect(client, initialState);
   } catch (error) {
-    if (process.env.FASTWRITE_POSTGRES_REQUIRED === "true") throw error;
+    await client.end?.();
+    if (process.env.FASTWRITE_POSTGRES_MODE === "cutover" || process.env.FASTWRITE_POSTGRES_REQUIRED === "true") throw error;
     return undefined;
   }
 }

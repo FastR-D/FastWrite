@@ -97,8 +97,8 @@ export class JsonDatabase {
     this.path = join(dataDirectory, "database.json");
   }
 
-  async initialize(): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
+  async initialize({ readOnly = false } = {}): Promise<void> {
+    if (!readOnly) await mkdir(dirname(this.path), { recursive: true });
     try {
       this.persistedContents = await readFile(this.path, "utf8");
       const parsed = JSON.parse(this.persistedContents) as Partial<DatabaseState>;
@@ -162,9 +162,9 @@ export class JsonDatabase {
       }
       for (const snapshot of this.state.reviewSnapshots) normalizeSkill(snapshot);
       for (const resolution of this.state.issueResolutions) normalizeSkill(resolution);
-      if (migrated || originalSchemaVersion !== CURRENT_SCHEMA_VERSION) await this.flush();
+      if (!readOnly && (migrated || originalSchemaVersion !== CURRENT_SCHEMA_VERSION)) await this.flush();
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (readOnly || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       await this.flush();
     }
   }
@@ -173,17 +173,23 @@ export class JsonDatabase {
     return structuredClone(this.state);
   }
 
-  // In cutover mode, success means the PostgreSQL primary has committed. The
-  // JSON file is then a local cache; callbacks must not acknowledge before this.
+  // In cutover mode PostgreSQL is authoritative. Keep the imported JSON source
+  // available as an offline snapshot and acknowledge only committed changes.
   setPrimaryPersistence(commit: (state: DatabaseState) => Promise<void>): void { this.primaryPersistence = commit; }
 
   version(): number {
     return this.state.schemaVersion;
   }
 
-  async replaceState(state: DatabaseState): Promise<void> {
+  async replaceState(state: DatabaseState, { persistLocal = true } = {}): Promise<void> {
     const previous = structuredClone(this.state);
-    try { this.state = migrate(structuredClone(state)); enforceCapacity(this.state); await this.flush(); }
+    try {
+      const next = migrate(structuredClone(state));
+      enforceCapacity(next);
+      if (this.primaryPersistence) await this.primaryPersistence(next);
+      this.state = next;
+      if (!this.primaryPersistence && persistLocal) await this.flush();
+    }
     catch (error) { this.state = previous; throw error; }
   }
 
@@ -207,7 +213,7 @@ export class JsonDatabase {
       enforceCapacity(next);
       if (this.primaryPersistence) { await this.primaryPersistence(structuredClone(next)); primaryCommitted = true; }
       this.state = next;
-      await this.flush();
+      if (!this.primaryPersistence) await this.flush();
       return structuredClone(result);
     } catch (error) {
       if (!primaryCommitted) this.state = before;
