@@ -1,5 +1,5 @@
 .page { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; background: var(--surface); }
-.page .topbar { flex-shrink: 0; height: 56px; padding: 0 28px; background: var(--surface); }
+.page .topbar { position: relative; z-index: 20; overflow: visible; flex-shrink: 0; height: 56px; padding: 0 28px; background: var(--surface); }
 .topbar :global(.brand) { font-size: 17px; }
 .accountName { min-width: 0; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-secondary); }
 @media (max-width: 760px) {

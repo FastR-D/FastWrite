@@ -1,3 +1,4 @@
+import { AccountMenu } from '../components/AccountMenu';
 import { BrandMark } from "../components/BrandMark";
 import { userFacingError } from "../lib/notifications";
 import { ProductLanding } from "../components/projects/ProductLanding";
@@ -157,19 +158,15 @@ export function ProjectsPage() {
               通知
             </Button>
           ) : null}
-          <span className={styles.accountName} title={account.displayName}>{account.displayName}</span>
-          <Button size="small" variant="ghost" onClick={() => setFastcasOpen(true)}>账号认证</Button>
-          <Button size="small" variant="ghost" icon={<Icon name={icons.signOut} />} onClick={() => {
-            void api.auth.logout().finally(() => {
-              localStorage.removeItem("fastwrite.session-token");
-              setAccount(null);
-              setRelatedProjects(initialProjectList);
-              setSiteProjects(initialProjectList);
-              setDeleteError("");
-            });
-          }}>
-            退出登录
-          </Button>
+          <AccountMenu name={account.displayName} detail={account.emailNormalized} actions={[
+            { label: 'CAS 认证', onSelect: () => setFastcasOpen(true) },
+            { label: '退出登录', danger: true, onSelect: () => {
+              void api.auth.logout().finally(() => {
+                localStorage.removeItem('fastwrite.session-token'); setAccount(null);
+                setRelatedProjects(initialProjectList); setSiteProjects(initialProjectList); setDeleteError('');
+              });
+            } },
+          ]} />
           <ThemeToggle />
         </div>
       </header>
