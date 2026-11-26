@@ -1,3 +1,5 @@
+import type { FastCASService } from "../auth/fastcas-service";
+import { readCASAccount, type ReadCASIdentity } from "../auth/fastread-cas";
 import { createHash, randomBytes } from "node:crypto";
 import { normalizeWorkspacePath } from "@fastwrite/shared";
 import type { Principal } from "../auth/auth-service";
@@ -7,21 +9,32 @@ import type { WorkspaceService } from "../workspace/workspace-service";
 import type { ResearchService } from "./research-service";
 import { ApiError } from "../http";
 
-export interface FastReadConnection { userId: string; tokenHash: string; createdAt: string; }
+export interface FastReadConnection { userId: string; tokenHash: string; createdAt: string; cas?: ReadCASIdentity; }
 export interface FastReadFeedback { id: string; projectId: string; paperId: string; title: string; content: string; updatedAt: string; }
 export interface FastReadBundleInput { bundle_id: string; manifest_path: string; files: Array<{ path: string; content: string }>; }
 const tokenHash = (value: string) => createHash("sha256").update(value).digest("hex");
 
 export class FastReadIntegration {
-  constructor(private readonly database: JsonDatabase, private readonly authorization: AuthorizationService, private readonly workspaces: WorkspaceService, private readonly research: ResearchService) {}
+  constructor(private readonly database: JsonDatabase, private readonly authorization: AuthorizationService, private readonly workspaces: WorkspaceService, private readonly research: ResearchService, private readonly fastcas?: FastCASService) {}
 
-  status(principal: Principal) { return { connected: Boolean(this.database.snapshot().fastReadConnections?.some(item => item.userId === principal.user.id)) }; }
+  private readURL(parameters: Record<string, string>) {
+    const base = new URL(process.env.FASTWRITE_FASTREAD_PUBLIC_URL || "https://read.fastrd.io");
+    if (base.username || base.password || base.search || base.hash || (base.protocol !== "https:" && !(base.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(base.hostname)))) throw new ApiError(503, "fastread_url_invalid", "FastRead 地址配置无效");
+    base.pathname = base.pathname.replace(/\/$/, "") + "/";
+    for (const [key, value] of Object.entries(parameters)) base.searchParams.set(key, value);
+    return base.href;
+  }
 
-  async issue(principal: Principal) {
+  status(principal: Principal) {
+    const connection = this.database.snapshot().fastReadConnections?.find(item => item.userId === principal.user.id);
+    return { connected: Boolean(connection), mode: connection?.cas ? "cas" : "manual", connect_url: this.readURL({ section: "settings", auth: "cas" }) };
+  }
+
+  async issue(principal: Principal, cas?: ReadCASIdentity) {
     const token = `fw_read_${randomBytes(32).toString("base64url")}`;
     await this.database.mutate(state => {
       state.fastReadConnections = (state.fastReadConnections ?? []).filter(item => item.userId !== principal.user.id);
-      state.fastReadConnections.push({ userId: principal.user.id, tokenHash: tokenHash(token), createdAt: new Date().toISOString() });
+      state.fastReadConnections.push({ userId: principal.user.id, tokenHash: tokenHash(token), createdAt: new Date().toISOString(), ...(cas ? { cas } : {}) });
     });
     return { token };
   }
@@ -31,12 +44,17 @@ export class FastReadIntegration {
     return { connected: false };
   }
 
-  authenticate(request: Request): Principal {
+  async authenticate(request: Request): Promise<Principal> {
     const raw = /^Bearer (fw_read_[A-Za-z0-9_-]+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
     const state = this.database.snapshot();
     const record = raw && state.fastReadConnections?.find(item => item.tokenHash === tokenHash(raw));
     const user = record && state.users.find(item => item.id === record.userId && item.status === "active");
     if (!record || !user) throw new ApiError(401, "fastread_connection_invalid", "FastRead 连接码已失效，请重新连接");
+    if (record.cas) {
+      const result = await readCASAccount(this.fastcas, this.database, record.cas.subject, record.cas);
+      if (result.principal.user.id !== user.id || !this.database.snapshot().fastReadConnections?.some(item => item.tokenHash === record.tokenHash)) throw new ApiError(401, "fastread_connection_changed", "连接已撤销");
+      return result.principal;
+    }
     return { user, sessionId: `fastread:${user.id}` };
   }
 
@@ -94,7 +112,7 @@ export class FastReadIntegration {
       const payload = JSON.parse((await this.workspaces.readTextFile(projectId, path)).content) as { papers: Array<{ id: string; title: string }> };
       for (const paper of payload.papers) papers.set(paper.id, { id: paper.id, title: paper.title });
     }
-    return [...papers.values()];
+    return [...papers.values()].map(paper => ({ ...paper, read_url: this.readURL({ paper: paper.id, auth: "cas" }) }));
   }
 
   async feedback(projectId: string, principal: Principal) {

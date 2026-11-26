@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
-import { Button, Field, Select, TextArea, TextField } from "../ui";
+import { Button, Field, Link, Select, TextArea, TextField } from "../ui";
 
 export function FastReadPanel({ projectId, revision }: { projectId: string; revision: number }) {
   const [connected, setConnected] = useState(false);
+  const [connectURL, setConnectURL] = useState("");
+  const [connectionMode, setConnectionMode] = useState("");
   const [token, setToken] = useState("");
-  const [papers, setPapers] = useState<Array<{ id: string; title: string }>>([]);
+  const [papers, setPapers] = useState<Array<{ id: string; title: string; read_url?: string }>>([]);
   const [notes, setNotes] = useState<Array<{ id: string; paper_id: string; title: string; content: string }>>([]);
   const [paperId, setPaperId] = useState("");
   const [title, setTitle] = useState("写作反馈");
@@ -17,7 +19,7 @@ export function FastReadPanel({ projectId, revision }: { projectId: string; revi
     let active = true;
     void Promise.all([api.fastRead.status(), api.fastRead.feedback(projectId)]).then(([status, feedback]) => {
       if (!active) return;
-      setConnected(status.connected); setPapers(feedback.papers); setNotes(feedback.items);
+      setConnected(status.connected); setConnectionMode(status.mode || "manual"); setConnectURL(status.connect_url || ""); setPapers(feedback.papers); setNotes(feedback.items);
       setPaperId(current => feedback.papers.some(paper => paper.id === current) ? current : feedback.papers[0]?.id ?? "");
     }).catch(failure => { if (active) setError(failure instanceof Error ? failure.message : "无法读取联动状态"); });
     return () => { active = false; };
@@ -28,12 +30,14 @@ export function FastReadPanel({ projectId, revision }: { projectId: string; revi
   };
   return <section className="research-section" aria-label="FastRead 联动">
     <header><div><h3>连接 FastRead</h3><p>连接后可接收论文、原文摘录和阅读笔记，并将写作反馈同步回论文。</p></div><div>
-      <Button size="small" loading={busy} onClick={() => void perform(async () => { const result = await api.fastRead.connect(); setToken(result.token); setConnected(true); })}>{connected ? "重新生成连接码" : "生成连接码"}</Button>
+      {connectURL ? <Link href={connectURL} target="_blank" rel="noreferrer">通过 CAS 连接 FastRead</Link> : null}
+      <Button size="small" variant="ghost" loading={busy} onClick={() => void perform(async () => { const result = await api.fastRead.connect(); setToken(result.token); setConnected(true); setConnectionMode("manual"); })}>{connected ? "重新生成连接码" : "生成连接码"}</Button>
       {connected ? <Button size="small" variant="ghost" disabled={busy} onClick={() => void perform(async () => { await api.fastRead.disconnect(); setConnected(false); setToken(""); setMessage("连接已撤销"); })}>撤销连接</Button> : null}
     </div></header>
-    {token ? <Field label="连接码" hint="复制到 FastRead 设置中的 FastWrite 连接栏。重新生成后旧连接码立即失效。"><TextField value={token} readonly /><Button size="small" variant="ghost" onClick={() => void perform(async () => { await navigator.clipboard.writeText(token); setMessage("连接码已复制"); })}>复制连接码</Button></Field> : <p>{connected ? "已生成连接码" : "尚未连接"}</p>}
+    {token ? <Field label="连接码" hint="复制到 FastRead 设置中的 FastWrite 连接栏。重新生成后旧连接码立即失效。"><TextField value={token} readonly /><Button size="small" variant="ghost" onClick={() => void perform(async () => { await navigator.clipboard.writeText(token); setMessage("连接码已复制"); })}>复制连接码</Button></Field> : <p>{connected ? connectionMode === "cas" ? "CAS 已连接" : "已生成连接码" : "两端认证同一 CAS 账号后，在 FastRead 设置中一键连接。"}</p>}
     {papers.length ? <div className="research-protocol">
       <h4>写作反馈</h4><Field label="关联论文"><Select value={paperId} onChange={next => { setPaperId(next); setContent(""); setTitle("写作反馈"); }} options={papers.map(paper => ({ value: paper.id, label: paper.title }))} /></Field>
+      {papers.find(paper => paper.id === paperId)?.read_url ? <Link href={papers.find(paper => paper.id === paperId)!.read_url!} target="_blank" rel="noreferrer">在 FastRead 阅读原文</Link> : null}
       <Field label="标题"><TextField value={title} onChange={setTitle} /></Field>
       <Field label="反馈内容"><TextArea value={content} onChange={setContent} placeholder="记录论文在当前稿件中的用途、待补证据或新的研究问题。" /></Field>
       <Button size="small" loading={busy} disabled={!paperId || !content.trim()} onClick={() => void perform(async () => { await api.fastRead.saveFeedback(projectId, { paper_id: paperId, title, content }); setNotes((await api.fastRead.feedback(projectId)).items); setMessage("写作反馈已保存，可在 FastRead 拉取"); })}>保存写作反馈</Button>

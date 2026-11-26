@@ -29,3 +29,13 @@
 上传请求包含 `bundle_id`、`manifest_path` 和 `files: [{path, content}]`。返回 `{ok, bundle_id, receipts}`。反馈返回 `items: [{id, paper_id, title, content}]`，以 FastRead 原论文 ID 关联笔记。
 
 `apps/server/src/research/fixtures/fastread-bundle.json` 是 Go FastRead `BuildFastWriteBundle` 导出的测试资料，覆盖无作者、无 DOI 的论文交接。运行 `bun test apps/server/src/research/fastread-integration.test.ts` 可验证配对、权限、幂等上传和双向反馈。
+
+## CAS 一键连接与阅读跳转
+
+两端认证同一 CAS 身份后，在 FastRead 设置页点击「通过 CAS 连接 FastWrite」。文献与证据面板提供连接入口，也可从已关联论文直接打开 Read 原文。设置 `FASTWRITE_FASTREAD_PUBLIC_URL` 指定公开 Read 地址，默认 `https://read.fastrd.io`，支持部署路径前缀。
+
+中心需登记独立服务身份 `fastread-sync`，仅允许 `client_credentials`，scope 为 `fastread:connect`，resources 包含本实例实际 CAS client ID。服务密钥只配置在 Read 后端 `FASTREAD_SYNC_CLIENT_SECRET`；Write 使用自己的现有 CAS 配置验签、introspection 和绑定核对。
+
+新增 `POST /api/integrations/fastread/cas-connect` 接收已授权服务令牌与 `{subject}`，按同一 CAS 身份建立连接；不按邮箱合并账号。凭证仅返回 Read 服务端，持久化只存摘要与 CAS 绑定信息。每次请求检查绑定 ID、版本、中心状态及账号状态，解绑后不能使用旧凭证；重绑也需重新连接。CAS 同步不能使用平台管理员的全局权限，仍受项目成员和路径 ACL 限制。
+
+运行 `bun test apps/server/src/auth/fastread-cas.test.ts apps/server/src/research/fastread-integration.test.ts` 验证应用侧协议；中心服务身份与生产回调地址需要部署环境配置和联调。

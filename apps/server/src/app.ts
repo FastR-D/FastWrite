@@ -1,3 +1,4 @@
+import { connectReadCAS } from "./auth/fastread-cas";
 import { inspectProjectEnvironment } from "./compiler/tex-environment-service";
 import { normalizeCompileSettings } from "@fastwrite/shared";
 import { ProjectIntelligence } from "./latex/project-intelligence";
@@ -515,7 +516,7 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
   const presence = new PresenceService(authorization);
   const intelligence = new ProjectIntelligence(workspaces, authorization, latexCompiler.environments);
   const mcpTokens = new McpAccessTokens(database, authorization);
-  const fastRead = new FastReadIntegration(database, authorization, workspaces, research);
+  const fastRead = new FastReadIntegration(database, authorization, workspaces, research, fastcas);
   const principal = (request: Request, required = authEnabled): Principal | undefined => auth.principal(request, required);
   const harnessRoute = (method: string, path: string, handler: Handler, adminOnly = true): Route => route(method, path, (request, params, url) => {
     requireHarnessAccess(auth, request, authEnabled, adminOnly);
@@ -550,12 +551,17 @@ function buildRoutes({ referencePapers, database, workspaces, projectSearch, upl
     return selected;
   };
   return [
-    route("GET", "/api/integrations/fastread/token", request => { if (request.headers.get("authorization")?.startsWith("Bearer fw_read_")) { fastRead.authenticate(request); return json({ connected: true }); } return json(fastRead.status(principal(request, true)!)); }),
+    route("POST", "/api/integrations/fastread/cas-connect", async request => {
+      const { principal: actor, identity } = await connectReadCAS(fastcas, database, request);
+      const connection = await fastRead.issue(actor, identity);
+      return json({ ...connection, subject: identity.subject, mode: "cas" }, 201, { "cache-control": "no-store" });
+    }),
+    route("GET", "/api/integrations/fastread/token", async request => { if (request.headers.get("authorization")?.startsWith("Bearer fw_read_")) { await fastRead.authenticate(request); return json({ connected: true }); } return json(fastRead.status(principal(request, true)!)); }),
     route("POST", "/api/integrations/fastread/token", async request => json(await fastRead.issue(principal(request, true)!), 201, { "cache-control": "no-store" })),
     route("DELETE", "/api/integrations/fastread/token", async request => json(await fastRead.revoke(principal(request, true)!))),
-    route("GET", "/api/integrations/fastread/projects", request => json(fastRead.projects(fastRead.authenticate(request)))),
-    route("POST", "/api/integrations/fastread/projects/:id/bundles", async (request, params) => json(await fastRead.receiveBundle(required(params, "id"), fastRead.authenticate(request), await readJson<FastReadBundleInput>(request)), 201)),
-    route("GET", "/api/integrations/fastread/projects/:id/feedback", async (request, params) => json(await fastRead.feedback(required(params, "id"), fastRead.authenticate(request)))),
+    route("GET", "/api/integrations/fastread/projects", async request => json(fastRead.projects(await fastRead.authenticate(request)))),
+    route("POST", "/api/integrations/fastread/projects/:id/bundles", async (request, params) => json(await fastRead.receiveBundle(required(params, "id"), await fastRead.authenticate(request), await readJson<FastReadBundleInput>(request)), 201)),
+    route("GET", "/api/integrations/fastread/projects/:id/feedback", async (request, params) => json(await fastRead.feedback(required(params, "id"), await fastRead.authenticate(request)))),
     route("GET", "/api/projects/:projectId/research/fastread-feedback", async (request, params) => json(await fastRead.feedback(required(params, "projectId"), principal(request, true)!))),
     route("PUT", "/api/projects/:projectId/research/fastread-feedback", async (request, params) => json(await fastRead.saveFeedback(required(params, "projectId"), principal(request, true)!, await readJson(request)))),
     route("POST", "/api/integrations/fastresearch/workspace", async request => {
